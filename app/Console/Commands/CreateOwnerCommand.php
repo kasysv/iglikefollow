@@ -38,7 +38,8 @@ class CreateOwnerCommand extends Command
             [
                 'name' => ['required', 'string', 'max:255'],
                 'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-                'password' => ['required', 'string', 'min:12'],
+                // 本機開發最低長度為 8；⚠️ 正式部署前應調回 12 並考慮加上複雜度規則。
+                'password' => ['required', 'string', 'min:8'],
             ]
         );
 

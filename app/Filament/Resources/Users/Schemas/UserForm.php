@@ -22,11 +22,12 @@ class UserForm
             TextInput::make('password')
                 ->password()
                 ->revealable(false)
-                ->minLength(12)
+                // 本機開發最低長度為 8；⚠️ 正式部署前應調回 12 並考慮加上複雜度規則。
+                ->minLength(8)
                 ->dehydrateStateUsing(fn (?string $state) => filled($state) ? Hash::make($state) : null)
                 ->dehydrated(fn (?string $state) => filled($state))
                 ->required(fn (string $operation) => $operation === 'create')
-                ->helperText('至少 12 字元；留空則不變更。'),
+                ->helperText('至少 8 字元；留空則不變更。'),
 
             Select::make('role')
                 ->options(array_combine(User::ROLES, User::ROLES))
