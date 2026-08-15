@@ -23,7 +23,8 @@ class VariantsRelationManager extends RelationManager
     public function form(Schema $schema): Schema
     {
         // 共用同一份表單定義，⛔ 避免這裡少掉數量交叉驗證等規則。
-        return ServiceVariantForm::configure($schema);
+        // withOwner: false ⛔ 不顯示「所屬服務」，款式不可從這裡改掛到別的服務。
+        return ServiceVariantForm::configure($schema, withOwner: false);
     }
 
     public function table(Table $table): Table
@@ -52,11 +53,33 @@ class VariantsRelationManager extends RelationManager
                     }),
             ])
             ->defaultSort('sort_order')
-            ->headerActions([CreateAction::make()->label('新增款式')])
+            ->headerActions([
+                CreateAction::make()
+                    ->label('新增款式')
+                    // 歸屬一律由 owner record 決定，⛔ 即使表單被塞入 service_id 也不採用。
+                    ->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+            ])
             // ⛔ 不提供 Associate／Dissociate：款式必須屬於這個服務，不可轉掛。
-            ->recordActions([EditAction::make(), DeleteAction::make()])
+            ->recordActions([
+                EditAction::make()->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+                DeleteAction::make(),
+            ])
             ->toolbarActions([
                 BulkActionGroup::make([DeleteBulkAction::make()]),
             ]);
+    }
+
+    /**
+     * Pin the record to the service whose page we are on.
+     *
+     * The select is hidden from this form, but a hand-crafted Livewire payload
+     * could still carry a service_id; overwriting it here means a variant can
+     * never be moved to another service through a relation manager.
+     */
+    private function ownedBy(array $data): array
+    {
+        $data['service_id'] = $this->getOwnerRecord()->getKey();
+
+        return $data;
     }
 }

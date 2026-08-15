@@ -12,18 +12,23 @@ use Illuminate\Support\Facades\Auth;
 
 class ServiceVariantForm
 {
-    public static function configure(Schema $schema): Schema
+    /**
+     * @param  bool  $withOwner  false when rendered inside a Service's relation
+     *                           manager, where the owning service is fixed by
+     *                           the parent record and must not be re-selectable.
+     */
+    public static function configure(Schema $schema, bool $withOwner = true): Schema
     {
         return $schema->components([
             Section::make('這是什麼款式')
                 ->description('款式就是同一個服務底下的不同選擇，例如粉絲分成「一般粉絲」「真人粉絲」「台灣粉絲」，各有各的價格。')
-                ->schema([
-                    Select::make('service_id')
+                ->schema(array_values(array_filter([
+                    $withOwner ? Select::make('service_id')
                         ->label('所屬服務')
                         ->helperText('這個款式屬於哪個服務。')
                         ->relationship('service', 'name')
                         ->required()
-                        ->searchable(),
+                        ->searchable() : null,
 
                     TextInput::make('label')
                         ->label('款式名稱')
@@ -40,7 +45,7 @@ class ServiceVariantForm
                     Toggle::make('is_featured')
                         ->label('設為預設款式')
                         ->helperText('打開後，客人進服務頁時會預先選中這一款。每個服務建議只開一個。'),
-                ])->columns(2),
+                ])))->columns(2),
 
             Section::make('價格與數量')
                 ->description('客人可以自己輸入數量，但必須在你設定的範圍內。金額由系統用「單價 × 數量」自動計算。')
@@ -60,14 +65,25 @@ class ServiceVariantForm
                         ->default('個')
                         ->maxLength(16),
 
+                    // 交叉驗證一律用 closure 讀取表單即時狀態。
+                    // ⛔ 不可用 'lte:max_quantity' 這種字串規則：欄位真正的 key 是
+                    // data.max_quantity（Relation Manager 更是 mountedActions.0.data.*），
+                    // 字串規則找不到對應欄位，會讓完全合法的數量也被判定失敗。
                     TextInput::make('min_quantity')
                         ->label('最少買多少')
                         ->helperText('低於這個數字客人就不能下單。')
                         ->numeric()
                         ->required()
                         ->minValue(1)
-                        ->rule('lte:max_quantity')
-                        ->validationMessages(['lte' => '最少買多少不能大於最多買多少。']),
+                        ->rules([
+                            fn ($get) => function (string $attribute, $value, $fail) use ($get) {
+                                $max = $get('max_quantity');
+
+                                if (filled($max) && (int) $value > (int) $max) {
+                                    $fail('最少買多少不能大於最多買多少。');
+                                }
+                            },
+                        ]),
 
                     TextInput::make('max_quantity')
                         ->label('最多買多少')
@@ -75,8 +91,15 @@ class ServiceVariantForm
                         ->numeric()
                         ->required()
                         ->minValue(1)
-                        ->rule('gte:min_quantity')
-                        ->validationMessages(['gte' => '最多買多少不能小於最少買多少。']),
+                        ->rules([
+                            fn ($get) => function (string $attribute, $value, $fail) use ($get) {
+                                $min = $get('min_quantity');
+
+                                if (filled($min) && (int) $value < (int) $min) {
+                                    $fail('最多買多少不能小於最少買多少。');
+                                }
+                            },
+                        ]),
 
                     TextInput::make('step_quantity')
                         ->label('數量間隔')
@@ -94,19 +117,27 @@ class ServiceVariantForm
                         ->required()
                         ->minValue(1)
                         ->rules([
-                            'gte:min_quantity',
-                            'lte:max_quantity',
                             fn ($get) => function (string $attribute, $value, $fail) use ($get) {
+                                $min = $get('min_quantity');
+                                $max = $get('max_quantity');
                                 $step = (int) $get('step_quantity');
+
+                                if (filled($min) && (int) $value < (int) $min) {
+                                    $fail('預設數量不能小於最少買多少。');
+
+                                    return;
+                                }
+
+                                if (filled($max) && (int) $value > (int) $max) {
+                                    $fail('預設數量不能大於最多買多少。');
+
+                                    return;
+                                }
 
                                 if ($step > 0 && ((int) $value) % $step !== 0) {
                                     $fail("預設數量必須是數量間隔（{$step}）的倍數。");
                                 }
                             },
-                        ])
-                        ->validationMessages([
-                            'gte' => '預設數量不能小於最少買多少。',
-                            'lte' => '預設數量不能大於最多買多少。',
                         ]),
 
                     TextInput::make('currency')
@@ -132,7 +163,7 @@ class ServiceVariantForm
                         ->maxLength(255),
 
                     ImageField::upload('image_path', '4:3')->label('款式圖片'),
-                    ImageField::alt('image_alt')->label('圖片說明文字（alt）'),
+                    ImageField::alt('image_alt', 'image_path')->label('圖片說明文字（alt）'),
                 ])->columns(2),
 
             Section::make('發布狀態')

@@ -86,8 +86,13 @@ class AppServiceProvider extends ServiceProvider
         User::observe(LastOwnerObserver::class);
 
         // Header 與 footer 的平台導覽一律從資料庫讀取，⛔ 不再讀 config fixture。
+        // 公司名稱同樣由後台設定驅動，⛔ 不寫死在版型裡。
         View::composer('layouts.app', function ($view) {
             $view->with('navPlatforms', app(CatalogRepository::class)->navigablePlatforms());
+
+            if (! array_key_exists('siteName', $view->getData())) {
+                $view->with('siteName', SiteSetting::current()?->displayName() ?? 'IGLIKEFOLLOW');
+            }
         });
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Platforms\Pages;
 
 use App\Filament\Resources\Platforms\PlatformResource;
+use App\Filament\Support\PreviewAction;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\ForceDeleteAction;
 use Filament\Actions\RestoreAction;
@@ -15,6 +16,7 @@ class EditPlatform extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            PreviewAction::make(),
             DeleteAction::make(),
             ForceDeleteAction::make(),
             RestoreAction::make(),

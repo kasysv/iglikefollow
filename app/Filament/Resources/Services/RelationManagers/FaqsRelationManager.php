@@ -83,16 +83,30 @@ class FaqsRelationManager extends RelationManager
             ->headerActions([
                 CreateAction::make()
                     ->label('新增問題')
-                    // scope 必須與 FK 一致，⛔ 由系統填入而非讓使用者選錯。
-                    ->mutateDataUsing(function (array $data): array {
-                        $data['scope'] = 'service';
-
-                        return $data;
-                    }),
+                    ->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
             ])
-            ->recordActions([EditAction::make(), DeleteAction::make()])
+            ->recordActions([
+                EditAction::make()->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+                DeleteAction::make(),
+            ])
             ->toolbarActions([
                 BulkActionGroup::make([DeleteBulkAction::make()]),
             ]);
+    }
+
+    /**
+     * Pin both the owning service and the scope.
+     *
+     * scope must stay consistent with the foreign key: a row carrying
+     * service_id but scope 'global' would surface this service's FAQ on every
+     * page of the site.
+     */
+    private function ownedBy(array $data): array
+    {
+        $data['service_id'] = $this->getOwnerRecord()->getKey();
+        $data['scope'] = 'service';
+        $data['platform_id'] = null;
+
+        return $data;
     }
 }

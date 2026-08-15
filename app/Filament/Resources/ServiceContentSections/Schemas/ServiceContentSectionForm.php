@@ -12,18 +12,22 @@ use Illuminate\Support\Facades\Auth;
 
 class ServiceContentSectionForm
 {
-    public static function configure(Schema $schema): Schema
+    /**
+     * @param  bool  $withOwner  false inside a Service's relation manager, where
+     *                           the owning service is fixed by the parent record.
+     */
+    public static function configure(Schema $schema, bool $withOwner = true): Schema
     {
         return $schema->components([
             Section::make('內容段落')
                 ->description('這是服務頁下方的長文區塊，用來寫詳細說明、購買須知這類內容。一個服務可以有很多段，照排序由上往下顯示。')
-                ->schema([
-                    Select::make('service_id')
+                ->schema(array_values(array_filter([
+                    $withOwner ? Select::make('service_id')
                         ->label('所屬服務')
                         ->helperText('這段內容要顯示在哪個服務的頁面上。')
                         ->relationship('service', 'name')
                         ->required()
-                        ->searchable(),
+                        ->searchable() : null,
 
                     TextInput::make('heading')
                         ->label('段落標題')
@@ -39,8 +43,8 @@ class ServiceContentSectionForm
                         ->columnSpanFull(),
 
                     ImageField::upload('image_path')->label('段落配圖'),
-                    ImageField::alt('image_alt')->label('圖片說明文字（alt）'),
-                ])->columns(2),
+                    ImageField::alt('image_alt', 'image_path')->label('圖片說明文字（alt）'),
+                ])))->columns(2),
 
             Section::make('發布狀態')
                 ->schema([

@@ -39,6 +39,16 @@ class ServiceForm
                         ->required()
                         ->maxLength(255)
                         ->rule('regex:/^[a-z0-9]+(-[a-z0-9]+)*$/')
+                        // 唯一範圍是「同一平台內」，與資料庫的 (platform_id, slug) 一致；
+                        // ⛔ 不可只驗 slug，否則 IG 與 FB 就不能各有一個 followers。
+                        ->unique(
+                            ignoreRecord: true,
+                            modifyRuleUsing: fn ($rule, $get) => $rule->where('platform_id', $get('platform_id')),
+                        )
+                        ->validationMessages([
+                            'unique' => '同一個平台底下已經有這個網址代碼了，請換一個。',
+                            'regex' => '網址代碼只能用小寫英文、數字與連字號，例如 followers。',
+                        ])
                         ->disabled(fn (?Service $record) => $record?->isSlugLocked()
                             || ! Auth::user()?->isOwner())
                         ->dehydrated(),
@@ -116,9 +126,9 @@ class ServiceForm
                         ->columnSpanFull(),
 
                     ImageField::upload('card_image_path', '4:3')->label('卡片圖片'),
-                    ImageField::alt('card_image_alt')->label('卡片圖片說明文字（alt）'),
+                    ImageField::alt('card_image_alt', 'card_image_path')->label('卡片圖片說明文字（alt）'),
                     ImageField::upload('hero_image_path')->label('服務頁主視覺'),
-                    ImageField::alt('hero_image_alt')->label('主視覺說明文字（alt）'),
+                    ImageField::alt('hero_image_alt', 'hero_image_path')->label('主視覺說明文字（alt）'),
                 ])->columns(2),
 
             Section::make('搜尋引擎設定')

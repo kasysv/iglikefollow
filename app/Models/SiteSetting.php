@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SiteSetting extends Model
 {
@@ -18,5 +19,61 @@ class SiteSetting extends Model
     public static function current(): ?self
     {
         return static::query()->orderBy('id')->first();
+    }
+
+    public function ctaPlatform(): BelongsTo
+    {
+        return $this->belongsTo(Platform::class, 'primary_cta_platform_id');
+    }
+
+    public function ctaService(): BelongsTo
+    {
+        return $this->belongsTo(Service::class, 'primary_cta_service_id');
+    }
+
+    /**
+     * The site's public-facing name.
+     *
+     * Falls back to the brand so a blank settings row never renders an empty
+     * header or an empty accessible label.
+     */
+    public function displayName(): string
+    {
+        return filled($this->company_name) ? $this->company_name : 'IGLIKEFOLLOW';
+    }
+
+    /**
+     * Resolve the homepage CTA to a concrete URL.
+     *
+     * Anything unresolvable — an unknown route name, a target that was deleted,
+     * or a target that is no longer published — degrades to the homepage
+     * platform picker. That is always a valid destination, so the site's main
+     * button can never 404 or point off-site.
+     */
+    public function ctaUrl(): string
+    {
+        $anchor = route('home').'#platforms';
+
+        if (! in_array($this->primary_cta_route, self::CTA_ROUTES, true)) {
+            return $anchor;
+        }
+
+        if ($this->primary_cta_route === 'platform') {
+            $platform = $this->ctaPlatform;
+
+            return $platform?->status === 'published'
+                ? route('platform', $platform->slug)
+                : $anchor;
+        }
+
+        if ($this->primary_cta_route === 'service') {
+            $service = $this->ctaService;
+
+            return ($service?->status === 'published' && $service->platform?->status === 'published')
+                ? route('service', [$service->platform->slug, $service->slug])
+                : $anchor;
+        }
+
+        return $anchor;
     }
 }

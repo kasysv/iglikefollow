@@ -31,6 +31,12 @@ class PlatformForm
                         ->required()
                         ->maxLength(255)
                         ->rule('regex:/^[a-z0-9]+(-[a-z0-9]+)*$/')
+                        // 重複的網址代碼要在表單上說清楚，⛔ 不能等資料庫丟出 UNIQUE 例外。
+                        ->unique(ignoreRecord: true)
+                        ->validationMessages([
+                            'unique' => '這個網址代碼已經有其他平台在用了，請換一個。',
+                            'regex' => '網址代碼只能用小寫英文、數字與連字號，例如 instagram。',
+                        ])
                         ->disabled(fn (?Platform $record) => $record?->isSlugLocked()
                             || ! Auth::user()?->isOwner())
                         ->dehydrated(),
@@ -62,7 +68,7 @@ class PlatformForm
                         ->columnSpanFull(),
 
                     ImageField::upload('hero_image_path')->label('主視覺圖片'),
-                    ImageField::alt('hero_image_alt')->label('圖片說明文字（alt）'),
+                    ImageField::alt('hero_image_alt', 'hero_image_path')->label('圖片說明文字（alt）'),
                 ])->columns(2),
 
             Section::make('搜尋引擎設定')

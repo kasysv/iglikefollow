@@ -21,7 +21,8 @@ class ContentSectionsRelationManager extends RelationManager
 
     public function form(Schema $schema): Schema
     {
-        return ServiceContentSectionForm::configure($schema);
+        // withOwner: false ⛔ 不顯示「所屬服務」，段落不可從這裡改掛到別的服務。
+        return ServiceContentSectionForm::configure($schema, withOwner: false);
     }
 
     public function table(Table $table): Table
@@ -46,10 +47,25 @@ class ContentSectionsRelationManager extends RelationManager
                     }),
             ])
             ->defaultSort('sort_order')
-            ->headerActions([CreateAction::make()->label('新增段落')])
-            ->recordActions([EditAction::make(), DeleteAction::make()])
+            ->headerActions([
+                CreateAction::make()
+                    ->label('新增段落')
+                    ->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+            ])
+            ->recordActions([
+                EditAction::make()->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+                DeleteAction::make(),
+            ])
             ->toolbarActions([
                 BulkActionGroup::make([DeleteBulkAction::make()]),
             ]);
+    }
+
+    /** 歸屬一律由 owner record 決定，⛔ 表單送來的 service_id 不採用。 */
+    private function ownedBy(array $data): array
+    {
+        $data['service_id'] = $this->getOwnerRecord()->getKey();
+
+        return $data;
     }
 }

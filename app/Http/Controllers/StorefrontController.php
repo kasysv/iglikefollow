@@ -20,42 +20,9 @@ class StorefrontController extends Controller
             'platforms' => $this->catalog->navigablePlatforms(),
             'faqs' => $this->catalog->globalFaqs(),
             'settings' => $settings,
-            'ctaUrl' => $this->resolveCtaUrl($settings),
+            // CTA 目的地由設定的固定目標決定，⛔ 不再取「排序第一個」而隨排序漂移。
+            'ctaUrl' => $settings?->ctaUrl() ?? route('home').'#platforms',
         ]);
-    }
-
-    /**
-     * Resolve the homepage CTA destination from the stored route name.
-     *
-     * Only names on SiteSetting::CTA_ROUTES are honoured, and 'home' falls
-     * through to the platform picker anchor. Anything unrecognised — including
-     * a value written directly to the database — degrades to that same anchor
-     * rather than becoming an open redirect.
-     */
-    private function resolveCtaUrl(?SiteSetting $settings): string
-    {
-        $anchor = route('home').'#platforms';
-        $name = $settings?->primary_cta_route;
-
-        if (! in_array($name, SiteSetting::CTA_ROUTES, true) || $name === 'home') {
-            return $anchor;
-        }
-
-        $platform = $this->catalog->navigablePlatforms()->first();
-
-        if ($platform === null) {
-            return $anchor;
-        }
-
-        if ($name === 'platform') {
-            return route('platform', $platform->slug);
-        }
-
-        $service = $platform->services()->published()->orderBy('sort_order')->first();
-
-        return $service
-            ? route('service', [$platform->slug, $service->slug])
-            : $anchor;
     }
 
     public function platform(Request $request, string $platform): View|Response
