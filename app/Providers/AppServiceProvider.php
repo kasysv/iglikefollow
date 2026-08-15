@@ -8,8 +8,12 @@ use App\Models\Platform;
 use App\Models\Service;
 use App\Models\ServiceContentSection;
 use App\Models\ServiceVariant;
+use App\Models\SiteSetting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\LastOwnerObserver;
+use App\Observers\PublishObserver;
+use App\Observers\VariantIntegrityObserver;
 use App\Policies\AdminAuditLogPolicy;
 use App\Policies\FaqPolicy;
 use App\Policies\PlatformPolicy;
@@ -35,13 +39,28 @@ class AppServiceProvider extends ServiceProvider
         AdminAuditLog::class => AdminAuditLogPolicy::class,
     ];
 
-    /** Content models whose admin changes are recorded to the audit log. */
+    /**
+     * Models whose admin changes are recorded to the audit log.
+     *
+     * SiteSetting and User are included because settings edits and role or
+     * activation changes are exactly the actions an owner needs to be able to
+     * review after the fact.
+     */
     private const AUDITED = [
         Platform::class,
         Service::class,
         ServiceVariant::class,
         ServiceContentSection::class,
         Faq::class,
+        SiteSetting::class,
+        User::class,
+    ];
+
+    /** Models that carry publish state and a lockable slug. */
+    private const PUBLISHABLE = [
+        Platform::class,
+        Service::class,
+        ServiceVariant::class,
     ];
 
     public function register(): void
@@ -58,6 +77,13 @@ class AppServiceProvider extends ServiceProvider
         foreach (self::AUDITED as $model) {
             $model::observe(AuditObserver::class);
         }
+
+        foreach (self::PUBLISHABLE as $model) {
+            $model::observe(PublishObserver::class);
+        }
+
+        ServiceVariant::observe(VariantIntegrityObserver::class);
+        User::observe(LastOwnerObserver::class);
 
         // Header 與 footer 的平台導覽一律從資料庫讀取，⛔ 不再讀 config fixture。
         View::composer('layouts.app', function ($view) {

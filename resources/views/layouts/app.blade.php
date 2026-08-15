@@ -3,7 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="robots" content="{{ app(\App\Support\IndexingPolicy::class)->allows(request()) ? 'index, follow' : 'noindex, nofollow' }}">
+    {{-- 草稿預覽一律 noindex，⛔ 不依賴全站 IndexingPolicy；正式開放索引後仍不得外洩。 --}}
+    <meta name="robots" content="{{ (! empty($isPreview) || ! app(\App\Support\IndexingPolicy::class)->allows(request())) ? 'noindex, nofollow' : 'index, follow' }}">
     <meta name="description" content="{{ $description ?? 'IGLIKEFOLLOW Instagram 社群服務本機開發預覽。' }}">
     <title>{{ $title ?? 'IGLIKEFOLLOW' }}</title>
     @vite(['resources/css/app.css', 'resources/js/app.js'])

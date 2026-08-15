@@ -65,14 +65,18 @@ class ServiceVariantForm
                         ->helperText('低於這個數字客人就不能下單。')
                         ->numeric()
                         ->required()
-                        ->minValue(1),
+                        ->minValue(1)
+                        ->rule('lte:max_quantity')
+                        ->validationMessages(['lte' => '最少買多少不能大於最多買多少。']),
 
                     TextInput::make('max_quantity')
                         ->label('最多買多少')
                         ->helperText('超過這個數字客人就不能下單。')
                         ->numeric()
                         ->required()
-                        ->minValue(1),
+                        ->minValue(1)
+                        ->rule('gte:min_quantity')
+                        ->validationMessages(['gte' => '最多買多少不能小於最少買多少。']),
 
                     TextInput::make('step_quantity')
                         ->label('數量間隔')
@@ -82,12 +86,28 @@ class ServiceVariantForm
                         ->default(1)
                         ->minValue(1),
 
+                    // 預設數量必須真的買得到，⛔ 否則客人一進頁面就是無效狀態。
                     TextInput::make('default_quantity')
                         ->label('預設數量')
-                        ->helperText('客人打開頁面時，數量欄位預先帶的數字。要在最少與最多之間，而且符合間隔。')
+                        ->helperText('客人打開頁面時，數量欄位預先帶的數字。必須在最少與最多之間，而且是「數量間隔」的倍數。')
                         ->numeric()
                         ->required()
-                        ->minValue(1),
+                        ->minValue(1)
+                        ->rules([
+                            'gte:min_quantity',
+                            'lte:max_quantity',
+                            fn ($get) => function (string $attribute, $value, $fail) use ($get) {
+                                $step = (int) $get('step_quantity');
+
+                                if ($step > 0 && ((int) $value) % $step !== 0) {
+                                    $fail("預設數量必須是數量間隔（{$step}）的倍數。");
+                                }
+                            },
+                        ])
+                        ->validationMessages([
+                            'gte' => '預設數量不能小於最少買多少。',
+                            'lte' => '預設數量不能大於最多買多少。',
+                        ]),
 
                     TextInput::make('currency')
                         ->label('幣別')

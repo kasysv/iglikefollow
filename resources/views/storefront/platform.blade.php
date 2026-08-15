@@ -125,6 +125,11 @@
                 <div class="mt-4 grid gap-4 sm:grid-cols-2">
                     @foreach ($rest as $service)
                         <a href="{{ route('service', [$platform->slug, $service->slug]) }}" class="service-card">
+                            @if ($service->card_image_path)
+                                <img src="{{ \Illuminate\Support\Facades\Storage::url($service->card_image_path) }}"
+                                     alt="{{ $service->card_image_alt }}"
+                                     class="mb-4 aspect-[4/3] w-full rounded-xl object-cover" loading="lazy">
+                            @endif
                             <div class="flex items-start justify-between gap-4">
                                 <div>
                                     <h3 class="text-lg font-bold tracking-[-0.02em]">

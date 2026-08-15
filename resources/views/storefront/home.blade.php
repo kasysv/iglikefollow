@@ -17,7 +17,8 @@
                     ?: 'IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。先選擇平台，再選擇需要的服務類型，最後挑選數量方案並免會員結帳。' }}
             </p>
             <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <a href="#platforms"
+                {{-- CTA 目的地只能來自 route 白名單；⛔ 不接受後台填入任意 URL。 --}}
+                <a href="{{ $ctaUrl }}"
                    class="inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-7 text-base font-bold text-white transition-colors duration-200 hover:bg-black">
                     {{ $settings?->primary_cta_label ?: '選擇平台服務' }}
                 </a>
@@ -31,6 +32,12 @@
                 <div><strong class="block text-base">後端重新驗價</strong><span class="text-black/55">不信任前端送出的價格</span></div>
                 <div><strong class="block text-base">服務分類清楚</strong><span class="text-black/55">依平台與服務類型選擇</span></div>
             </div>
+
+            @if ($settings?->company_image_path)
+                <img src="{{ \Illuminate\Support\Facades\Storage::url($settings->company_image_path) }}"
+                     alt="{{ $settings->company_image_alt }}"
+                     class="mt-10 h-auto w-full rounded-[1.75rem]" loading="lazy">
+            @endif
         </div>
     </section>
 

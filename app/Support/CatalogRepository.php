@@ -30,11 +30,19 @@ class CatalogRepository
             ->get();
     }
 
-    /** Platforms shown in navigation, including not-yet-open ones as honest empty states. */
+    /**
+     * Platforms shown in public navigation.
+     *
+     * Only published platforms appear: linking to a draft produced a 404 for
+     * visitors, because findPlatform() correctly refuses to serve drafts.
+     * A platform with no sellable services yet still shows as an honest
+     * "準備中" empty state, but it must be reachable to be linked.
+     */
     public function navigablePlatforms(): Collection
     {
         return Platform::query()
-            ->whereIn('status', ['published', 'draft'])
+            ->published()
+            ->withCount(['services' => fn ($q) => $q->published()])
             ->orderBy('sort_order')
             ->get();
     }

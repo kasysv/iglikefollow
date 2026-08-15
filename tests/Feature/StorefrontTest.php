@@ -25,7 +25,7 @@ class StorefrontTest extends TestCase
         return ServiceVariant::query()->where('sku', 'ig-followers-standard')->value('id');
     }
 
-    public function test_home_presents_company_and_all_platforms_in_initial_html(): void
+    public function test_home_presents_company_and_published_platforms_in_initial_html(): void
     {
         $this->get('/')
             ->assertOk()
@@ -33,15 +33,16 @@ class StorefrontTest extends TestCase
             ->assertSee('多平台社群服務', false)
             ->assertSee('Instagram')
             ->assertSee('Facebook')
-            ->assertSee('Threads')
-            ->assertSee('購買前常見問題');
+            ->assertSee('購買前常見問題')
+            // Threads 仍是草稿；⛔ 導覽不得連到會 404 的頁面。
+            ->assertDontSee('/services/threads', false);
     }
 
-    public function test_home_links_to_every_platform_hub(): void
+    public function test_home_links_to_every_published_platform_hub(): void
     {
         $response = $this->get('/');
 
-        foreach (['instagram', 'facebook', 'threads'] as $platform) {
+        foreach (['instagram', 'facebook'] as $platform) {
             $response->assertSee('/services/'.$platform, false);
         }
     }

@@ -29,8 +29,21 @@ class UserPolicy
 
     public function delete(User $user, User $model): bool
     {
-        // ⛔ 不可刪除自己，避免鎖死唯一 owner。
-        return $user->isOwner() && $user->id !== $model->id;
+        if (! $user->isOwner() || $user->id === $model->id) {
+            return false;
+        }
+
+        // ⛔ 不可刪除最後一位啟用中的 owner，否則後台會永久鎖死。
+        return ! $model->isLastActiveOwner();
+    }
+
+    /**
+     * Demoting or deactivating the final owner would lock everyone out of the
+     * panel, so that specific change is refused even for another owner.
+     */
+    public function changeRoleOrStatus(User $user, User $model): bool
+    {
+        return $user->isOwner() && ! $model->isLastActiveOwner();
     }
 
     public function forceDelete(User $user, User $model): bool

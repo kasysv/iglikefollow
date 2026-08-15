@@ -74,6 +74,25 @@ class User extends Authenticatable implements FilamentUser
         return $this->role === self::ROLE_OWNER && $this->is_active === true;
     }
 
+    /**
+     * True when this record is the only active owner left.
+     *
+     * Removing or demoting that account would leave nobody able to publish or
+     * manage users, so callers must refuse the change.
+     */
+    public function isLastActiveOwner(): bool
+    {
+        if (! $this->isOwner()) {
+            return false;
+        }
+
+        return static::query()
+            ->where('role', self::ROLE_OWNER)
+            ->where('is_active', true)
+            ->whereKeyNot($this->getKey())
+            ->doesntExist();
+    }
+
     public function isEditor(): bool
     {
         return $this->role === self::ROLE_EDITOR && $this->is_active === true;

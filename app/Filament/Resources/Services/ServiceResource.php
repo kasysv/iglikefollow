@@ -5,6 +5,9 @@ namespace App\Filament\Resources\Services;
 use App\Filament\Resources\Services\Pages\CreateService;
 use App\Filament\Resources\Services\Pages\EditService;
 use App\Filament\Resources\Services\Pages\ListServices;
+use App\Filament\Resources\Services\RelationManagers\ContentSectionsRelationManager;
+use App\Filament\Resources\Services\RelationManagers\FaqsRelationManager;
+use App\Filament\Resources\Services\RelationManagers\VariantsRelationManager;
 use App\Filament\Resources\Services\Schemas\ServiceForm;
 use App\Filament\Resources\Services\Tables\ServicesTable;
 use App\Models\Service;
@@ -42,8 +45,11 @@ class ServiceResource extends Resource
 
     public static function getRelations(): array
     {
+        // 在服務編輯頁直接管理款式、內容與 FAQ，不必跳到其他選單。
         return [
-            //
+            VariantsRelationManager::class,
+            ContentSectionsRelationManager::class,
+            FaqsRelationManager::class,
         ];
     }
 

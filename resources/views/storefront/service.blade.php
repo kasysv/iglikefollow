@@ -45,6 +45,12 @@
             {{ $service->h1 ?: $service->name }}
         </h1>
         <p class="mt-3 max-w-2xl leading-7 text-black/60">{{ $service->summary }}</p>
+
+        @if ($service->hero_image_path)
+            <img src="{{ \Illuminate\Support\Facades\Storage::url($service->hero_image_path) }}"
+                 alt="{{ $service->hero_image_alt }}"
+                 class="mt-6 h-auto w-full max-w-3xl rounded-[1.75rem]" loading="lazy">
+        @endif
     </section>
 
     @if ($variants->isEmpty())
@@ -109,6 +115,11 @@
                                         NT${{ number_format((float) $variant->unit_price, 2) }}／{{ $variant->quantity_unit }}
                                     </span>
                                 </span>
+                                @if ($variant->image_path)
+                                    <img src="{{ \Illuminate\Support\Facades\Storage::url($variant->image_path) }}"
+                                         alt="{{ $variant->image_alt }}"
+                                         class="mt-3 h-auto w-full rounded-xl" loading="lazy">
+                                @endif
                                 @if (filled($variant->description))
                                     <span class="mt-1.5 block text-sm leading-6 text-black/60">{{ $variant->description }}</span>
                                 @endif
