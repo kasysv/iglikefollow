@@ -13,8 +13,9 @@
         <dl class="mt-8 divide-y divide-black/10 border-y border-black/10">
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">平台</dt><dd class="font-bold">{{ $platformName }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">服務</dt><dd class="font-bold">{{ $serviceName }}</dd></div>
-            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">方案</dt><dd class="font-bold">{{ $plan['label'] }}</dd></div>
-            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">Mock 金額</dt><dd class="font-bold">NT${{ number_format($plan['price']) }}</dd></div>
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">款式</dt><dd class="font-bold">{{ $variantLabel }}</dd></div>
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">數量</dt><dd class="font-bold">{{ number_format($quantity) }} {{ $quantityUnit }}</dd></div>
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">Mock 金額（後端重算）</dt><dd class="font-bold">NT${{ number_format($mockAmount) }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">付款方式</dt><dd class="font-bold">{{ $paymentLabel }}</dd></div>
             <div class="flex flex-col gap-2 py-4 sm:flex-row sm:justify-between"><dt class="text-black/50">目標</dt><dd class="break-all font-bold">{{ $target }}</dd></div>
         </dl>

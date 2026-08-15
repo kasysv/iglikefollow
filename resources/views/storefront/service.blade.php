@@ -1,11 +1,14 @@
 @php
-    $featuredKey = collect($service['plans'])->search(fn ($plan) => ! empty($plan['featured']))
-        ?: array_key_first($service['plans']);
+    $variants = $service['variants'];
+    $defaultKey = collect($variants)->search(fn ($v) => ! empty($v['featured'])) ?: array_key_first($variants);
+    $unit = $service['quantity_unit'] ?? '個';
+    // Alpine 需要 min/max/step/單價 才能在前端試算；⛔ 實際金額仍由後端重算。
+    $bounds = collect($variants)->map(fn ($v) => $v['quantity'])->all();
 @endphp
 
 @extends('layouts.app', [
     'title' => $service['name'] . '｜IGLIKEFOLLOW',
-    'description' => $service['name'] . '：' . $service['summary'] . ' 選擇數量方案並免會員快速結帳。本頁為本機開發預覽，不會建立真實訂單。',
+    'description' => $service['name'] . '：' . $service['summary'] . ' 自由輸入數量並免會員快速結帳。本頁為本機開發預覽，不會建立真實訂單。',
 ])
 
 @section('content')
@@ -24,98 +27,155 @@
         </ol>
     </nav>
 
-    <section class="mx-auto grid max-w-[1220px] gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[1fr_500px] lg:gap-14 lg:py-14">
-        <div>
-            <p class="eyebrow">{{ $platform['name'] }}</p>
-            <h1 class="mt-5 text-[clamp(2.2rem,4.6vw,3.8rem)] font-bold leading-[1.06] tracking-[-0.045em]">
-                {{ $service['name'] }}
-            </h1>
-            <p class="mt-5 max-w-2xl text-base leading-8 text-black/60 sm:text-lg">{{ $service['summary'] }}</p>
-
-            <dl class="mt-8 max-w-2xl divide-y divide-black/10 border-y border-black/10">
-                <div class="py-4">
-                    <dt class="text-sm font-bold">交付方式</dt>
-                    <dd class="mt-2 leading-7 text-black/60">{{ $service['delivery'] }}</dd>
-                </div>
-                <div class="py-4">
-                    <dt class="text-sm font-bold">需要填寫</dt>
-                    <dd class="mt-2 leading-7 text-black/60">{{ $service['input_label'] }}</dd>
-                </div>
-                <div class="py-4">
-                    <dt class="text-sm font-bold">付款方式</dt>
-                    <dd class="mt-2 leading-7 text-black/60">LINE Pay 或綠界付款。付款成功由後端驗證後才建立履約流程。</dd>
-                </div>
-            </dl>
-
-            <div class="mt-8 rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                <p class="text-sm font-bold text-amber-900">本機開發預覽</p>
-                <p class="mt-2 text-sm leading-6 text-amber-900/80">
-                    這一頁的方案與價格是開發用的 mock 資料，不是正式售價，也不會建立真實訂單。
-                </p>
-            </div>
-        </div>
-
-        <section id="checkout" class="surface h-fit p-5 sm:p-7" aria-labelledby="checkout-title"
-                 x-data="{ plan: '{{ $featuredKey }}', payment: 'line-pay' }">
-            <div class="flex items-start justify-between gap-5">
-                <div>
-                    <p class="eyebrow">Quick checkout</p>
-                    <h2 id="checkout-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">快速選購</h2>
-                </div>
-                <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</span>
-            </div>
-
-            <form action="{{ route('checkout.mock') }}" method="post" class="mt-7 space-y-7">
-                @csrf
-                <fieldset>
-                    <legend class="mb-3 text-sm font-bold">1. 選擇方案</legend>
-                    <div class="grid grid-cols-3 gap-2">
-                        @foreach ($service['plans'] as $key => $plan)
-                            <label class="choice-card">
-                                <input type="radio" name="plan" value="{{ $key }}" class="sr-only"
-                                       x-model="plan" @checked($key === $featuredKey)>
-                                <span class="text-xs font-semibold sm:text-sm">{{ $plan['label'] }}</span>
-                                <span class="mt-3 block whitespace-nowrap text-lg font-bold tracking-[-0.04em] sm:text-xl">
-                                    NT${{ number_format($plan['price']) }}
-                                </span>
-                            </label>
-                        @endforeach
-                    </div>
-                    @error('plan') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                </fieldset>
-
-                <div>
-                    <label for="target" class="mb-3 block text-sm font-bold">2. {{ $service['input_label'] }}</label>
-                    <input id="target" name="target" value="{{ old('target') }}" required maxlength="255"
-                           placeholder="{{ $service['input_hint'] }}"
-                           aria-describedby="target-hint"
-                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base placeholder:text-black/35">
-                    <p id="target-hint" class="mt-2 text-xs leading-5 text-black/50">{{ $service['delivery'] }}</p>
-                    @error('target') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                </div>
-
-                <fieldset>
-                    <legend class="mb-3 text-sm font-bold">3. 選擇付款方式</legend>
-                    <div class="grid gap-2 sm:grid-cols-2">
-                        <label class="payment-card">
-                            <input type="radio" name="payment" value="line-pay" x-model="payment" checked>
-                            <span class="font-bold">LINE Pay</span>
-                        </label>
-                        <label class="payment-card">
-                            <input type="radio" name="payment" value="ecpay" x-model="payment">
-                            <span class="font-bold">綠界付款</span>
-                        </label>
-                    </div>
-                    @error('payment') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                </fieldset>
-
-                <button type="submit" class="primary-button">測試快速結帳</button>
-                <p class="text-center text-xs leading-5 text-black/50">
-                    此按鈕只驗證本機 mock 流程，不會付款、不會建立真實訂單。
-                </p>
-            </form>
-        </section>
+    <section class="mx-auto max-w-[1220px] px-5 py-10 sm:px-8 lg:py-12">
+        <p class="eyebrow">{{ $platform['name'] }}</p>
+        <h1 class="mt-5 text-[clamp(2.2rem,4.6vw,3.8rem)] font-bold leading-[1.06] tracking-[-0.045em]">
+            {{ $service['name'] }}
+        </h1>
+        <p class="mt-5 max-w-2xl text-base leading-8 text-black/60 sm:text-lg">{{ $service['summary'] }}</p>
     </section>
+
+    <div x-data="{
+            variant: '{{ $defaultKey }}',
+            payment: 'line-pay',
+            bounds: {{ Illuminate\Support\Js::from($bounds) }},
+            quantity: {{ $variants[$defaultKey]['quantity']['default'] }},
+            get b() { return this.bounds[this.variant] },
+            selectVariant(key) { this.variant = key; this.quantity = this.bounds[key].default },
+            get estimate() {
+                const q = Number(this.quantity) || 0
+                return Math.round(q * this.b.unit_price).toLocaleString()
+            },
+            get valid() {
+                const q = Number(this.quantity)
+                return Number.isInteger(q) && q >= this.b.min && q <= this.b.max && q % this.b.step === 0
+            }
+         }">
+        <section class="mx-auto grid max-w-[1220px] gap-8 px-5 pb-14 sm:px-8 lg:grid-cols-[300px_1fr] lg:gap-12">
+
+            {{-- 左側款式導航：真實 radio，關閉 JS 仍可選 --}}
+            <aside aria-labelledby="variant-title" class="lg:sticky lg:top-6 lg:h-fit">
+                <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
+                <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
+                <div class="mt-5 space-y-2">
+                    @foreach ($variants as $key => $variant)
+                        <label class="variant-card">
+                            <input type="radio" name="variant" value="{{ $key }}" form="checkout-form"
+                                   class="sr-only" x-model="variant" @change="selectVariant('{{ $key }}')"
+                                   @checked($key === $defaultKey)>
+                            <span class="block font-bold">{{ $variant['label'] }}</span>
+                            <span class="mt-1 block text-sm leading-6 opacity-70">{{ $variant['description'] }}</span>
+                            <span class="mt-2 block text-xs opacity-60">
+                                {{ number_format($variant['quantity']['min']) }}–{{ number_format($variant['quantity']['max']) }} {{ $unit }}
+                            </span>
+                        </label>
+                    @endforeach
+                </div>
+            </aside>
+
+            <div class="grid gap-8 lg:grid-cols-[1fr_400px] lg:items-start">
+                <div>
+                    <dl class="divide-y divide-black/10 border-y border-black/10">
+                        <div class="py-4">
+                            <dt class="text-sm font-bold">交付方式</dt>
+                            <dd class="mt-2 leading-7 text-black/60">{{ $service['delivery'] }}</dd>
+                        </div>
+                        <div class="py-4">
+                            <dt class="text-sm font-bold">需要填寫</dt>
+                            <dd class="mt-2 leading-7 text-black/60">{{ $service['input_label'] }}</dd>
+                        </div>
+                        <div class="py-4">
+                            <dt class="text-sm font-bold">付款方式</dt>
+                            <dd class="mt-2 leading-7 text-black/60">LINE Pay 或綠界付款。付款成功由後端驗證後才建立履約流程。</dd>
+                        </div>
+                    </dl>
+
+                    <div class="mt-8 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                        <p class="text-sm font-bold text-amber-900">本機開發預覽</p>
+                        <p class="mt-2 text-sm leading-6 text-amber-900/80">
+                            數量上下限與單價目前是開發用的 placeholder，正式值將由後台 API 提供。
+                            這一頁不會建立真實訂單。
+                        </p>
+                    </div>
+                </div>
+
+                <section id="checkout" class="surface h-fit p-5 sm:p-7" aria-labelledby="checkout-title">
+                    <div class="flex items-start justify-between gap-5">
+                        <div>
+                            <p class="eyebrow">Quick checkout</p>
+                            <h2 id="checkout-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">快速選購</h2>
+                        </div>
+                        <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</span>
+                    </div>
+
+                    <form id="checkout-form" action="{{ route('checkout.mock') }}" method="post" class="mt-7 space-y-7">
+                        @csrf
+
+                        <div>
+                            <label for="quantity" class="mb-3 block text-sm font-bold">
+                                1. 輸入數量（<span x-text="unitLabel ?? '{{ $unit }}'">{{ $unit }}</span>）
+                            </label>
+                            <input id="quantity" name="quantity" type="number" inputmode="numeric" required
+                                   x-model="quantity"
+                                   :min="b.min" :max="b.max" :step="b.step"
+                                   value="{{ old('quantity', $variants[$defaultKey]['quantity']['default']) }}"
+                                   aria-describedby="quantity-hint"
+                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base">
+                            <p id="quantity-hint" class="mt-2 text-xs leading-5 text-black/55">
+                                可輸入
+                                <span x-text="Number(b.min).toLocaleString()">{{ number_format($variants[$defaultKey]['quantity']['min']) }}</span>
+                                至
+                                <span x-text="Number(b.max).toLocaleString()">{{ number_format($variants[$defaultKey]['quantity']['max']) }}</span>
+                                {{ $unit }}，需為
+                                <span x-text="b.step">{{ $variants[$defaultKey]['quantity']['step'] }}</span>
+                                的倍數。
+                            </p>
+                            <p class="mt-2 text-sm" x-show="!valid" x-cloak>
+                                <span class="text-red-700">數量不符合此款式的可購買範圍。</span>
+                            </p>
+                            @error('quantity') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
+                            @error('variant') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="target" class="mb-3 block text-sm font-bold">2. {{ $service['input_label'] }}</label>
+                            <input id="target" name="target" value="{{ old('target') }}" required maxlength="255"
+                                   placeholder="{{ $service['input_hint'] }}"
+                                   aria-describedby="target-hint"
+                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base placeholder:text-black/35">
+                            <p id="target-hint" class="mt-2 text-xs leading-5 text-black/50">{{ $service['delivery'] }}</p>
+                            @error('target') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
+                        </div>
+
+                        <fieldset>
+                            <legend class="mb-3 text-sm font-bold">3. 選擇付款方式</legend>
+                            <div class="grid gap-2 sm:grid-cols-2">
+                                <label class="payment-card">
+                                    <input type="radio" name="payment" value="line-pay" x-model="payment" checked>
+                                    <span class="font-bold">LINE Pay</span>
+                                </label>
+                                <label class="payment-card">
+                                    <input type="radio" name="payment" value="ecpay" x-model="payment">
+                                    <span class="font-bold">綠界付款</span>
+                                </label>
+                            </div>
+                            @error('payment') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
+                        </fieldset>
+
+                        <div class="flex items-baseline justify-between border-t border-black/10 pt-5">
+                            <span class="text-sm font-bold">試算金額</span>
+                            <span class="text-2xl font-bold tracking-[-0.03em]">NT$<span x-text="estimate">—</span></span>
+                        </div>
+
+                        <button type="submit" class="primary-button">測試快速結帳</button>
+                        <p class="text-center text-xs leading-5 text-black/50">
+                            試算僅供參考，實際金額由後端重新計算。此按鈕不會付款、不會建立真實訂單。
+                        </p>
+                    </form>
+                </section>
+            </div>
+        </section>
+    </div>
 
     <section class="border-t border-black/10 bg-white">
         <div class="mx-auto max-w-[1220px] px-5 py-14 sm:px-8">

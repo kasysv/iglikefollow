@@ -70,13 +70,34 @@ class StorefrontTest extends TestCase
             ->assertDontSee('NT$', false);
     }
 
-    public function test_service_page_shows_plans_and_correct_input_label(): void
+    public function test_service_page_shows_variants_and_correct_input_label(): void
     {
         $this->get('/services/instagram/post-likes')
             ->assertOk()
             ->assertSee('Instagram 單篇貼文讚')
             ->assertSee('Instagram 貼文網址')
-            ->assertSee('ig-post-likes-500', false);
+            ->assertSee('ig-post-likes-standard', false);
+    }
+
+    public function test_followers_page_offers_every_variant_in_initial_html(): void
+    {
+        $this->get('/services/instagram/followers')
+            ->assertOk()
+            ->assertSee('選擇款式')
+            ->assertSee('一般粉絲')
+            ->assertSee('真人粉絲')
+            ->assertSee('台灣粉絲')
+            ->assertSee('ig-followers-real', false)
+            ->assertSee('ig-followers-taiwan', false);
+    }
+
+    public function test_service_page_uses_free_quantity_input_not_fixed_tiers(): void
+    {
+        $this->get('/services/instagram/followers')
+            ->assertOk()
+            ->assertSee('name="quantity"', false)
+            ->assertSee('type="number"', false)
+            ->assertSee('輸入數量', false);
     }
 
     public function test_auto_likes_page_explains_prepaid_delivery(): void
@@ -96,13 +117,14 @@ class StorefrontTest extends TestCase
     public function test_mock_checkout_validates_input(): void
     {
         $this->post('/checkout/mock', [])
-            ->assertSessionHasErrors(['plan', 'target', 'payment']);
+            ->assertSessionHasErrors(['variant', 'quantity', 'target', 'payment']);
     }
 
     public function test_mock_checkout_never_creates_a_real_order(): void
     {
         $this->post('/checkout/mock', [
-            'plan' => 'ig-followers-1000',
+            'variant' => 'ig-followers-standard',
+            'quantity' => 1000,
             'target' => 'example_account',
             'payment' => 'line-pay',
         ])->assertOk()
@@ -111,10 +133,11 @@ class StorefrontTest extends TestCase
             ->assertSee('example_account');
     }
 
-    public function test_mock_checkout_accepts_plans_from_any_platform(): void
+    public function test_mock_checkout_accepts_variants_from_any_platform(): void
     {
         $this->post('/checkout/mock', [
-            'plan' => 'fb-views-5000',
+            'variant' => 'fb-views-standard',
+            'quantity' => 5000,
             'target' => 'https://facebook.com/reel/123456',
             'payment' => 'ecpay',
         ])->assertOk()
@@ -122,13 +145,57 @@ class StorefrontTest extends TestCase
             ->assertSee('綠界付款');
     }
 
-    public function test_mock_checkout_rejects_unknown_plan_and_payment(): void
+    public function test_mock_checkout_rejects_quantity_below_minimum(): void
     {
         $this->post('/checkout/mock', [
-            'plan' => 'not-a-plan',
+            'variant' => 'ig-followers-standard',
+            'quantity' => 10,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+        ])->assertSessionHasErrors('quantity');
+    }
+
+    public function test_mock_checkout_rejects_quantity_above_maximum(): void
+    {
+        $this->post('/checkout/mock', [
+            'variant' => 'ig-followers-taiwan',
+            'quantity' => 999999,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+        ])->assertSessionHasErrors('quantity');
+    }
+
+    public function test_mock_checkout_rejects_quantity_not_matching_step(): void
+    {
+        $this->post('/checkout/mock', [
+            'variant' => 'ig-followers-standard',
+            'quantity' => 155,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+        ])->assertSessionHasErrors('quantity');
+    }
+
+    public function test_mock_checkout_recalculates_amount_server_side(): void
+    {
+        // 1000 × 0.59 = 590；前端即使送出別的金額也不會被採用。
+        $this->post('/checkout/mock', [
+            'variant' => 'ig-followers-standard',
+            'quantity' => 1000,
+            'price' => 1,
+            'amount' => 1,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+        ])->assertOk()->assertSee('NT$590');
+    }
+
+    public function test_mock_checkout_rejects_unknown_variant_and_payment(): void
+    {
+        $this->post('/checkout/mock', [
+            'variant' => 'not-a-variant',
+            'quantity' => 1000,
             'target' => 'example_account',
             'payment' => 'not-a-gateway',
-        ])->assertSessionHasErrors(['plan', 'payment']);
+        ])->assertSessionHasErrors(['variant', 'payment']);
     }
 
     public function test_unknown_page_uses_custom_404(): void

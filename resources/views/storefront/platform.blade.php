@@ -43,6 +43,12 @@
                                     <dt class="font-bold">需要填寫</dt>
                                     <dd class="mt-1 leading-6 text-black/60">{{ $service['input_label'] }}</dd>
                                 </div>
+                                <div>
+                                    <dt class="font-bold">可選款式</dt>
+                                    <dd class="mt-1 leading-6 text-black/60">
+                                        {{ collect($service['variants'])->pluck('label')->join('、') }}
+                                    </dd>
+                                </div>
                             </dl>
                             <a href="{{ route('service', [$platform['slug'], $service['slug']]) }}"
                                class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-6 text-base font-bold text-white transition hover:bg-black">
