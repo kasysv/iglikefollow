@@ -22,6 +22,14 @@ class ServiceContentSectionResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
+    protected static ?string $navigationLabel = '內容段落';
+
+    protected static ?string $modelLabel = '內容段落';
+
+    protected static ?string $pluralModelLabel = '內容段落';
+
+    protected static ?int $navigationSort = 4;
+
     public static function form(Schema $schema): Schema
     {
         return ServiceContentSectionForm::configure($schema);

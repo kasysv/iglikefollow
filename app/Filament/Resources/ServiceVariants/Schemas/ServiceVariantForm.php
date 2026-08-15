@@ -6,6 +6,7 @@ use App\Filament\Support\ImageField;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\Auth;
 
@@ -14,45 +15,128 @@ class ServiceVariantForm
     public static function configure(Schema $schema): Schema
     {
         return $schema->components([
-            Select::make('service_id')
-                ->relationship('service', 'name')
-                ->required()
-                ->searchable(),
+            Section::make('這是什麼款式')
+                ->description('款式就是同一個服務底下的不同選擇，例如粉絲分成「一般粉絲」「真人粉絲」「台灣粉絲」，各有各的價格。')
+                ->schema([
+                    Select::make('service_id')
+                        ->label('所屬服務')
+                        ->helperText('這個款式屬於哪個服務。')
+                        ->relationship('service', 'name')
+                        ->required()
+                        ->searchable(),
 
-            TextInput::make('label')->required()->maxLength(255),
-            TextInput::make('sku')->maxLength(255)->unique(ignoreRecord: true),
-            TextInput::make('description')->maxLength(255)
-                ->helperText('⛔ 不得寫互動率、速度、保固等無第一方證據的宣稱。'),
+                    TextInput::make('label')
+                        ->label('款式名稱')
+                        ->helperText('客人在服務頁上看到的名稱，例如：真人粉絲。')
+                        ->required()
+                        ->maxLength(255),
 
-            ImageField::upload('image_path', '4:3'),
-            ImageField::alt('image_alt'),
+                    TextInput::make('description')
+                        ->label('款式說明')
+                        ->helperText('一句話說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
+                        ->maxLength(255)
+                        ->columnSpanFull(),
 
-            TextInput::make('quantity_unit')->required()->default('個')->maxLength(16),
-            TextInput::make('min_quantity')->numeric()->required()->minValue(1),
-            TextInput::make('max_quantity')->numeric()->required()->minValue(1),
-            TextInput::make('step_quantity')->numeric()->required()->default(1)->minValue(1),
-            TextInput::make('default_quantity')->numeric()->required()->minValue(1),
+                    Toggle::make('is_featured')
+                        ->label('設為預設款式')
+                        ->helperText('打開後，客人進服務頁時會預先選中這一款。每個服務建議只開一個。'),
+                ])->columns(2),
 
-            TextInput::make('unit_price')->numeric()->required()->minValue(0)
-                ->helperText('本機 mock 單價；正式售價待後台／API 提供。'),
-            TextInput::make('currency')->default('TWD')->maxLength(3)->required(),
-            TextInput::make('external_sku')->maxLength(255)
-                ->helperText('為未來履約 API 預留；本輪不呼叫外部 API。'),
+            Section::make('價格與數量')
+                ->description('客人可以自己輸入數量，但必須在你設定的範圍內。金額由系統用「單價 × 數量」自動計算。')
+                ->schema([
+                    TextInput::make('unit_price')
+                        ->label('單價')
+                        ->helperText('一個多少錢，可以用小數。例如 0.59 代表一個粉絲 0.59 元；買 1000 個就是 590 元。')
+                        ->numeric()
+                        ->required()
+                        ->minValue(0)
+                        ->prefix('NT$'),
 
-            Toggle::make('is_featured'),
+                    TextInput::make('quantity_unit')
+                        ->label('數量單位')
+                        ->helperText('計算的單位。粉絲和讚用「個」，留言用「則」，觀看用「次」，自動讚用「篇」。')
+                        ->required()
+                        ->default('個')
+                        ->maxLength(16),
 
-            Select::make('status')
-                ->options([
-                    'draft' => 'draft',
-                    'published' => 'published',
-                    'archived' => 'archived',
-                ])
-                ->default('draft')
-                ->required()
-                ->disabled(fn () => ! Auth::user()?->isOwner())
-                ->dehydrated(),
+                    TextInput::make('min_quantity')
+                        ->label('最少買多少')
+                        ->helperText('低於這個數字客人就不能下單。')
+                        ->numeric()
+                        ->required()
+                        ->minValue(1),
 
-            TextInput::make('sort_order')->numeric()->default(0)->required(),
+                    TextInput::make('max_quantity')
+                        ->label('最多買多少')
+                        ->helperText('超過這個數字客人就不能下單。')
+                        ->numeric()
+                        ->required()
+                        ->minValue(1),
+
+                    TextInput::make('step_quantity')
+                        ->label('數量間隔')
+                        ->helperText('客人只能買這個數字的倍數。填 100 代表只能買 100、200、300…；填 1 代表任何數字都可以。')
+                        ->numeric()
+                        ->required()
+                        ->default(1)
+                        ->minValue(1),
+
+                    TextInput::make('default_quantity')
+                        ->label('預設數量')
+                        ->helperText('客人打開頁面時，數量欄位預先帶的數字。要在最少與最多之間，而且符合間隔。')
+                        ->numeric()
+                        ->required()
+                        ->minValue(1),
+
+                    TextInput::make('currency')
+                        ->label('幣別')
+                        ->helperText('目前只用台幣 TWD。')
+                        ->default('TWD')
+                        ->required()
+                        ->maxLength(3),
+                ])->columns(2),
+
+            Section::make('編號與圖片')
+                ->description('這些是選填的，主要給你自己對帳和之後串接系統用。')
+                ->schema([
+                    TextInput::make('sku')
+                        ->label('商品編號')
+                        ->helperText('你自己的商品代號，方便對帳。不能和其他款式重複。')
+                        ->maxLength(255)
+                        ->unique(ignoreRecord: true),
+
+                    TextInput::make('external_sku')
+                        ->label('外部系統編號')
+                        ->helperText('之後串接你後台 API 時用來對應的代號。⚠️ 現在還沒有連任何外部系統，可以先留空。')
+                        ->maxLength(255),
+
+                    ImageField::upload('image_path', '4:3')->label('款式圖片'),
+                    ImageField::alt('image_alt')->label('圖片說明文字（alt）'),
+                ])->columns(2),
+
+            Section::make('發布狀態')
+                ->schema([
+                    Select::make('status')
+                        ->label('狀態')
+                        ->helperText('只有「已發布」的款式客人才買得到。草稿可以先建好慢慢改。只有擁有者可以改。')
+                        ->options([
+                            'draft' => '草稿（買不到）',
+                            'published' => '已發布（可購買）',
+                            'archived' => '已下架',
+                        ])
+                        ->default('draft')
+                        ->required()
+                        ->disabled(fn () => ! Auth::user()?->isOwner())
+                        ->dehydrated(),
+
+                    TextInput::make('sort_order')
+                        ->label('排序')
+                        ->helperText('數字越小排越前面。0 是第一個。')
+                        ->numeric()
+                        ->default(0)
+                        ->required(),
+                ])->columns(2),
         ]);
     }
 }

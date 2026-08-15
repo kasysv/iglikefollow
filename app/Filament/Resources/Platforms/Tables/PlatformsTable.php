@@ -5,10 +5,9 @@ namespace App\Filament\Resources\Platforms\Tables;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Actions\ForceDeleteBulkAction;
 use Filament\Actions\RestoreBulkAction;
-use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 
@@ -18,53 +17,38 @@ class PlatformsTable
     {
         return $table
             ->columns([
-                TextColumn::make('name')
-                    ->searchable(),
-                TextColumn::make('slug')
-                    ->searchable(),
-                TextColumn::make('eyebrow')
-                    ->searchable(),
-                TextColumn::make('h1')
-                    ->searchable(),
-                TextColumn::make('tagline')
-                    ->searchable(),
-                ImageColumn::make('hero_image_path'),
-                ImageColumn::make('hero_image_alt'),
-                TextColumn::make('seo_title')
-                    ->searchable(),
-                TextColumn::make('meta_description')
-                    ->searchable(),
-                TextColumn::make('status')
-                    ->searchable(),
-                TextColumn::make('sort_order')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('first_published_at')
-                    ->dateTime()
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('deleted_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('sort_order')->label('排序')->sortable(),
+                TextColumn::make('name')->label('平台名稱')->searchable()->weight('bold'),
+                TextColumn::make('slug')->label('網址代碼')->searchable()->color('gray'),
+                TextColumn::make('services_count')->label('服務數')->counts('services'),
+                TextColumn::make('status')->label('狀態')->badge()
+                    ->formatStateUsing(fn (string $state) => match ($state) {
+                        'published' => '已發布',
+                        'draft' => '草稿',
+                        'archived' => '已下架',
+                        default => $state,
+                    })
+                    ->color(fn (string $state) => match ($state) {
+                        'published' => 'success',
+                        'draft' => 'warning',
+                        default => 'gray',
+                    }),
+                TextColumn::make('updated_at')->label('最後修改')->dateTime('Y-m-d H:i')->sortable(),
             ])
+            ->defaultSort('sort_order')
             ->filters([
-                TrashedFilter::make(),
+                SelectFilter::make('status')->label('狀態')->options([
+                    'draft' => '草稿',
+                    'published' => '已發布',
+                    'archived' => '已下架',
+                ]),
+                TrashedFilter::make()->label('已刪除'),
             ])
-            ->recordActions([
-                EditAction::make(),
-            ])
+            ->recordActions([EditAction::make()])
+            // ⛔ 不提供永久刪除；日常操作一律 soft delete。
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
-                    ForceDeleteBulkAction::make(),
                     RestoreBulkAction::make(),
                 ]),
             ]);

@@ -18,7 +18,13 @@ class AdminAuditLogResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
 
-    protected static ?string $navigationLabel = 'Audit log';
+    protected static ?string $navigationLabel = '操作紀錄';
+
+    protected static ?string $modelLabel = '操作紀錄';
+
+    protected static ?string $pluralModelLabel = '操作紀錄';
+
+    protected static ?int $navigationSort = 9;
 
     public static function table(Table $table): Table
     {

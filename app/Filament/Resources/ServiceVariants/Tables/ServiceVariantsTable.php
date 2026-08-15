@@ -5,11 +5,10 @@ namespace App\Filament\Resources\ServiceVariants\Tables;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Actions\ForceDeleteBulkAction;
 use Filament\Actions\RestoreBulkAction;
 use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 
@@ -19,71 +18,43 @@ class ServiceVariantsTable
     {
         return $table
             ->columns([
-                TextColumn::make('service.name')
-                    ->searchable(),
-                TextColumn::make('sku')
-                    ->label('SKU')
-                    ->searchable(),
-                TextColumn::make('label')
-                    ->searchable(),
-                TextColumn::make('description')
-                    ->searchable(),
-                ImageColumn::make('image_path'),
-                ImageColumn::make('image_alt'),
-                TextColumn::make('quantity_unit')
-                    ->searchable(),
-                TextColumn::make('min_quantity')
-                    ->numeric()
+                TextColumn::make('sort_order')->label('排序')->sortable(),
+                TextColumn::make('service.name')->label('所屬服務')->searchable()->sortable(),
+                TextColumn::make('label')->label('款式名稱')->searchable()->weight('bold'),
+                TextColumn::make('unit_price')->label('單價')
+                    ->formatStateUsing(fn ($state, $record) => 'NT$'.number_format((float) $state, 2).'／'.$record->quantity_unit)
                     ->sortable(),
-                TextColumn::make('max_quantity')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('step_quantity')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('default_quantity')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('unit_price')
-                    ->money()
-                    ->sortable(),
-                TextColumn::make('currency')
-                    ->searchable(),
-                TextColumn::make('external_sku')
-                    ->searchable(),
-                IconColumn::make('is_featured')
-                    ->boolean(),
-                TextColumn::make('status')
-                    ->searchable(),
-                TextColumn::make('sort_order')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('first_published_at')
-                    ->dateTime()
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('deleted_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('min_quantity')->label('可購買範圍')
+                    ->formatStateUsing(fn ($state, $record) => number_format($state).'–'.number_format($record->max_quantity)
+                        .'（每 '.number_format($record->step_quantity).' 一階）'),
+                IconColumn::make('is_featured')->label('預設')->boolean(),
+                TextColumn::make('status')->label('狀態')->badge()
+                    ->formatStateUsing(fn (string $state) => match ($state) {
+                        'published' => '可購買',
+                        'draft' => '草稿',
+                        'archived' => '已下架',
+                        default => $state,
+                    })
+                    ->color(fn (string $state) => match ($state) {
+                        'published' => 'success',
+                        'draft' => 'warning',
+                        default => 'gray',
+                    }),
             ])
+            ->defaultSort('sort_order')
             ->filters([
-                TrashedFilter::make(),
+                SelectFilter::make('service')->label('服務')->relationship('service', 'name'),
+                SelectFilter::make('status')->label('狀態')->options([
+                    'draft' => '草稿',
+                    'published' => '可購買',
+                    'archived' => '已下架',
+                ]),
+                TrashedFilter::make()->label('已刪除'),
             ])
-            ->recordActions([
-                EditAction::make(),
-            ])
+            ->recordActions([EditAction::make()])
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
-                    ForceDeleteBulkAction::make(),
                     RestoreBulkAction::make(),
                 ]),
             ]);

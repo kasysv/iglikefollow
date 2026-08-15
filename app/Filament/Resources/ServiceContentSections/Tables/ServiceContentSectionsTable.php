@@ -5,10 +5,9 @@ namespace App\Filament\Resources\ServiceContentSections\Tables;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Actions\ForceDeleteBulkAction;
 use Filament\Actions\RestoreBulkAction;
-use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 
@@ -18,40 +17,37 @@ class ServiceContentSectionsTable
     {
         return $table
             ->columns([
-                TextColumn::make('service.name')
-                    ->searchable(),
-                TextColumn::make('heading')
-                    ->searchable(),
-                ImageColumn::make('image_path'),
-                ImageColumn::make('image_alt'),
-                TextColumn::make('status')
-                    ->searchable(),
-                TextColumn::make('sort_order')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('deleted_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('sort_order')->label('排序')->sortable(),
+                TextColumn::make('service.name')->label('所屬服務')->searchable()->sortable(),
+                TextColumn::make('heading')->label('段落標題')->searchable()->weight('bold'),
+                TextColumn::make('body')->label('內容預覽')->limit(60)->color('gray'),
+                TextColumn::make('status')->label('狀態')->badge()
+                    ->formatStateUsing(fn (string $state) => match ($state) {
+                        'published' => '已發布',
+                        'draft' => '草稿',
+                        'archived' => '已下架',
+                        default => $state,
+                    })
+                    ->color(fn (string $state) => match ($state) {
+                        'published' => 'success',
+                        'draft' => 'warning',
+                        default => 'gray',
+                    }),
             ])
+            ->defaultSort('sort_order')
             ->filters([
-                TrashedFilter::make(),
+                SelectFilter::make('service')->label('服務')->relationship('service', 'name'),
+                SelectFilter::make('status')->label('狀態')->options([
+                    'draft' => '草稿',
+                    'published' => '已發布',
+                    'archived' => '已下架',
+                ]),
+                TrashedFilter::make()->label('已刪除'),
             ])
-            ->recordActions([
-                EditAction::make(),
-            ])
+            ->recordActions([EditAction::make()])
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
-                    ForceDeleteBulkAction::make(),
                     RestoreBulkAction::make(),
                 ]),
             ]);

@@ -22,6 +22,14 @@ class FaqResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
+    protected static ?string $navigationLabel = '常見問題';
+
+    protected static ?string $modelLabel = '常見問題';
+
+    protected static ?string $pluralModelLabel = '常見問題';
+
+    protected static ?int $navigationSort = 5;
+
     public static function form(Schema $schema): Schema
     {
         return FaqForm::configure($schema);

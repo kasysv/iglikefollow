@@ -22,6 +22,14 @@ class PlatformResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
+    protected static ?string $navigationLabel = '平台';
+
+    protected static ?string $modelLabel = '平台';
+
+    protected static ?string $pluralModelLabel = '平台';
+
+    protected static ?int $navigationSort = 1;
+
     public static function form(Schema $schema): Schema
     {
         return PlatformForm::configure($schema);

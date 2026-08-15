@@ -23,7 +23,9 @@ class ManageSiteSettings extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
 
-    protected static ?string $navigationLabel = 'Site settings';
+    protected static ?string $navigationLabel = '網站設定';
+
+    protected static ?int $navigationSort = 7;
 
     protected static ?string $title = '網站設定';
 
