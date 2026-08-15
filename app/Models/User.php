@@ -4,14 +4,22 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-class User extends Authenticatable
+class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
+
+    public const ROLE_OWNER = 'owner';
+
+    public const ROLE_EDITOR = 'editor';
+
+    public const ROLES = [self::ROLE_OWNER, self::ROLE_EDITOR];
 
     /**
      * The attributes that are mass assignable.
@@ -22,6 +30,8 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'role',
+        'is_active',
     ];
 
     /**
@@ -44,6 +54,28 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
+    }
+
+    /**
+     * Panel access requires BOTH an allowed role and an active account.
+     *
+     * A plain User row must never gain admin access implicitly, even locally.
+     */
+    public function canAccessPanel(Panel $panel): bool
+    {
+        return $this->is_active === true
+            && in_array($this->role, self::ROLES, true);
+    }
+
+    public function isOwner(): bool
+    {
+        return $this->role === self::ROLE_OWNER && $this->is_active === true;
+    }
+
+    public function isEditor(): bool
+    {
+        return $this->role === self::ROLE_EDITOR && $this->is_active === true;
     }
 }
