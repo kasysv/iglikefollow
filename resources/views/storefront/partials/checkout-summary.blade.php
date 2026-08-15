@@ -29,9 +29,12 @@
     <span class="text-2xl font-bold tabular-nums tracking-[-0.03em]">NT${{ number_format($amount) }}</span>
 </div>
 
-{{-- 回商品頁修改；?resume=1 才會帶回原本的選擇。
-     ⛔ 不可讓一般瀏覽也套用 session，否則客人下次進來會看到上次選的項目。 --}}
-<a href="{{ $returnUrl }}?resume=1#checkout"
-   class="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-full border border-black/15 bg-white px-5 text-sm font-bold transition-colors duration-200 hover:border-ink">
-    返回修改
-</a>
+{{-- 回商品頁修改。走 POST 是為了讓返回意圖留在 server-side 一次性 marker，
+     ⛔ 不用 ?resume=1：那會讓同一個商品頁多出一條可被抓取的網址。 --}}
+<form action="{{ route('checkout.return') }}" method="post" class="mt-5">
+    @csrf
+    <button type="submit"
+            class="inline-flex min-h-11 w-full items-center justify-center rounded-full border border-black/15 bg-white px-5 text-sm font-bold transition-colors duration-200 hover:border-ink">
+        返回修改
+    </button>
+</form>

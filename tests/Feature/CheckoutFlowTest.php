@@ -165,11 +165,69 @@ class CheckoutFlowTest extends TestCase
         $taiwan = $this->variant('ig-followers-taiwan');
         $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300]);
 
-        // 「返回修改」帶 ?resume=1，不得要求客人重新挑一次。
-        $html = $this->get('/services/instagram/followers?resume=1')->assertOk()->getContent();
+        $this->post('/checkout/return')->assertRedirect(
+            route('service', ['instagram', 'followers']).'#checkout'
+        );
+
+        // 「返回修改」不得要求客人重新挑一次。
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
 
         $this->assertStringContainsString("variant: '{$taiwan->id}'", $html);
         $this->assertStringContainsString('quantity: 300', $html);
+    }
+
+    public function test_the_resume_marker_is_consumed_after_one_render(): void
+    {
+        $taiwan = $this->variant('ig-followers-taiwan');
+        $featured = $this->variant('ig-followers-standard');
+
+        $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300]);
+        $this->post('/checkout/return');
+
+        // 第一次：恢復原選擇。
+        $this->get('/services/instagram/followers')->assertOk()
+            ->assertSee("variant: '{$taiwan->id}'", false);
+
+        // 重新整理同一個乾淨網址：⛔ marker 已用掉，回到預設項目。
+        $this->get('/services/instagram/followers')->assertOk()
+            ->assertSee("variant: '{$featured->id}'", false)
+            ->assertDontSee("variant: '{$taiwan->id}'", false);
+    }
+
+    public function test_no_public_url_carries_a_resume_parameter(): void
+    {
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+
+        // ⛔ 商品頁不得因返回而多出第二條可抓取網址。
+        $this->get('/checkout')->assertOk()->assertDontSee('resume=1', false);
+
+        $location = $this->post('/checkout/return')->headers->get('Location');
+
+        $this->assertStringNotContainsString('resume', (string) $location);
+        $this->assertStringNotContainsString('?', (string) $location);
+    }
+
+    public function test_the_return_endpoint_cannot_be_pointed_elsewhere(): void
+    {
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+
+        // 目的地只由 server-side session 重新推導，⛔ 請求帶什麼都不採用。
+        $location = $this->post('/checkout/return', [
+            'return_url' => 'https://evil.example.com',
+            'url' => 'https://evil.example.com',
+        ])->headers->get('Location');
+
+        $this->assertSame(
+            route('service', ['instagram', 'followers']).'#checkout',
+            $location
+        );
+    }
+
+    public function test_the_return_endpoint_without_a_selection_recovers_safely(): void
+    {
+        $this->post('/checkout/return')
+            ->assertRedirect()
+            ->assertSessionHas('checkout_notice');
     }
 
     public function test_a_plain_visit_shows_the_default_variant_not_the_last_selection(): void
@@ -201,11 +259,92 @@ class CheckoutFlowTest extends TestCase
         );
     }
 
-    public function test_the_return_link_carries_the_resume_flag(): void
+    public function test_the_return_control_is_a_posted_form(): void
     {
         $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
 
-        $this->get('/checkout')->assertOk()->assertSee('resume=1', false);
+        // 返回意圖走 POST＋CSRF，⛔ 不是帶參數的 GET 連結。
+        $this->get('/checkout')->assertOk()
+            ->assertSee('action="'.route('checkout.return').'" method="post"', false)
+            ->assertSee('返回修改');
+    }
+
+    // ---------------------------------------------------------- 無 JavaScript 送出
+
+    public function test_the_service_form_has_no_duplicate_hidden_variant_field(): void
+    {
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // radio 已用 form="checkout-form" 關聯，⛔ 再放 hidden 會送出重複 key。
+        $this->assertStringNotContainsString('type="hidden" name="variant"', $html);
+        $this->assertSame(3, substr_count($html, 'name="variant"'));
+    }
+
+    public function test_a_non_default_variant_submits_correctly_without_javascript(): void
+    {
+        $taiwan = $this->variant('ig-followers-taiwan');
+
+        // 模擬關閉 JS：瀏覽器只送出被選中的 radio，沒有 Alpine 同步任何值。
+        $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300])
+            ->assertRedirect(route('checkout'));
+
+        $this->get('/checkout')->assertOk()->assertSee($taiwan->label);
+    }
+
+    // ---------------------------------------------------------- 驗證失敗後的狀態
+
+    public function test_a_rejected_quantity_keeps_the_chosen_variant(): void
+    {
+        $taiwan = $this->variant('ig-followers-taiwan');
+
+        $this->from('/services/instagram/followers')
+            ->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 7])
+            ->assertSessionHasErrors('quantity');
+
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // 數量被擋不該連帶把選好的服務項目也丟掉。
+        $this->assertStringContainsString("variant: '{$taiwan->id}'", $html);
+    }
+
+    public function test_an_unknown_old_variant_is_not_restored(): void
+    {
+        $featured = $this->variant('ig-followers-standard');
+
+        $this->from('/services/instagram/followers')
+            ->post('/checkout/start', ['variant' => 999999, 'quantity' => 7])
+            ->assertSessionHasErrors();
+
+        $this->get('/services/instagram/followers')->assertOk()
+            ->assertSee("variant: '{$featured->id}'", false);
+    }
+
+    public function test_a_draft_old_variant_is_not_restored(): void
+    {
+        $real = $this->variant('ig-followers-real');
+        $real->update(['status' => 'draft']);
+        $featured = $this->variant('ig-followers-standard');
+
+        $this->from('/services/instagram/followers')
+            ->post('/checkout/start', ['variant' => $real->id, 'quantity' => 7])
+            ->assertSessionHasErrors();
+
+        $this->get('/services/instagram/followers')->assertOk()
+            ->assertSee("variant: '{$featured->id}'", false);
+    }
+
+    public function test_an_old_variant_from_another_service_is_not_restored(): void
+    {
+        $other = $this->variant('ig-post-likes-standard');
+        $featured = $this->variant('ig-followers-standard');
+
+        $this->from('/services/instagram/followers')
+            ->post('/checkout/start', ['variant' => $other->id, 'quantity' => 7])
+            ->assertSessionHasErrors('quantity');
+
+        // ⛔ 別的服務的 old input 不得跨頁顯示。
+        $this->get('/services/instagram/followers')->assertOk()
+            ->assertSee("variant: '{$featured->id}'", false);
     }
 
     // ---------------------------------------------------------- 最終提交
@@ -277,6 +416,61 @@ class CheckoutFlowTest extends TestCase
         $this->assertStringContainsString(
             '<meta name="robots" content="noindex, nofollow">',
             $response->getContent()
+        );
+    }
+
+    public function test_every_checkout_response_is_noindex_even_when_indexing_is_open(): void
+    {
+        // 即使全站開放索引，整條結帳流程都不得可被索引。
+        config()->set('app.env', 'production');
+        config()->set('seo.allow_indexing', true);
+        config()->set('seo.indexable_host', 'localhost');
+
+        $header = 'noindex, nofollow';
+
+        // 1. start 的 redirect
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000])
+            ->assertHeader('X-Robots-Tag', $header);
+
+        // 2. checkout 頁
+        $this->get('/checkout')->assertOk()->assertHeader('X-Robots-Tag', $header);
+
+        // 3. return 的 redirect
+        $this->post('/checkout/return')->assertHeader('X-Robots-Tag', $header);
+
+        // 4. mock success
+        $this->post('/checkout/mock', $this->orderForm())
+            ->assertOk()
+            ->assertHeader('X-Robots-Tag', $header);
+    }
+
+    public function test_a_validation_failure_response_is_also_noindex(): void
+    {
+        config()->set('app.env', 'production');
+        config()->set('seo.allow_indexing', true);
+        config()->set('seo.indexable_host', 'localhost');
+
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+
+        // 驗證失敗丟出的 redirect 不經過 controller 的 return，⛔ 仍必須帶 header。
+        $this->post('/checkout/mock', $this->orderForm(['customer_email' => 'nope']))
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
+    }
+
+    public function test_both_checkout_pages_emit_a_noindex_meta_tag(): void
+    {
+        config()->set('app.env', 'production');
+        config()->set('seo.allow_indexing', true);
+        config()->set('seo.indexable_host', 'localhost');
+
+        $meta = '<meta name="robots" content="noindex, nofollow">';
+
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+        $this->assertStringContainsString($meta, $this->get('/checkout')->getContent());
+
+        $this->assertStringContainsString(
+            $meta,
+            $this->post('/checkout/mock', $this->orderForm())->getContent()
         );
     }
 

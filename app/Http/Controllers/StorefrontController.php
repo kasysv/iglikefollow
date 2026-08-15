@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Service;
+use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
@@ -58,16 +60,8 @@ class StorefrontController extends Controller
 
         abort_if($record === null, 404);
 
-        // 只有從 /checkout 按「返回修改」（?resume=1）才帶回原本的選擇。
-        // ⛔ 一般瀏覽不得套用 session：否則客人下次進來會看到上次選的項目，
-        // 而不是這個服務的預設項目。
-        $selection = $request->boolean('resume')
-            ? $this->checkout->resolve($request)
-            : null;
-
-        $resumed = $selection !== null && $selection['variant']->service->is($record)
-            ? $selection
-            : null;
+        $resumed = $this->resumedSelection($request, $record)
+            ?? $this->selectionFromOldInput($record);
 
         $view = view('storefront.service', [
             'service' => $record,
@@ -78,6 +72,60 @@ class StorefrontController extends Controller
         ]);
 
         return $preview ? $this->noindex($view) : $view;
+    }
+
+    /**
+     * The selection to restore after "返回修改".
+     *
+     * Gated on a one-shot session marker rather than a query parameter, so the
+     * product page keeps a single crawlable URL. The marker is consumed on
+     * read: refreshing the clean URL afterwards shows the featured item again.
+     *
+     * @return array{variant: ServiceVariant, quantity: int}|null
+     */
+    private function resumedSelection(Request $request, Service $record): ?array
+    {
+        if (! $this->checkout->pullResume($request)) {
+            return null;
+        }
+
+        $selection = $this->checkout->resolve($request);
+
+        // ⛔ 別的服務的選擇不得套用到這一頁。
+        return $selection !== null && $selection['variant']->service->is($record)
+            ? $selection
+            : null;
+    }
+
+    /**
+     * The selection to restore after a failed /checkout/start.
+     *
+     * A rejected quantity should not also discard the chosen item, but the old
+     * variant is re-checked against this service's published list first: an
+     * unknown, draft, archived or foreign id is ignored rather than trusted.
+     *
+     * @return array{variant: ServiceVariant, quantity: int}|null
+     */
+    private function selectionFromOldInput(Service $record): ?array
+    {
+        $oldVariant = old('variant');
+
+        if ($oldVariant === null) {
+            return null;
+        }
+
+        $variant = $this->catalog->findPurchasableVariant($oldVariant);
+
+        if ($variant === null || ! $variant->service->is($record)) {
+            return null;
+        }
+
+        $quantity = old('quantity');
+
+        return [
+            'variant' => $variant,
+            'quantity' => is_numeric($quantity) ? (int) $quantity : $variant->default_quantity,
+        ];
     }
 
     /**

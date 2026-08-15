@@ -205,8 +205,9 @@
 
                     <form id="checkout-form" action="{{ route('checkout.start') }}" method="post" class="mt-6">
                         @csrf
-                        {{-- 左欄的 radio 用 form="checkout-form" 綁到這張表單，值同步到這裡。 --}}
-                        <input type="hidden" name="variant" :value="variant" value="{{ $default->id }}">
+                        {{-- 左欄的 radio 以 form="checkout-form" 關聯到這張表單，本身就是
+                             唯一的 variant 成功控制項。⛔ 不可再放同名 hidden：那會讓
+                             無 JavaScript 送出時出現重複 key，並可能用預設值蓋掉客人選的。 --}}
 
                         <label for="quantity" class="mb-3 block text-sm font-bold">
                             輸入數量（<span x-text="b.unit">{{ $unit }}</span>）

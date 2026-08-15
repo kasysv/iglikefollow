@@ -1,4 +1,6 @@
-@extends('layouts.app', ['title' => 'Mock 結帳完成｜IGLIKEFOLLOW'])
+{{-- 用 checkout layout：它的 robots meta 是無條件 noindex，
+     ⛔ layouts.app 會依 IndexingPolicy 判斷，開放索引後就會變成 index, follow。 --}}
+@extends('layouts.checkout', ['title' => 'Mock 結帳完成'])
 
 @section('content')
 <main class="mx-auto max-w-3xl px-5 py-16 sm:px-8 lg:py-24">

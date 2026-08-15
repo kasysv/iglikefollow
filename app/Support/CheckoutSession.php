@@ -18,7 +18,31 @@ class CheckoutSession
 {
     public const KEY = 'checkout.selection';
 
+    /**
+     * One-shot marker meaning "the next service page render may restore the
+     * selection". It exists so the return link needs no query parameter: a
+     * ?resume=1 URL would be a second crawlable address for the same page.
+     */
+    public const RESUME_KEY = 'checkout.resume_once';
+
     public function __construct(private readonly CatalogRepository $catalog) {}
+
+    public function markResume(Request $request): void
+    {
+        $request->session()->put(self::RESUME_KEY, true);
+    }
+
+    /**
+     * Consume the resume marker.
+     *
+     * Pull, not get: the marker must not survive into a refresh, otherwise a
+     * clean URL would keep showing the previous selection instead of the
+     * service's featured item.
+     */
+    public function pullResume(Request $request): bool
+    {
+        return (bool) $request->session()->pull(self::RESUME_KEY, false);
+    }
 
     public function put(Request $request, ServiceVariant $variant, int $quantity): void
     {
@@ -73,7 +97,8 @@ class CheckoutSession
 
     public function forget(Request $request): void
     {
-        $request->session()->forget(self::KEY);
+        // 選購資料清掉時，⛔ 不可留下孤兒 marker。
+        $request->session()->forget([self::KEY, self::RESUME_KEY]);
     }
 
     /**

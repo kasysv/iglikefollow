@@ -60,7 +60,7 @@ class CheckoutController extends Controller
         $this->checkout->put($request, $variant, $quantity);
 
         // ⛔ 商品與個資都不放進 query string。
-        return redirect()->route('checkout');
+        return $this->noindexRedirect(redirect()->route('checkout'));
     }
 
     /**
@@ -76,7 +76,7 @@ class CheckoutController extends Controller
         $selection = $this->checkout->resolve($request);
 
         if ($selection === null) {
-            return $this->recover($request);
+            return $this->noindexRedirect($this->recover($request));
         }
 
         $variant = $selection['variant'];
@@ -87,8 +87,32 @@ class CheckoutController extends Controller
             'platform' => $variant->service->platform,
             'quantity' => $selection['quantity'],
             'amount' => $selection['amount'],
-            'returnUrl' => $selection['return_url'],
         ]));
+    }
+
+    /**
+     * "返回修改": go back to the service page with the selection intact.
+     *
+     * The destination is rebuilt from the re-resolved session, never from the
+     * request, so this cannot become an open redirect. A one-shot marker
+     * carries the intent instead of a query parameter, which would otherwise
+     * create a second crawlable URL for the same product page.
+     */
+    public function back(Request $request): RedirectResponse
+    {
+        abort_unless(app()->environment(['local', 'testing']), 404);
+
+        $selection = $this->checkout->resolve($request);
+
+        if ($selection === null) {
+            return $this->noindexRedirect($this->recover($request));
+        }
+
+        $this->checkout->markResume($request);
+
+        return $this->noindexRedirect(
+            redirect()->to($selection['return_url'].'#checkout')
+        );
     }
 
     /**
@@ -124,6 +148,20 @@ class CheckoutController extends Controller
     private function noindex(View $view): Response
     {
         return response($view)->withHeaders([
+            'X-Robots-Tag' => 'noindex, nofollow',
+        ]);
+    }
+
+    /**
+     * Redirects carry the header too.
+     *
+     * A 302 is a crawlable response in its own right, so the whole checkout
+     * flow — start, return and recovery — is marked unconditionally rather
+     * than relying on the site-wide IndexingPolicy.
+     */
+    private function noindexRedirect(RedirectResponse $redirect): RedirectResponse
+    {
+        return $redirect->withHeaders([
             'X-Robots-Tag' => 'noindex, nofollow',
         ]);
     }
