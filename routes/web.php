@@ -7,6 +7,12 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [StorefrontController::class, 'home'])->name('home');
 
+Route::get('/services/{platform}', [StorefrontController::class, 'platform'])
+    ->name('platform');
+
+Route::get('/services/{platform}/{service}', [StorefrontController::class, 'service'])
+    ->name('service');
+
 Route::post('/checkout/mock', [MockCheckoutController::class, 'store'])
     ->middleware('throttle:10,1')
     ->name('checkout.mock');

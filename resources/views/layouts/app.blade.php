@@ -16,15 +16,45 @@
                      class="h-auto w-44 sm:w-52" width="715" height="143">
             </a>
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
-                <a href="#services" class="hover:opacity-60">服務項目</a>
-                <a href="#process" class="hover:opacity-60">購買流程</a>
-                <a href="#faq" class="hover:opacity-60">常見問題</a>
-                <a href="#checkout" class="rounded-full bg-ink px-5 py-3 text-white">立即選購</a>
+                <a href="{{ route('platform', 'instagram') }}" class="hover:opacity-60">Instagram</a>
+                <a href="{{ route('platform', 'facebook') }}" class="hover:opacity-60">Facebook</a>
+                <a href="{{ route('platform', 'threads') }}" class="hover:opacity-60">Threads</a>
+                <a href="{{ route('home') }}#platforms" class="rounded-full bg-ink px-5 py-3 text-white">選擇服務</a>
             </nav>
-            <a href="#checkout" class="rounded-full bg-ink px-4 py-3 text-sm font-bold text-white md:hidden">選購</a>
+            <a href="{{ route('home') }}#platforms"
+               class="flex min-h-11 items-center rounded-full bg-ink px-4 text-sm font-bold text-white md:hidden">選擇服務</a>
         </div>
     </header>
 
     @yield('content')
+
+    <footer class="border-t border-black/10 bg-white">
+        <div class="mx-auto max-w-[1220px] px-5 py-12 sm:px-8">
+            <nav aria-label="頁尾服務導覽" class="grid gap-8 sm:grid-cols-3">
+                @foreach (config('catalog.platforms') as $footerPlatform)
+                    <div>
+                        <p class="text-sm font-bold">{{ $footerPlatform['name'] }}</p>
+                        @if ($footerPlatform['available'])
+                            <ul class="mt-3 space-y-2 text-sm text-black/60">
+                                @foreach ($footerPlatform['services'] as $footerService)
+                                    <li>
+                                        <a class="hover:text-ink hover:underline"
+                                           href="{{ route('service', [$footerPlatform['slug'], $footerService['slug']]) }}">
+                                            {{ $footerService['name'] }}
+                                        </a>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @else
+                            <p class="mt-3 text-sm text-black/50">服務資料準備中。</p>
+                        @endif
+                    </div>
+                @endforeach
+            </nav>
+            <p class="mt-10 border-t border-black/10 pt-6 text-xs leading-6 text-black/50">
+                本站目前為本機開發預覽，全站 noindex，價格與方案為 mock 資料，不會建立真實訂單。
+            </p>
+        </div>
+    </footer>
 </body>
 </html>
