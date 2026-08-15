@@ -4,6 +4,7 @@ namespace App\Filament\Resources\ServiceVariants\Schemas;
 
 use App\Filament\Support\ImageField;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
@@ -36,9 +37,11 @@ class ServiceVariantForm
                         ->required()
                         ->maxLength(255),
 
-                    TextInput::make('description')
+                    // 這段會顯示在服務頁「款式簡介」框，改用 Textarea 方便寫完整說明。
+                    Textarea::make('description')
                         ->label('款式說明')
-                        ->helperText('一句話說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
+                        ->helperText('會顯示在服務頁款式卡片下方的「款式簡介」框，客人切換款式時跟著換。說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
+                        ->rows(3)
                         ->maxLength(255)
                         ->columnSpanFull(),
 

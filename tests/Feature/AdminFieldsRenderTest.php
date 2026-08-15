@@ -122,6 +122,95 @@ class AdminFieldsRenderTest extends TestCase
         $this->get('/services/instagram/followers')->assertOk()->assertDontSee('<script>alert(2)</script>', false);
     }
 
+    public function test_the_variant_summary_box_renders_the_default_variant_without_javascript(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'label' => '一般粉絲',
+            'description' => '速度快，適合快速建立帳號初期規模。',
+            'is_featured' => true,
+        ]);
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'label' => '真人粉絲',
+            'description' => '來源為真實活躍帳號。',
+        ]);
+
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // 初始 HTML 就要有預設款式的簡介，⛔ 不可只靠 Alpine 補畫。
+        $this->assertStringContainsString('款式簡介', $html);
+        $this->assertStringContainsString('速度快，適合快速建立帳號初期規模。', $html);
+
+        // 另一個款式仍必須可以被選到；它的說明由 Alpine 從 x-data 取用
+        // （Js::from 會做 unicode escape，比對原字串沒有意義，故只驗選項存在）。
+        $this->assertStringContainsString('真人粉絲', $html);
+        $this->assertSame(2, substr_count($html, 'name="variant"'));
+    }
+
+    public function test_the_variant_description_is_not_printed_twice(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'label' => '一般粉絲',
+            'description' => 'UNIQUE-DESCRIPTION-TOKEN',
+            'is_featured' => true,
+        ]);
+
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // x-data 的 bounds JSON 也帶著同一段文字供切換使用，那不是顯示出來的內容，
+        // 因此只計算可見區域：把 x-data 屬性整段移除後再數。
+        $visible = preg_replace('/x-data="[^"]*"/s', '', $html);
+
+        // 卡片內與簡介框重複同一段文字會讓版面變雜；卡片已改為不重複輸出。
+        $this->assertSame(
+            1,
+            substr_count($visible, 'UNIQUE-DESCRIPTION-TOKEN'),
+            '款式說明在可見的初始 HTML 中出現超過一次'
+        );
+    }
+
+    public function test_the_summary_box_is_omitted_when_no_variant_has_a_description(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id, 'description' => null, 'is_featured' => true,
+        ]);
+
+        // 沒有任何說明時不該留下空框。
+        $this->get('/services/instagram/followers')->assertOk()->assertDontSee('款式簡介');
+    }
+
+    public function test_a_variant_description_is_escaped_not_executed(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'description' => '<script>alert(3)</script>',
+            'is_featured' => true,
+        ]);
+
+        $this->get('/services/instagram/followers')
+            ->assertOk()
+            ->assertDontSee('<script>alert(3)</script>', false);
+    }
+
     /**
      * Guards the whole class of bug rather than the one field that had it.
      */

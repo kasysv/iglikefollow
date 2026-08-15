@@ -9,7 +9,12 @@
         'step' => (int) $v->step_quantity,
         'default' => (int) $v->default_quantity,
         'unit_price' => (float) $v->unit_price,
+        // 款式簡介同時給 Alpine 切換用；⛔ 仍以下方 server-rendered 版本為主。
+        'label' => (string) $v->label,
+        'description' => (string) $v->description,
+        'unit' => (string) $v->quantity_unit,
     ]])->all();
+    $hasAnyDescription = $variants->contains(fn ($v) => filled($v->description));
 @endphp
 
 @extends('layouts.app', [
@@ -120,15 +125,34 @@
                                          alt="{{ $variant->image_alt }}"
                                          class="mt-3 h-auto w-full rounded-xl" loading="lazy">
                                 @endif
-                                @if (filled($variant->description))
-                                    <span class="mt-1.5 block text-sm leading-6 text-black/60">{{ $variant->description }}</span>
-                                @endif
+                                {{-- 說明改由下方「款式簡介」框呈現，⛔ 卡片內不重複同一段文字。 --}}
                                 <span class="mt-2 block text-xs tabular-nums text-black/50">
                                     {{ number_format($variant->min_quantity) }}–{{ number_format($variant->max_quantity) }} {{ $variant->quantity_unit }}
                                 </span>
                             </label>
                         @endforeach
                     </div>
+
+                    {{-- 目前選中款式的簡介。初始 HTML 先輸出預設款式，⛔ 關閉 JS 仍看得到內容。 --}}
+                    @if ($hasAnyDescription)
+                        <div class="mt-4 rounded-2xl border border-black/10 bg-paper p-5"
+                             aria-live="polite" aria-atomic="true">
+                            <p class="text-xs font-bold text-black/50">款式簡介</p>
+                            <p class="mt-2 font-bold" x-text="b.label">{{ $default->label }}</p>
+                            <p class="mt-1.5 leading-7 text-black/60"
+                               x-text="b.description || '這個款式尚未填寫簡介。'">
+                                {{ $default->description ?: '這個款式尚未填寫簡介。' }}
+                            </p>
+                            <p class="mt-3 text-xs tabular-nums text-black/50">
+                                單價 NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>／<span
+                                    x-text="b.unit">{{ $default->quantity_unit }}</span>
+                                ・可買
+                                <span x-text="Number(b.min).toLocaleString()">{{ number_format($default->min_quantity) }}</span>–<span
+                                    x-text="Number(b.max).toLocaleString()">{{ number_format($default->max_quantity) }}</span>
+                                <span x-text="b.unit">{{ $default->quantity_unit }}</span>
+                            </p>
+                        </div>
+                    @endif
                 </aside>
             </div>
 
