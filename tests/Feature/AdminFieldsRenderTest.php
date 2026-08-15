@@ -143,11 +143,11 @@ class AdminFieldsRenderTest extends TestCase
 
         $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
 
-        // 初始 HTML 就要有預設款式的簡介，⛔ 不可只靠 Alpine 補畫。
-        $this->assertStringContainsString('款式簡介', $html);
+        // 初始 HTML 就要有預設服務項目的簡介，⛔ 不可只靠 Alpine 補畫。
+        $this->assertStringContainsString('服務項目簡介', $html);
         $this->assertStringContainsString('速度快，適合快速建立帳號初期規模。', $html);
 
-        // 另一個款式仍必須可以被選到；它的說明由 Alpine 從 x-data 取用
+        // 另一個服務項目仍必須可以被選到；它的說明由 Alpine 從 x-data 取用
         // （Js::from 會做 unicode escape，比對原字串沒有意義，故只驗選項存在）。
         $this->assertStringContainsString('真人粉絲', $html);
         $this->assertSame(2, substr_count($html, 'name="variant"'));
@@ -176,7 +176,7 @@ class AdminFieldsRenderTest extends TestCase
         $this->assertSame(
             1,
             substr_count($visible, 'UNIQUE-DESCRIPTION-TOKEN'),
-            '款式說明在可見的初始 HTML 中出現超過一次'
+            '服務項目說明在可見的初始 HTML 中出現超過一次'
         );
     }
 
@@ -191,7 +191,7 @@ class AdminFieldsRenderTest extends TestCase
         ]);
 
         // 沒有任何說明時不該留下空框。
-        $this->get('/services/instagram/followers')->assertOk()->assertDontSee('款式簡介');
+        $this->get('/services/instagram/followers')->assertOk()->assertDontSee('服務項目簡介');
     }
 
     public function test_a_variant_description_is_escaped_not_executed(): void
@@ -209,6 +209,17 @@ class AdminFieldsRenderTest extends TestCase
         $this->get('/services/instagram/followers')
             ->assertOk()
             ->assertDontSee('<script>alert(3)</script>', false);
+    }
+
+    public function test_the_storefront_never_calls_a_variant_a_kuanshi(): void
+    {
+        $platform = $this->platform(['intro' => '平台介紹']);
+        $this->service($platform, ['intro' => '服務介紹']);
+
+        // 使用者決定統一用「服務項目」，⛔ 前台不得再出現舊詞「款式」。
+        foreach (['/', '/services/instagram', '/services/instagram/followers'] as $url) {
+            $this->get($url)->assertOk()->assertDontSee('款式');
+        }
     }
 
     /**

@@ -172,13 +172,13 @@ class M2aRevisionTest extends TestCase
         ServiceVariant::factory()->published()->create([
             'service_id' => $service->id,
             'image_path' => $path,
-            'image_alt' => '款式圖片',
+            'image_alt' => '服務項目圖片',
         ]);
 
         $this->get('/services/instagram/followers')
             ->assertOk()
             ->assertSee($path, false)
-            ->assertSee('款式圖片', false);
+            ->assertSee('服務項目圖片', false);
     }
 
     public function test_storage_disk_is_publicly_linked(): void
@@ -187,7 +187,7 @@ class M2aRevisionTest extends TestCase
         $this->assertFileExists(public_path('storage'));
     }
 
-    // ---------------------------------------------------------------- 5. 款式交叉驗證
+    // ---------------------------------------------------------------- 5. 服務項目交叉驗證
 
     public function test_default_quantity_below_minimum_is_rejected(): void
     {

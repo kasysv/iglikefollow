@@ -18,12 +18,12 @@ class VariantsRelationManager extends RelationManager
 {
     protected static string $relationship = 'variants';
 
-    protected static ?string $title = '款式';
+    protected static ?string $title = '服務項目';
 
     public function form(Schema $schema): Schema
     {
         // 共用同一份表單定義，⛔ 避免這裡少掉數量交叉驗證等規則。
-        // withOwner: false ⛔ 不顯示「所屬服務」，款式不可從這裡改掛到別的服務。
+        // withOwner: false ⛔ 不顯示「所屬服務」，服務項目不可從這裡改掛到別的服務。
         return ServiceVariantForm::configure($schema, withOwner: false);
     }
 
@@ -33,7 +33,7 @@ class VariantsRelationManager extends RelationManager
             ->recordTitleAttribute('label')
             ->columns([
                 TextColumn::make('sort_order')->label('排序')->sortable(),
-                TextColumn::make('label')->label('款式名稱')->searchable()->weight('bold'),
+                TextColumn::make('label')->label('服務項目名稱')->searchable()->weight('bold'),
                 TextColumn::make('unit_price')->label('單價')
                     ->formatStateUsing(fn ($state, $record) => 'NT$'.number_format((float) $state, 2).'／'.$record->quantity_unit),
                 TextColumn::make('min_quantity')->label('可購買範圍')
@@ -55,11 +55,11 @@ class VariantsRelationManager extends RelationManager
             ->defaultSort('sort_order')
             ->headerActions([
                 CreateAction::make()
-                    ->label('新增款式')
+                    ->label('新增服務項目')
                     // 歸屬一律由 owner record 決定，⛔ 即使表單被塞入 service_id 也不採用。
                     ->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
             ])
-            // ⛔ 不提供 Associate／Dissociate：款式必須屬於這個服務，不可轉掛。
+            // ⛔ 不提供 Associate／Dissociate：服務項目必須屬於這個服務，不可轉掛。
             ->recordActions([
                 EditAction::make()->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
                 DeleteAction::make(),

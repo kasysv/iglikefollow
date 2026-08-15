@@ -211,7 +211,7 @@ class M2aR2Test extends TestCase
     {
         $fields = $this->componentNames(fn (Schema $s) => ServiceVariantForm::configure($s, withOwner: false));
 
-        // 看得到就選得到，⛔ 服務底下的款式不該能改掛別的服務。
+        // 看得到就選得到，⛔ 服務底下的服務項目不該能改掛別的服務。
         $this->assertNotContains('service_id', $fields);
         $this->assertContains('label', $fields);
         // 共用表單仍保有數量交叉驗證欄位。
@@ -302,12 +302,12 @@ class M2aR2Test extends TestCase
         $this->actingAsOwner();
         [, $a, $b] = $this->twoServices();
 
-        $variant = ServiceVariant::factory()->create(['service_id' => $a->id, 'label' => '既有款式']);
+        $variant = ServiceVariant::factory()->create(['service_id' => $a->id, 'label' => '既有服務項目']);
 
         $this->relationManager(VariantsRelationManager::class, $a)
             ->callTableAction('edit', $variant, data: [
                 'service_id' => $b->id,
-                'label' => '改過的款式', 'unit_price' => 1, 'quantity_unit' => '個',
+                'label' => '改過的服務項目', 'unit_price' => 1, 'quantity_unit' => '個',
                 'min_quantity' => 100, 'max_quantity' => 10000, 'step_quantity' => 100,
                 'default_quantity' => 1000, 'currency' => 'TWD',
                 'status' => 'draft', 'sort_order' => 0,
@@ -316,7 +316,7 @@ class M2aR2Test extends TestCase
 
         $variant->refresh();
 
-        $this->assertSame('改過的款式', $variant->label);
+        $this->assertSame('改過的服務項目', $variant->label);
         $this->assertSame($a->id, $variant->service_id);
     }
 
@@ -331,7 +331,7 @@ class M2aR2Test extends TestCase
             ->assertTableActionDoesNotExist('dissociate');
     }
 
-    // ================================================================ 2b. 款式數量交叉驗證（表單層）
+    // ================================================================ 2b. 服務項目數量交叉驗證（表單層）
 
     public function test_a_valid_variant_can_actually_be_saved_through_the_standalone_form(): void
     {
@@ -339,7 +339,7 @@ class M2aR2Test extends TestCase
         [, $service] = $this->twoServices();
 
         // 迴歸：字串規則 'lte:max_quantity' 找不到 data.* 底下的欄位，
-        // ⛔ 曾讓完全合法的數量組合也存不進去，等於後台無法新增款式。
+        // ⛔ 曾讓完全合法的數量組合也存不進去，等於後台無法新增服務項目。
         Livewire::test(CreateServiceVariant::class)
             ->fillForm([
                 'service_id' => $service->id,
@@ -362,7 +362,7 @@ class M2aR2Test extends TestCase
         Livewire::test(CreateServiceVariant::class)
             ->fillForm([
                 'service_id' => $service->id,
-                'label' => '壞款式', 'unit_price' => 1, 'quantity_unit' => '個',
+                'label' => '壞服務項目', 'unit_price' => 1, 'quantity_unit' => '個',
                 'min_quantity' => 5000, 'max_quantity' => 100, 'step_quantity' => 100,
                 'default_quantity' => 100, 'currency' => 'TWD',
                 'status' => 'draft', 'sort_order' => 0,
@@ -413,7 +413,7 @@ class M2aR2Test extends TestCase
 
         $this->relationManager(VariantsRelationManager::class, $service)
             ->callTableAction('create', data: [
-                'label' => '壞款式', 'unit_price' => 1, 'quantity_unit' => '個',
+                'label' => '壞服務項目', 'unit_price' => 1, 'quantity_unit' => '個',
                 'min_quantity' => 5000, 'max_quantity' => 100, 'step_quantity' => 100,
                 'default_quantity' => 100, 'currency' => 'TWD',
                 'status' => 'draft', 'sort_order' => 0,
@@ -770,7 +770,7 @@ class M2aR2Test extends TestCase
         // 草稿階段前台看不到。
         $this->get('/services/instagram/followers')->assertNotFound();
 
-        // 2. 在服務底下建立款式、內容段落與 FAQ。
+        // 2. 在服務底下建立服務項目、內容段落與 FAQ。
         $this->relationManager(VariantsRelationManager::class, $service)
             ->callTableAction('create', data: [
                 'label' => '一般粉絲', 'unit_price' => 0.59, 'quantity_unit' => '個',

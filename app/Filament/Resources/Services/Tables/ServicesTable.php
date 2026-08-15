@@ -20,9 +20,9 @@ class ServicesTable
             ->columns([
                 TextColumn::make('sort_order')->label('排序')->sortable(),
                 TextColumn::make('platform.name')->label('平台')->searchable()->sortable(),
-                TextColumn::make('name')->label('服務名稱')->searchable()->weight('bold'),
+                TextColumn::make('name')->label('服務分類名稱')->searchable()->weight('bold'),
                 TextColumn::make('slug')->label('網址代碼')->searchable()->color('gray'),
-                TextColumn::make('variants_count')->label('款式數')->counts('variants'),
+                TextColumn::make('variants_count')->label('服務項目數')->counts('variants'),
                 IconColumn::make('is_featured')->label('主打')->boolean(),
                 TextColumn::make('status')->label('狀態')->badge()
                     ->formatStateUsing(fn (string $state) => match ($state) {

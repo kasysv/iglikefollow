@@ -18,7 +18,7 @@ class ServiceContentSectionsTable
         return $table
             ->columns([
                 TextColumn::make('sort_order')->label('排序')->sortable(),
-                TextColumn::make('service.name')->label('所屬服務')->searchable()->sortable(),
+                TextColumn::make('service.name')->label('所屬服務分類')->searchable()->sortable(),
                 TextColumn::make('heading')->label('段落標題')->searchable()->weight('bold'),
                 TextColumn::make('body')->label('內容預覽')->limit(60)->color('gray'),
                 TextColumn::make('status')->label('狀態')->badge()

@@ -18,7 +18,7 @@ class ServiceForm
     {
         return $schema->components([
             Section::make('基本資料')
-                ->description('服務就是「賣什麼」，例如 Instagram 粉絲、貼文讚。實際價格與數量請到「服務款式」設定。')
+                ->description('服務就是「賣什麼」，例如 Instagram 粉絲、貼文讚。實際價格與數量請到「服務項目」設定。')
                 ->schema([
                     Select::make('platform_id')
                         ->label('所屬平台')
@@ -28,7 +28,7 @@ class ServiceForm
                         ->searchable(),
 
                     TextInput::make('name')
-                        ->label('服務名稱')
+                        ->label('服務分類名稱')
                         ->helperText('例如：Instagram 粉絲。這是後台與前台的正式名稱。')
                         ->required()
                         ->maxLength(255),

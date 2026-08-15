@@ -22,11 +22,11 @@ class ServiceVariantResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static ?string $navigationLabel = '服務款式';
+    protected static ?string $navigationLabel = '服務項目';
 
-    protected static ?string $modelLabel = '服務款式';
+    protected static ?string $modelLabel = '服務項目';
 
-    protected static ?string $pluralModelLabel = '服務款式';
+    protected static ?string $pluralModelLabel = '服務項目';
 
     protected static ?int $navigationSort = 3;
 

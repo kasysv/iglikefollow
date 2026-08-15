@@ -117,7 +117,7 @@ class StorefrontTest extends TestCase
     {
         $this->get('/services/instagram/followers')
             ->assertOk()
-            ->assertSee('選擇款式')
+            ->assertSee('選擇服務項目')
             ->assertSee('一般粉絲')
             ->assertSee('真人粉絲')
             ->assertSee('台灣粉絲');

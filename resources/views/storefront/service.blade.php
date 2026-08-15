@@ -9,7 +9,7 @@
         'step' => (int) $v->step_quantity,
         'default' => (int) $v->default_quantity,
         'unit_price' => (float) $v->unit_price,
-        // 款式簡介同時給 Alpine 切換用；⛔ 仍以下方 server-rendered 版本為主。
+        // 服務項目簡介同時給 Alpine 切換用；⛔ 仍以下方 server-rendered 版本為主。
         'label' => (string) $v->label,
         'description' => (string) $v->description,
         'unit' => (string) $v->quantity_unit,
@@ -106,10 +106,10 @@
                 </dl>
                 <p class="mt-3 text-sm leading-6 text-black/55">{{ $service->delivery_summary }}</p>
 
-                {{-- 款式導航：真實 radio，關閉 JS 仍可選 --}}
+                {{-- 服務項目導航：真實 radio，關閉 JS 仍可選 --}}
                 <aside aria-labelledby="variant-title" class="mt-8">
-                    <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
-                    <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
+                    <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇服務項目</h2>
+                    <p class="mt-2 text-sm leading-6 text-black/55">不同服務項目的來源與單價不同。</p>
                     <div class="mt-5 grid gap-2 sm:grid-cols-2">
                         @foreach ($variants as $variant)
                             <label class="variant-card">
@@ -127,7 +127,7 @@
                                          alt="{{ $variant->image_alt }}"
                                          class="mt-3 h-auto w-full rounded-xl" loading="lazy">
                                 @endif
-                                {{-- 說明改由下方「款式簡介」框呈現，⛔ 卡片內不重複同一段文字。 --}}
+                                {{-- 說明改由下方「服務項目簡介」框呈現，⛔ 卡片內不重複同一段文字。 --}}
                                 <span class="mt-2 block text-xs tabular-nums text-black/50">
                                     {{ number_format($variant->min_quantity) }}–{{ number_format($variant->max_quantity) }} {{ $variant->quantity_unit }}
                                 </span>
@@ -135,15 +135,15 @@
                         @endforeach
                     </div>
 
-                    {{-- 目前選中款式的簡介。初始 HTML 先輸出預設款式，⛔ 關閉 JS 仍看得到內容。 --}}
+                    {{-- 目前選中服務項目的簡介。初始 HTML 先輸出預設服務項目，⛔ 關閉 JS 仍看得到內容。 --}}
                     @if ($hasAnyDescription)
                         <div class="mt-4 rounded-2xl border border-black/10 bg-paper p-5"
                              aria-live="polite" aria-atomic="true">
-                            <p class="text-xs font-bold text-black/50">款式簡介</p>
+                            <p class="text-xs font-bold text-black/50">服務項目簡介</p>
                             <p class="mt-2 font-bold" x-text="b.label">{{ $default->label }}</p>
                             <p class="mt-1.5 leading-7 text-black/60"
-                               x-text="b.description || '這個款式尚未填寫簡介。'">
-                                {{ $default->description ?: '這個款式尚未填寫簡介。' }}
+                               x-text="b.description || '這個服務項目尚未填寫簡介。'">
+                                {{ $default->description ?: '這個服務項目尚未填寫簡介。' }}
                             </p>
                             <p class="mt-3 text-xs tabular-nums text-black/50">
                                 單價 NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>／<span
@@ -190,7 +190,7 @@
                                 {{ $unit }}，需為 <span x-text="b.step">{{ $default->step_quantity }}</span> 的倍數。
                             </p>
                             <p class="mt-2 text-sm" x-show="!valid" x-cloak>
-                                <span class="text-red-700">數量不符合此款式的可購買範圍。</span>
+                                <span class="text-red-700">數量不符合此服務項目的可購買範圍。</span>
                             </p>
                             @error('quantity') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                             @error('variant') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
@@ -351,7 +351,7 @@
                             <p class="mb-3 text-sm font-bold">6. 訂單試算</p>
                             <dl class="space-y-2 text-sm">
                                 <div class="flex justify-between gap-4">
-                                    <dt class="text-black/55">款式</dt>
+                                    <dt class="text-black/55">服務項目</dt>
                                     <dd class="font-semibold" x-text="b.label">{{ $default->label }}</dd>
                                 </div>
                                 <div class="flex justify-between gap-4">

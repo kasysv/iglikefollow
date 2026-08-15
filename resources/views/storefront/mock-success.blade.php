@@ -13,7 +13,7 @@
         <dl class="mt-8 divide-y divide-black/10 border-y border-black/10">
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">平台</dt><dd class="font-bold">{{ $platformName }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">服務</dt><dd class="font-bold">{{ $serviceName }}</dd></div>
-            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">款式</dt><dd class="font-bold">{{ $variantLabel }}</dd></div>
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">服務項目</dt><dd class="font-bold">{{ $variantLabel }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">數量</dt><dd class="font-bold">{{ number_format($quantity) }} {{ $quantityUnit }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">Mock 金額（後端重算）</dt><dd class="font-bold">NT${{ number_format($mockAmount) }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">付款方式</dt><dd class="font-bold">{{ $paymentLabel }}</dd></div>

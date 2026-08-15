@@ -17,9 +17,9 @@ class ContentOverview extends StatsOverviewWidget
         return [
             Stat::make('平台', Platform::query()->where('status', 'published')->count())
                 ->description(Platform::query()->where('status', 'draft')->count().' 筆草稿'),
-            Stat::make('服務', Service::query()->where('status', 'published')->count())
+            Stat::make('服務分類', Service::query()->where('status', 'published')->count())
                 ->description(Service::query()->where('status', 'draft')->count().' 筆草稿'),
-            Stat::make('款式', ServiceVariant::query()->where('status', 'published')->count())
+            Stat::make('服務項目', ServiceVariant::query()->where('status', 'published')->count())
                 ->description(ServiceVariant::query()->where('status', 'draft')->count().' 筆草稿'),
             Stat::make('FAQ', Faq::query()->where('status', 'published')->count())
                 ->description(Faq::query()->where('status', 'draft')->count().' 筆草稿'),

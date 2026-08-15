@@ -25,11 +25,11 @@ class ServiceResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static ?string $navigationLabel = '服務';
+    protected static ?string $navigationLabel = '服務分類';
 
-    protected static ?string $modelLabel = '服務';
+    protected static ?string $modelLabel = '服務分類';
 
-    protected static ?string $pluralModelLabel = '服務';
+    protected static ?string $pluralModelLabel = '服務分類';
 
     protected static ?int $navigationSort = 2;
 
@@ -45,7 +45,7 @@ class ServiceResource extends Resource
 
     public static function getRelations(): array
     {
-        // 在服務編輯頁直接管理款式、內容與 FAQ，不必跳到其他選單。
+        // 在服務編輯頁直接管理服務項目、內容與 FAQ，不必跳到其他選單。
         return [
             VariantsRelationManager::class,
             ContentSectionsRelationManager::class,

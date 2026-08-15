@@ -23,7 +23,7 @@ class ServiceContentSectionForm
                 ->description('這是服務頁下方的長文區塊，用來寫詳細說明、購買須知這類內容。一個服務可以有很多段，照排序由上往下顯示。')
                 ->schema(array_values(array_filter([
                     $withOwner ? Select::make('service_id')
-                        ->label('所屬服務')
+                        ->label('所屬服務分類')
                         ->helperText('這段內容要顯示在哪個服務的頁面上。')
                         ->relationship('service', 'name')
                         ->required()

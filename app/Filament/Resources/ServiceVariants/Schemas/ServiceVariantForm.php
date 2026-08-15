@@ -21,33 +21,33 @@ class ServiceVariantForm
     public static function configure(Schema $schema, bool $withOwner = true): Schema
     {
         return $schema->components([
-            Section::make('這是什麼款式')
-                ->description('款式就是同一個服務底下的不同選擇，例如粉絲分成「一般粉絲」「真人粉絲」「台灣粉絲」，各有各的價格。')
+            Section::make('這是什麼服務項目')
+                ->description('服務項目就是同一個服務分類底下的不同選擇，例如粉絲分成「一般粉絲」「真人粉絲」「台灣粉絲」，各有各的價格。')
                 ->schema(array_values(array_filter([
                     $withOwner ? Select::make('service_id')
-                        ->label('所屬服務')
-                        ->helperText('這個款式屬於哪個服務。')
+                        ->label('所屬服務分類')
+                        ->helperText('這個服務項目屬於哪個服務分類。')
                         ->relationship('service', 'name')
                         ->required()
                         ->searchable() : null,
 
                     TextInput::make('label')
-                        ->label('款式名稱')
+                        ->label('服務項目名稱')
                         ->helperText('客人在服務頁上看到的名稱，例如：真人粉絲。')
                         ->required()
                         ->maxLength(255),
 
-                    // 這段會顯示在服務頁「款式簡介」框，改用 Textarea 方便寫完整說明。
+                    // 這段會顯示在服務頁「服務項目簡介」框，改用 Textarea 方便寫完整說明。
                     Textarea::make('description')
-                        ->label('款式說明')
-                        ->helperText('會顯示在服務頁款式卡片下方的「款式簡介」框，客人切換款式時跟著換。說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
+                        ->label('服務項目說明')
+                        ->helperText('會顯示在服務頁服務項目卡片下方的「服務項目簡介」框，客人切換服務項目時跟著換。說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
                         ->rows(3)
                         ->maxLength(255)
                         ->columnSpanFull(),
 
                     Toggle::make('is_featured')
-                        ->label('設為預設款式')
-                        ->helperText('打開後，客人進服務頁時會預先選中這一款。每個服務建議只開一個。'),
+                        ->label('設為預設服務項目')
+                        ->helperText('打開後，客人進服務頁時會預先選中這一款。每個服務分類建議只開一個。'),
                 ])))->columns(2),
 
             Section::make('價格與數量')
@@ -156,7 +156,7 @@ class ServiceVariantForm
                 ->schema([
                     TextInput::make('sku')
                         ->label('商品編號')
-                        ->helperText('你自己的商品代號，方便對帳。不能和其他款式重複。')
+                        ->helperText('你自己的商品代號，方便對帳。不能和其他服務項目重複。')
                         ->maxLength(255)
                         ->unique(ignoreRecord: true),
 
@@ -165,7 +165,7 @@ class ServiceVariantForm
                         ->helperText('之後串接你後台 API 時用來對應的代號。⚠️ 現在還沒有連任何外部系統，可以先留空。')
                         ->maxLength(255),
 
-                    ImageField::upload('image_path', '4:3')->label('款式圖片'),
+                    ImageField::upload('image_path', '4:3')->label('服務項目圖片'),
                     ImageField::alt('image_alt', 'image_path')->label('圖片說明文字（alt）'),
                 ])->columns(2),
 
@@ -173,7 +173,7 @@ class ServiceVariantForm
                 ->schema([
                     Select::make('status')
                         ->label('狀態')
-                        ->helperText('只有「已發布」的款式客人才買得到。草稿可以先建好慢慢改。只有擁有者可以改。')
+                        ->helperText('只有「已發布」的服務項目客人才買得到。草稿可以先建好慢慢改。只有擁有者可以改。')
                         ->options([
                             'draft' => '草稿（買不到）',
                             'published' => '已發布（可購買）',

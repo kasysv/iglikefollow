@@ -44,7 +44,7 @@ return [
                     'featured_service' => true,
                     'input_label' => 'Instagram 帳號',
                     'input_hint' => '例如：username 或 instagram.com/username',
-                    'delivery' => '輸入公開帳號後依所選款式交付。',
+                    'delivery' => '輸入公開帳號後依所選服務項目交付。',
                     'quantity_unit' => '個',
                     'variants' => [
                         'ig-followers-standard' => [
@@ -157,7 +157,7 @@ return [
                     'summary' => '為粉絲專頁、個人檔案或社團增加粉絲。',
                     'input_label' => 'Facebook 粉專、個人檔案或社團網址',
                     'input_hint' => '例如：facebook.com/yourpage',
-                    'delivery' => '輸入公開網址後依所選款式交付。',
+                    'delivery' => '輸入公開網址後依所選服務項目交付。',
                     'quantity_unit' => '個',
                     'variants' => [
                         'fb-followers-standard' => [

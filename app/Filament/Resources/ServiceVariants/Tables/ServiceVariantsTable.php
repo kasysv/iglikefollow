@@ -20,7 +20,7 @@ class ServiceVariantsTable
             ->columns([
                 TextColumn::make('sort_order')->label('排序')->sortable(),
                 TextColumn::make('service.name')->label('所屬服務')->searchable()->sortable(),
-                TextColumn::make('label')->label('款式名稱')->searchable()->weight('bold'),
+                TextColumn::make('label')->label('服務項目名稱')->searchable()->weight('bold'),
                 TextColumn::make('unit_price')->label('單價')
                     ->formatStateUsing(fn ($state, $record) => 'NT$'.number_format((float) $state, 2).'／'.$record->quantity_unit)
                     ->sortable(),

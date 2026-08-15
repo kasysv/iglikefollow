@@ -151,7 +151,7 @@ class M2aR3Test extends TestCase
 
         Livewire::test(CreateServiceVariant::class)
             ->fillForm([
-                'service_id' => $service->id, 'label' => '偽造款式',
+                'service_id' => $service->id, 'label' => '偽造服務項目',
                 'unit_price' => 1, 'quantity_unit' => '個',
                 'min_quantity' => 100, 'max_quantity' => 1000, 'step_quantity' => 100,
                 'default_quantity' => 100, 'currency' => 'TWD',
@@ -159,7 +159,7 @@ class M2aR3Test extends TestCase
             ])
             ->call('create');
 
-        $this->assertSame('draft', ServiceVariant::where('label', '偽造款式')->value('status'));
+        $this->assertSame('draft', ServiceVariant::where('label', '偽造服務項目')->value('status'));
     }
 
     public function test_an_editor_cannot_publish_a_content_section_with_a_forged_payload(): void

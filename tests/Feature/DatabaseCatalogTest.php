@@ -151,7 +151,7 @@ class DatabaseCatalogTest extends TestCase
 
         $this->assertGreaterThan(0, $purchasable->count());
 
-        // 下架整個平台後，其款式不得再出現在白名單。
+        // 下架整個平台後，其服務項目不得再出現在白名單。
         Platform::query()->where('slug', 'facebook')->update(['status' => 'archived']);
 
         $after = app(CatalogRepository::class)->purchasableVariants();
