@@ -15,11 +15,13 @@
                 IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。
                 先選擇平台，再選擇需要的服務類型，最後挑選數量方案並免會員結帳。
             </p>
-            <div class="mt-8 flex flex-wrap gap-3">
-                <a href="#platforms" class="inline-flex min-h-14 items-center rounded-full bg-ink px-7 text-base font-bold text-white transition hover:bg-black">
+            <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <a href="#platforms"
+                   class="inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-7 text-base font-bold text-white transition-colors duration-200 hover:bg-black">
                     選擇平台服務
                 </a>
-                <a href="#process" class="inline-flex min-h-14 items-center rounded-full border border-black/15 bg-white px-7 text-base font-bold transition hover:border-ink">
+                <a href="#process"
+                   class="inline-flex min-h-14 items-center justify-center rounded-full border border-black/15 bg-white px-7 text-base font-bold transition-colors duration-200 hover:border-ink">
                     了解購買流程
                 </a>
             </div>
@@ -41,30 +43,34 @@
 
             <div class="mt-10 grid gap-5 lg:grid-cols-3">
                 @foreach ($platforms as $platform)
-                    <article class="surface flex flex-col p-6 sm:p-7">
-                        <h3 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform['name'] }}</h3>
+                    <article class="surface flex flex-col p-6 transition-shadow duration-200 hover:shadow-[0_28px_70px_rgba(16,17,15,0.11)] sm:p-7">
+                        <div class="flex items-center justify-between gap-3">
+                            <h3 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform['name'] }}</h3>
+                            @unless ($platform['available'])
+                                <span class="shrink-0 rounded-full bg-mist px-3 py-1 text-xs font-bold text-black/55">準備中</span>
+                            @endunless
+                        </div>
                         <p class="mt-3 leading-7 text-black/60">{{ $platform['tagline'] }}</p>
 
                         @if ($platform['available'])
-                            <ul class="mt-5 flex-1 space-y-2 text-sm text-black/70">
+                            <ul class="mt-6 flex-1 space-y-2.5 border-t border-black/10 pt-5 text-sm text-black/70">
                                 @foreach ($platform['services'] as $service)
-                                    <li class="flex gap-2">
-                                        <span aria-hidden="true" class="text-black/30">—</span>
+                                    <li class="flex gap-2.5">
+                                        <span aria-hidden="true" class="mt-2 h-1 w-1 shrink-0 rounded-full bg-black/25"></span>
                                         <span>{{ $service['name'] }}</span>
                                     </li>
                                 @endforeach
                             </ul>
                             <a href="{{ route('platform', $platform['slug']) }}"
-                               class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-6 text-base font-bold text-white transition hover:bg-black">
+                               class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-6 text-base font-bold text-white transition-colors duration-200 hover:bg-black">
                                 查看 {{ $platform['name'] }} 服務
                             </a>
                         @else
-                            <div class="mt-5 flex-1 rounded-2xl border border-dashed border-black/15 bg-paper p-5">
-                                <p class="text-sm font-bold">服務資料準備中</p>
-                                <p class="mt-2 text-sm leading-6 text-black/55">{{ $platform['unavailable_note'] }}</p>
+                            <div class="mt-6 flex-1 rounded-2xl border border-dashed border-black/15 bg-paper p-5">
+                                <p class="text-sm leading-6 text-black/55">{{ $platform['unavailable_note'] }}</p>
                             </div>
                             <a href="{{ route('platform', $platform['slug']) }}"
-                               class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full border border-black/15 bg-white px-6 text-base font-bold transition hover:border-ink">
+                               class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full border border-black/15 bg-white px-6 text-base font-bold transition-colors duration-200 hover:border-ink">
                                 查看說明
                             </a>
                         @endif

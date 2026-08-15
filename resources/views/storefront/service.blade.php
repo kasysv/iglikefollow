@@ -53,19 +53,25 @@
          }">
         <section class="mx-auto grid max-w-[1220px] gap-8 px-5 pb-14 sm:px-8 lg:grid-cols-[300px_1fr] lg:gap-12">
 
-            {{-- 左側款式導航：真實 radio，關閉 JS 仍可選 --}}
+            {{-- 款式導航：桌面在左側 sticky，手機收合在上方。真實 radio，關閉 JS 仍可選。 --}}
             <aside aria-labelledby="variant-title" class="lg:sticky lg:top-6 lg:h-fit">
                 <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
                 <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
-                <div class="mt-5 space-y-2">
+                <div class="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
                     @foreach ($variants as $key => $variant)
                         <label class="variant-card">
                             <input type="radio" name="variant" value="{{ $key }}" form="checkout-form"
                                    class="sr-only" x-model="variant" @change="selectVariant('{{ $key }}')"
                                    @checked($key === $defaultKey)>
-                            <span class="block font-bold">{{ $variant['label'] }}</span>
-                            <span class="mt-1 block text-sm leading-6 opacity-70">{{ $variant['description'] }}</span>
-                            <span class="mt-2 block text-xs opacity-60">
+                            <span class="flex items-baseline justify-between gap-3">
+                                <span class="font-bold">{{ $variant['label'] }}</span>
+                                <span class="shrink-0 text-sm tabular-nums opacity-70">
+                                    NT${{ rtrim(rtrim(number_format($variant['quantity']['unit_price'], 2), '0'), '.') }}
+                                    <span class="opacity-70">/{{ $unit }}</span>
+                                </span>
+                            </span>
+                            <span class="mt-1.5 block text-sm leading-6 opacity-70">{{ $variant['description'] }}</span>
+                            <span class="mt-2 block text-xs tabular-nums opacity-60">
                                 {{ number_format($variant['quantity']['min']) }}–{{ number_format($variant['quantity']['max']) }} {{ $unit }}
                             </span>
                         </label>
@@ -120,7 +126,7 @@
                                    :min="b.min" :max="b.max" :step="b.step"
                                    value="{{ old('quantity', $variants[$defaultKey]['quantity']['default']) }}"
                                    aria-describedby="quantity-hint"
-                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base">
+                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
                             <p id="quantity-hint" class="mt-2 text-xs leading-5 text-black/55">
                                 可輸入
                                 <span x-text="Number(b.min).toLocaleString()">{{ number_format($variants[$defaultKey]['quantity']['min']) }}</span>
@@ -162,9 +168,17 @@
                             @error('payment') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                         </fieldset>
 
-                        <div class="flex items-baseline justify-between border-t border-black/10 pt-5">
-                            <span class="text-sm font-bold">試算金額</span>
-                            <span class="text-2xl font-bold tracking-[-0.03em]">NT$<span x-text="estimate">—</span></span>
+                        <div class="rounded-2xl bg-paper p-5">
+                            <div class="flex items-baseline justify-between gap-4">
+                                <span class="text-sm font-bold">試算金額</span>
+                                <span class="text-2xl font-bold tabular-nums tracking-[-0.03em]">
+                                    NT$<span x-text="estimate">—</span>
+                                </span>
+                            </div>
+                            <p class="mt-2 text-xs leading-5 text-black/50">
+                                <span x-text="Number(quantity || 0).toLocaleString()"></span> {{ $unit }}
+                                × NT$<span x-text="b.unit_price"></span>
+                            </p>
                         </div>
 
                         <button type="submit" class="primary-button">測試快速結帳</button>

@@ -47,16 +47,22 @@
         @apply border-ink bg-ink text-white shadow-lg;
     }
     .variant-card {
-        @apply block cursor-pointer rounded-2xl border border-black/10 bg-white p-4 transition hover:border-ink/40;
+        @apply block min-h-14 cursor-pointer rounded-2xl border border-black/10 bg-white p-4 transition-colors duration-200 hover:border-ink/40;
     }
     .variant-card:has(input:checked) {
         @apply border-ink bg-ink text-white shadow-lg;
     }
+    .variant-card:has(input:focus-visible) {
+        @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
+    }
     .payment-card {
-        @apply flex min-h-14 cursor-pointer items-center gap-3 rounded-2xl border border-black/10 bg-white px-4 py-3 transition;
+        @apply flex min-h-14 cursor-pointer items-center gap-3 rounded-2xl border border-black/10 bg-white px-4 py-3 transition-colors duration-200;
     }
     .payment-card:has(input:checked) {
         @apply border-ink ring-1 ring-ink;
+    }
+    .payment-card:has(input:focus-visible) {
+        @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
     }
     .primary-button {
         @apply inline-flex min-h-14 w-full items-center justify-center rounded-full bg-ink px-6 py-4 text-base font-bold text-white transition hover:-translate-y-0.5 hover:bg-black;
