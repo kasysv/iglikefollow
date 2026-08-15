@@ -51,13 +51,13 @@
                 return Number.isInteger(q) && q >= this.b.min && q <= this.b.max && q % this.b.step === 0
             }
          }">
-        <section class="mx-auto grid max-w-[1220px] gap-8 px-5 pb-14 sm:px-8 lg:grid-cols-[300px_1fr] lg:gap-12">
+        <section class="mx-auto grid max-w-[1220px] items-start gap-8 px-5 pb-14 sm:px-8 lg:grid-cols-[1fr_440px] lg:gap-12">
 
-            {{-- 款式導航：桌面在左側 sticky，手機收合在上方。真實 radio，關閉 JS 仍可選。 --}}
-            <aside aria-labelledby="variant-title" class="lg:sticky lg:top-6 lg:h-fit">
+            {{-- 款式導航：真實 radio，關閉 JS 仍可選。不使用 sticky，避免捲動時跟著移動。 --}}
+            <aside aria-labelledby="variant-title" class="lg:h-fit">
                 <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
                 <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
-                <div class="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                <div class="mt-5 grid gap-2 sm:grid-cols-2">
                     @foreach ($variants as $key => $variant)
                         <label class="variant-card">
                             <input type="radio" name="variant" value="{{ $key }}" form="checkout-form"
@@ -79,33 +79,8 @@
                 </div>
             </aside>
 
-            <div class="grid gap-8 lg:grid-cols-[1fr_400px] lg:items-start">
-                <div>
-                    <dl class="divide-y divide-black/10 border-y border-black/10">
-                        <div class="py-4">
-                            <dt class="text-sm font-bold">交付方式</dt>
-                            <dd class="mt-2 leading-7 text-black/60">{{ $service['delivery'] }}</dd>
-                        </div>
-                        <div class="py-4">
-                            <dt class="text-sm font-bold">需要填寫</dt>
-                            <dd class="mt-2 leading-7 text-black/60">{{ $service['input_label'] }}</dd>
-                        </div>
-                        <div class="py-4">
-                            <dt class="text-sm font-bold">付款方式</dt>
-                            <dd class="mt-2 leading-7 text-black/60">LINE Pay 或綠界付款。付款成功由後端驗證後才建立履約流程。</dd>
-                        </div>
-                    </dl>
-
-                    <div class="mt-8 rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                        <p class="text-sm font-bold text-amber-900">本機開發預覽</p>
-                        <p class="mt-2 text-sm leading-6 text-amber-900/80">
-                            數量上下限與單價目前是開發用的 placeholder，正式值將由後台 API 提供。
-                            這一頁不會建立真實訂單。
-                        </p>
-                    </div>
-                </div>
-
-                <section id="checkout" class="surface h-fit p-5 sm:p-7" aria-labelledby="checkout-title">
+            <div>
+                <section id="checkout" class="surface p-5 sm:p-7" aria-labelledby="checkout-title">
                     <div class="flex items-start justify-between gap-5">
                         <div>
                             <p class="eyebrow">Quick checkout</p>
@@ -192,6 +167,28 @@
     </div>
 
     <section class="border-t border-black/10 bg-white">
+        <div class="mx-auto max-w-[1220px] px-5 py-14 sm:px-8">
+            <h2 class="text-2xl font-bold tracking-[-0.03em]">服務說明</h2>
+            <dl class="mt-6 grid gap-px overflow-hidden rounded-[1.75rem] bg-black/10 sm:grid-cols-3">
+                <div class="bg-white p-6">
+                    <dt class="text-sm font-bold">交付方式</dt>
+                    <dd class="mt-2 leading-7 text-black/60">{{ $service['delivery'] }}</dd>
+                </div>
+                <div class="bg-white p-6">
+                    <dt class="text-sm font-bold">需要填寫</dt>
+                    <dd class="mt-2 leading-7 text-black/60">{{ $service['input_label'] }}</dd>
+                </div>
+                <div class="bg-white p-6">
+                    <dt class="text-sm font-bold">付款方式</dt>
+                    <dd class="mt-2 leading-7 text-black/60">
+                        LINE Pay 或綠界付款。付款成功由後端驗證後才建立履約流程。
+                    </dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section class="border-t border-black/10 bg-paper">
         <div class="mx-auto max-w-[1220px] px-5 py-14 sm:px-8">
             <h2 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform['name'] }} 其他服務</h2>
             <ul class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
