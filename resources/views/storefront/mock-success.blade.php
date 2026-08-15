@@ -18,7 +18,18 @@
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">Mock 金額（後端重算）</dt><dd class="font-bold">NT${{ number_format($mockAmount) }}</dd></div>
             <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">付款方式</dt><dd class="font-bold">{{ $paymentLabel }}</dd></div>
             <div class="flex flex-col gap-2 py-4 sm:flex-row sm:justify-between"><dt class="text-black/50">目標</dt><dd class="break-all font-bold">{{ $target }}</dd></div>
+            {{-- ⛔ 只顯示遮罩後的聯絡資料與發票類型；完整 Email／手機／載具／統編不得回顯。 --}}
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">發票類型</dt><dd class="font-bold">{{ $invoiceSummary }}</dd></div>
+            <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">通知 Email</dt><dd class="break-all font-bold">{{ $maskedEmail }}</dd></div>
+            @if ($maskedPhone)
+                <div class="flex justify-between gap-6 py-4"><dt class="text-black/50">聯絡手機</dt><dd class="font-bold tabular-nums">{{ $maskedPhone }}</dd></div>
+            @endif
         </dl>
+
+        <p class="mt-6 rounded-2xl bg-paper p-5 text-sm leading-7 text-black/60">
+            這是本機測試結果：<strong class="text-ink">不會扣款、不會建立真實訂單，也不會開立任何發票。</strong>
+            上方聯絡資料僅在這次回應中遮罩顯示，未寫入資料庫、log 或 session。
+        </p>
 
         <a href="{{ route('home') }}#platforms"
            class="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-ink px-7 font-bold text-white">

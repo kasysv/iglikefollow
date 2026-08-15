@@ -86,6 +86,19 @@
     .payment-card:has(input:focus-visible) {
         @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
     }
+    /* 發票存放方式：每個選項都有一行說明，故採上下排列而非 payment-card 的單行樣式。 */
+    .invoice-option {
+        @apply flex min-h-14 cursor-pointer items-start gap-3 rounded-2xl border border-black/10 bg-white px-4 py-3 transition-colors duration-200;
+    }
+    .invoice-option:has(input:checked) {
+        @apply border-ink ring-1 ring-ink;
+    }
+    .invoice-option:has(input:focus-visible) {
+        @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
+    }
+    .invoice-option input {
+        @apply mt-1 shrink-0;
+    }
     .primary-button {
         @apply inline-flex min-h-14 w-full items-center justify-center rounded-full bg-ink px-6 py-4 text-base font-bold text-white transition hover:-translate-y-0.5 hover:bg-black;
     }

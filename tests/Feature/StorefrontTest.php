@@ -25,6 +25,28 @@ class StorefrontTest extends TestCase
         return ServiceVariant::query()->where('sku', 'ig-followers-standard')->value('id');
     }
 
+    /**
+     * A complete mock checkout payload.
+     *
+     * Contact and e-invoice fields are required, so every checkout test needs
+     * them; overriding one key here keeps each test focused on what it asserts.
+     *
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    private function checkoutPayload(array $overrides = []): array
+    {
+        return array_merge([
+            'variant' => $this->followersVariantId(),
+            'quantity' => 1000,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+            'customer_email' => 'buyer@example.com',
+            'invoice_kind' => 'personal',
+            'personal_invoice_mode' => 'email',
+        ], $overrides);
+    }
+
     public function test_home_presents_company_and_published_platforms_in_initial_html(): void
     {
         $this->get('/')
@@ -183,12 +205,8 @@ class StorefrontTest extends TestCase
 
     public function test_mock_checkout_never_creates_a_real_order(): void
     {
-        $this->post('/checkout/mock', [
-            'variant' => $this->followersVariantId(),
-            'quantity' => 1000,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertOk()
+        $this->post('/checkout/mock', $this->checkoutPayload())
+            ->assertOk()
             ->assertSee('本機 MOCK')
             ->assertSee('沒有扣款、沒有建立資料庫訂單')
             ->assertSee('example_account');
@@ -198,59 +216,45 @@ class StorefrontTest extends TestCase
     {
         $id = ServiceVariant::query()->where('sku', 'fb-views-standard')->value('id');
 
-        $this->post('/checkout/mock', [
+        $this->post('/checkout/mock', $this->checkoutPayload([
             'variant' => $id,
             'quantity' => 5000,
             'target' => 'https://facebook.com/reel/123456',
             'payment' => 'ecpay',
-        ])->assertOk()
+        ]))->assertOk()
             ->assertSee('Facebook')
             ->assertSee('綠界付款');
     }
 
     public function test_mock_checkout_rejects_quantity_below_minimum(): void
     {
-        $this->post('/checkout/mock', [
-            'variant' => $this->followersVariantId(),
-            'quantity' => 10,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertSessionHasErrors('quantity');
+        $this->post('/checkout/mock', $this->checkoutPayload(['quantity' => 10]))
+            ->assertSessionHasErrors('quantity');
     }
 
     public function test_mock_checkout_rejects_quantity_above_maximum(): void
     {
         $id = ServiceVariant::query()->where('sku', 'ig-followers-taiwan')->value('id');
 
-        $this->post('/checkout/mock', [
+        $this->post('/checkout/mock', $this->checkoutPayload([
             'variant' => $id,
             'quantity' => 999999,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertSessionHasErrors('quantity');
+        ]))->assertSessionHasErrors('quantity');
     }
 
     public function test_mock_checkout_rejects_quantity_not_matching_step(): void
     {
-        $this->post('/checkout/mock', [
-            'variant' => $this->followersVariantId(),
-            'quantity' => 155,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertSessionHasErrors('quantity');
+        $this->post('/checkout/mock', $this->checkoutPayload(['quantity' => 155]))
+            ->assertSessionHasErrors('quantity');
     }
 
     public function test_mock_checkout_recalculates_amount_server_side(): void
     {
         // 1000 × 0.59 = 590；前端即使送出別的金額也不會被採用。
-        $this->post('/checkout/mock', [
-            'variant' => $this->followersVariantId(),
-            'quantity' => 1000,
+        $this->post('/checkout/mock', $this->checkoutPayload([
             'price' => 1,
             'amount' => 1,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertOk()->assertSee('NT$590');
+        ]))->assertOk()->assertSee('NT$590');
     }
 
     public function test_mock_checkout_rejects_unknown_variant_and_payment(): void
