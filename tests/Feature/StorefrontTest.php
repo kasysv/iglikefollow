@@ -108,6 +108,57 @@ class StorefrontTest extends TestCase
             ->assertSee('公開帳號', false);
     }
 
+    public function test_every_service_declares_a_quantity_unit(): void
+    {
+        // 空白單位會在「輸入數量（ ）」留下空括號，屬實際 bug。
+        foreach (config('catalog.platforms') as $platform) {
+            foreach ($platform['services'] as $slug => $service) {
+                $this->assertNotEmpty(
+                    $service['quantity_unit'] ?? null,
+                    "{$platform['slug']}/{$slug} is missing quantity_unit"
+                );
+            }
+        }
+    }
+
+    public function test_followers_page_renders_its_quantity_unit(): void
+    {
+        $this->get('/services/instagram/followers')
+            ->assertOk()
+            ->assertSee('輸入數量（個）')
+            ->assertDontSee('輸入數量（）');
+    }
+
+    public function test_catalog_carries_no_unevidenced_performance_claims(): void
+    {
+        $banned = ['互動率較高', '保證', '最快', '100%', '永久'];
+        $encoded = json_encode(config('catalog.platforms'), JSON_UNESCAPED_UNICODE);
+
+        foreach ($banned as $claim) {
+            $this->assertStringNotContainsString($claim, $encoded);
+        }
+    }
+
+    public function test_hub_has_one_featured_service_and_goal_navigation(): void
+    {
+        $this->get('/services/instagram')
+            ->assertOk()
+            ->assertSee('主打服務')
+            ->assertSee('你想達成什麼目標？')
+            ->assertSee('帳號規模')
+            ->assertSee('影片曝光')
+            ->assertSee('服務比較');
+    }
+
+    public function test_hub_links_every_service_with_native_anchors(): void
+    {
+        $response = $this->get('/services/instagram')->assertOk();
+
+        foreach (array_keys(config('catalog.platforms.instagram.services')) as $slug) {
+            $response->assertSee('/services/instagram/'.$slug, false);
+        }
+    }
+
     public function test_unknown_platform_or_service_returns_404(): void
     {
         $this->get('/services/nope')->assertNotFound();

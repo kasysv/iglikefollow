@@ -39,9 +39,13 @@ return [
                     'slug' => 'followers',
                     'name' => 'Instagram 粉絲',
                     'summary' => '為帳號增加粉絲數，可選擇不同粉絲來源與品質。',
+                    'goal' => '帳號規模',
+                    'card_blurb' => '建立帳號整體規模。',
+                    'featured_service' => true,
                     'input_label' => 'Instagram 帳號',
                     'input_hint' => '例如：username 或 instagram.com/username',
                     'delivery' => '輸入公開帳號後依所選款式交付。',
+                    'quantity_unit' => '個',
                     'variants' => [
                         'ig-followers-standard' => [
                             'label' => '一般粉絲',
@@ -51,7 +55,8 @@ return [
                         ],
                         'ig-followers-real' => [
                             'label' => '真人粉絲',
-                            'description' => '真人帳號來源，互動率較高。',
+                            // ⛔ 不得寫互動率、真人程度、速度或品質等無第一方證據的宣稱。
+                            'description' => '真人帳號來源。',
                             'quantity' => ['min' => 100, 'max' => 20000, 'step' => 100, 'default' => 1000, 'unit_price' => 0.95],
                         ],
                         'ig-followers-taiwan' => [
@@ -68,6 +73,9 @@ return [
                     'input_label' => 'Instagram 貼文網址',
                     'input_hint' => '例如：instagram.com/p/xxxxxxxxx',
                     'delivery' => '貼一條貼文連結，送一次，一次完畢。',
+                    'goal' => '單篇互動',
+                    'card_blurb' => '為指定貼文增加讚數。',
+                    'quantity_unit' => '個',
                     'variants' => [
                         'ig-post-likes-standard' => [
                             'label' => '一般讚',
@@ -84,6 +92,8 @@ return [
                     'input_label' => 'Instagram 帳號（須為公開帳號）',
                     'input_hint' => '例如：username；帳號必須公開才能自動交付',
                     'delivery' => '預付篇數，新貼文依序自動交付，用完為止、無時間限制。',
+                    'goal' => '自動經營',
+                    'card_blurb' => '新貼文自動獲得讚。',
                     'quantity_unit' => '篇',
                     'variants' => [
                         'ig-auto-likes-standard' => [
@@ -101,6 +111,8 @@ return [
                     'input_label' => 'Instagram 貼文網址',
                     'input_hint' => '例如：instagram.com/p/xxxxxxxxx',
                     'delivery' => '指定貼文後依方案交付留言則數。',
+                    'goal' => '單篇互動',
+                    'card_blurb' => '為指定貼文增加留言。',
                     'quantity_unit' => '則',
                     'variants' => [
                         'ig-comments-standard' => [
@@ -118,6 +130,8 @@ return [
                     'input_label' => 'Instagram 影片網址',
                     'input_hint' => '例如：instagram.com/reel/xxxxxxxxx',
                     'delivery' => '指定影片後依方案交付觀看次數。',
+                    'goal' => '影片曝光',
+                    'card_blurb' => '增加影片觀看次數。',
                     'quantity_unit' => '次',
                     'variants' => [
                         'ig-views-standard' => [
@@ -144,6 +158,7 @@ return [
                     'input_label' => 'Facebook 粉專、個人檔案或社團網址',
                     'input_hint' => '例如：facebook.com/yourpage',
                     'delivery' => '輸入公開網址後依所選款式交付。',
+                    'quantity_unit' => '個',
                     'variants' => [
                         'fb-followers-standard' => [
                             'label' => '一般粉絲',
@@ -160,6 +175,7 @@ return [
                     'input_label' => 'Facebook 貼文網址',
                     'input_hint' => '例如：facebook.com/yourpage/posts/123456',
                     'delivery' => '指定貼文後依方案交付讚數。',
+                    'quantity_unit' => '個',
                     'variants' => [
                         'fb-post-likes-standard' => [
                             'label' => '一般讚',

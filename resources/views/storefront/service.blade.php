@@ -27,12 +27,12 @@
         </ol>
     </nav>
 
-    <section class="mx-auto max-w-[1220px] px-5 py-10 sm:px-8 lg:py-12">
+    <section class="mx-auto max-w-[1320px] px-5 pb-2 pt-6 sm:px-8">
         <p class="eyebrow">{{ $platform['name'] }}</p>
-        <h1 class="mt-5 text-[clamp(2.2rem,4.6vw,3.8rem)] font-bold leading-[1.06] tracking-[-0.045em]">
+        <h1 class="mt-3 text-[clamp(1.85rem,2.9vw,2.7rem)] font-bold leading-[1.12] tracking-[-0.04em]">
             {{ $service['name'] }}
         </h1>
-        <p class="mt-5 max-w-2xl text-base leading-8 text-black/60 sm:text-lg">{{ $service['summary'] }}</p>
+        <p class="mt-3 max-w-2xl leading-7 text-black/60">{{ $service['summary'] }}</p>
     </section>
 
     <div x-data="{
@@ -51,35 +51,53 @@
                 return Number.isInteger(q) && q >= this.b.min && q <= this.b.max && q % this.b.step === 0
             }
          }">
-        <section class="mx-auto grid max-w-[1220px] items-start gap-8 px-5 pb-14 sm:px-8 lg:grid-cols-[1fr_440px] lg:gap-12">
-
-            {{-- 款式導航：真實 radio，關閉 JS 仍可選。不使用 sticky，避免捲動時跟著移動。 --}}
-            <aside aria-labelledby="variant-title" class="lg:h-fit">
-                <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
-                <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
-                <div class="mt-5 grid gap-2 sm:grid-cols-2">
-                    @foreach ($variants as $key => $variant)
-                        <label class="variant-card">
-                            <input type="radio" name="variant" value="{{ $key }}" form="checkout-form"
-                                   class="sr-only" x-model="variant" @change="selectVariant('{{ $key }}')"
-                                   @checked($key === $defaultKey)>
-                            <span class="flex items-baseline justify-between gap-3">
-                                <span class="font-bold">{{ $variant['label'] }}</span>
-                                <span class="shrink-0 text-sm tabular-nums opacity-70">
-                                    NT${{ rtrim(rtrim(number_format($variant['quantity']['unit_price'], 2), '0'), '.') }}
-                                    <span class="opacity-70">/{{ $unit }}</span>
-                                </span>
-                            </span>
-                            <span class="mt-1.5 block text-sm leading-6 opacity-70">{{ $variant['description'] }}</span>
-                            <span class="mt-2 block text-xs tabular-nums opacity-60">
-                                {{ number_format($variant['quantity']['min']) }}–{{ number_format($variant['quantity']['max']) }} {{ $unit }}
-                            </span>
-                        </label>
-                    @endforeach
-                </div>
-            </aside>
+        <section class="mx-auto grid max-w-[1320px] items-start gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[1fr_420px] lg:gap-12">
 
             <div>
+                {{-- 購買前必要理解：適合對象與必要條件，放在選購模組上方 --}}
+                <dl class="grid gap-px overflow-hidden rounded-2xl bg-black/10 sm:grid-cols-3">
+                    <div class="bg-white p-4">
+                        <dt class="text-xs font-bold text-black/50">適合目標</dt>
+                        <dd class="mt-1.5 font-semibold">{{ $service['goal'] ?? '社群成長' }}</dd>
+                    </div>
+                    <div class="bg-white p-4">
+                        <dt class="text-xs font-bold text-black/50">需要填寫</dt>
+                        <dd class="mt-1.5 font-semibold">{{ $service['input_label'] }}</dd>
+                    </div>
+                    <div class="bg-white p-4">
+                        <dt class="text-xs font-bold text-black/50">必要條件</dt>
+                        <dd class="mt-1.5 font-semibold">帳號或貼文須為公開</dd>
+                    </div>
+                </dl>
+                <p class="mt-3 text-sm leading-6 text-black/55">{{ $service['delivery'] }}</p>
+
+                {{-- 款式導航：真實 radio，關閉 JS 仍可選。不使用 sticky，避免捲動時跟著移動。 --}}
+                <aside aria-labelledby="variant-title" class="mt-8">
+                    <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇款式</h2>
+                    <p class="mt-2 text-sm leading-6 text-black/55">不同款式的來源與單價不同。</p>
+                    <div class="mt-5 grid gap-2 sm:grid-cols-2">
+                        @foreach ($variants as $key => $variant)
+                            <label class="variant-card">
+                                <input type="radio" name="variant" value="{{ $key }}" form="checkout-form"
+                                       class="sr-only" x-model="variant" @change="selectVariant('{{ $key }}')"
+                                       @checked($key === $defaultKey)>
+                                <span class="flex items-baseline justify-between gap-3">
+                                    <span class="font-bold">{{ $variant['label'] }}</span>
+                                    <span class="shrink-0 text-sm tabular-nums text-black/60">
+                                        NT${{ number_format($variant['quantity']['unit_price'], 2) }}／{{ $unit }}
+                                    </span>
+                                </span>
+                                <span class="mt-1.5 block text-sm leading-6 text-black/60">{{ $variant['description'] }}</span>
+                                <span class="mt-2 block text-xs tabular-nums text-black/50">
+                                    {{ number_format($variant['quantity']['min']) }}–{{ number_format($variant['quantity']['max']) }} {{ $unit }}
+                                </span>
+                            </label>
+                        @endforeach
+                    </div>
+                </aside>
+            </div>
+
+            <div class="lg:sticky lg:top-6">
                 <section id="checkout" class="surface p-5 sm:p-7" aria-labelledby="checkout-title">
                     <div class="flex items-start justify-between gap-5">
                         <div>
@@ -94,7 +112,7 @@
 
                         <div>
                             <label for="quantity" class="mb-3 block text-sm font-bold">
-                                1. 輸入數量（<span x-text="unitLabel ?? '{{ $unit }}'">{{ $unit }}</span>）
+                                1. 輸入數量（{{ $unit }}）
                             </label>
                             <input id="quantity" name="quantity" type="number" inputmode="numeric" required
                                    x-model="quantity"
@@ -156,10 +174,13 @@
                             </p>
                         </div>
 
+                        <ul class="space-y-1.5 text-xs leading-5 text-black/55">
+                            <li>· {{ $service['input_label'] }}須為公開狀態才能交付。</li>
+                            <li>· 試算金額僅供參考，實際金額由後端重新計算。</li>
+                            <li>· 目前為本機 mock：不會扣款，也不會建立真實訂單。</li>
+                        </ul>
+
                         <button type="submit" class="primary-button">測試快速結帳</button>
-                        <p class="text-center text-xs leading-5 text-black/50">
-                            試算僅供參考，實際金額由後端重新計算。此按鈕不會付款、不會建立真實訂單。
-                        </p>
                     </form>
                 </section>
             </div>

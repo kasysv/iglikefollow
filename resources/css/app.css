@@ -46,11 +46,33 @@
     .choice-card:has(input:checked) {
         @apply border-ink bg-ink text-white shadow-lg;
     }
+    .platform-tab {
+        @apply inline-flex min-h-14 shrink-0 items-center border-b-2 border-transparent px-4 text-sm font-bold text-black/55 transition-colors duration-200 hover:text-ink;
+    }
+    .platform-tab--active {
+        @apply border-ink text-ink;
+    }
+    .goal-chip {
+        @apply inline-flex min-h-11 items-center rounded-full border border-black/12 bg-white px-4 text-sm font-semibold text-black/70 transition-colors duration-200 hover:border-ink hover:text-ink;
+    }
+    .service-card {
+        @apply block cursor-pointer rounded-2xl border border-black/10 bg-white p-5 transition-colors duration-200 hover:border-ink/45 sm:p-6;
+    }
+    .service-card--featured {
+        @apply border-ink/15 bg-gradient-to-br from-mist to-white p-6 sm:p-8;
+    }
+    .service-card__arrow {
+        @apply grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/12 text-lg text-black/45 transition-colors duration-200;
+    }
+    .service-card:hover .service-card__arrow {
+        @apply border-ink bg-ink text-white;
+    }
     .variant-card {
         @apply block min-h-14 cursor-pointer rounded-2xl border border-black/10 bg-white p-4 transition-colors duration-200 hover:border-ink/40;
     }
     .variant-card:has(input:checked) {
-        @apply border-ink bg-ink text-white shadow-lg;
+        /* 選中以描邊＋淡色底＋左側 accent 表示，⛔ 不用整張大黑塊壓過內容。 */
+        @apply border-trust bg-trust/6 shadow-[inset_3px_0_0_0_var(--color-trust)];
     }
     .variant-card:has(input:focus-visible) {
         @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
