@@ -22,11 +22,12 @@ php artisan serve
 
 ## Indexing safety
 
-Indexing stays disabled unless both conditions are true:
+Indexing stays disabled unless all conditions are true:
 
 ```dotenv
 APP_ENV=production
 ALLOW_INDEXING=true
+INDEXABLE_HOST=www.iglikefollow.com
 ```
 
-不得在 staging、local 或未批准發布環境設定上述組合。
+The runtime request host must also exactly match `INDEXABLE_HOST`. Do not use this combination in staging, local, or any unapproved release environment.

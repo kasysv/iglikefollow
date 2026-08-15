@@ -2,17 +2,20 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\IndexingPolicy;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 class AddRobotsHeader
 {
+    public function __construct(private readonly IndexingPolicy $indexingPolicy) {}
+
     public function handle(Request $request, Closure $next): Response
     {
         $response = $next($request);
 
-        if (! config('seo.indexing_enabled')) {
+        if (! $this->indexingPolicy->allows($request)) {
             $response->headers->set('X-Robots-Tag', 'noindex, nofollow');
         }
 
