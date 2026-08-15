@@ -4,13 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Models\SiteSetting;
 use App\Support\CatalogRepository;
+use App\Support\CheckoutSession;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\View\View;
 
 class StorefrontController extends Controller
 {
-    public function __construct(private readonly CatalogRepository $catalog) {}
+    public function __construct(
+        private readonly CatalogRepository $catalog,
+        private readonly CheckoutSession $checkout,
+    ) {}
 
     public function home(): View
     {
@@ -54,10 +58,18 @@ class StorefrontController extends Controller
 
         abort_if($record === null, 404);
 
+        // 從 /checkout 按「返回修改」時帶回原本的選擇，⛔ 不讓客人重選一次。
+        $selection = $this->checkout->resolve($request);
+        $resumed = $selection !== null && $selection['variant']->service->is($record)
+            ? $selection
+            : null;
+
         $view = view('storefront.service', [
             'service' => $record,
             'platform' => $record->platform,
             'isPreview' => $preview,
+            'resumedVariantId' => $resumed['variant']->id ?? null,
+            'resumedQuantity' => $resumed['quantity'] ?? null,
         ]);
 
         return $preview ? $this->noindex($view) : $view;

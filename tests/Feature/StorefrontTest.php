@@ -25,11 +25,20 @@ class StorefrontTest extends TestCase
         return ServiceVariant::query()->where('sku', 'ig-followers-standard')->value('id');
     }
 
+    /** Select a product first; /checkout reads it from the session. */
+    private function startCheckout(?int $variantId = null, int $quantity = 1000): void
+    {
+        $this->post('/checkout/start', [
+            'variant' => $variantId ?? $this->followersVariantId(),
+            'quantity' => $quantity,
+        ])->assertRedirect(route('checkout'));
+    }
+
     /**
-     * A complete mock checkout payload.
+     * The order form payload.
      *
-     * Contact and e-invoice fields are required, so every checkout test needs
-     * them; overriding one key here keeps each test focused on what it asserts.
+     * Carries no variant or quantity: those come from the checkout session, so
+     * the form cannot override what the customer selected on the service page.
      *
      * @param  array<string, mixed>  $overrides
      * @return array<string, mixed>
@@ -37,8 +46,6 @@ class StorefrontTest extends TestCase
     private function checkoutPayload(array $overrides = []): array
     {
         return array_merge([
-            'variant' => $this->followersVariantId(),
-            'quantity' => 1000,
             'target' => 'example_account',
             'payment' => 'line-pay',
             'customer_email' => 'buyer@example.com',
@@ -141,9 +148,11 @@ class StorefrontTest extends TestCase
 
     public function test_followers_page_renders_its_quantity_unit(): void
     {
+        // 單位改由 Alpine 隨服務項目切換，初始 HTML 仍必須帶著預設單位；
+        // ⛔ 原本的缺陷是這裡渲染成「輸入數量（）」。
         $this->get('/services/instagram/followers')
             ->assertOk()
-            ->assertSee('輸入數量（個）')
+            ->assertSee('輸入數量（<span x-text="b.unit">個</span>）', false)
             ->assertDontSee('輸入數量（）');
     }
 
@@ -197,14 +206,24 @@ class StorefrontTest extends TestCase
         $this->get('/services/instagram/nope')->assertNotFound();
     }
 
-    public function test_mock_checkout_validates_input(): void
+    public function test_checkout_start_validates_the_product_selection(): void
     {
+        $this->post('/checkout/start', [])->assertSessionHasErrors(['variant', 'quantity']);
+    }
+
+    public function test_mock_checkout_validates_the_order_form(): void
+    {
+        $this->startCheckout();
+
+        // variant／quantity 來自 session，⛔ 這裡只驗訂單表單本身的欄位。
         $this->post('/checkout/mock', [])
-            ->assertSessionHasErrors(['variant', 'quantity', 'target', 'payment']);
+            ->assertSessionHasErrors(['target', 'payment', 'customer_email', 'invoice_kind']);
     }
 
     public function test_mock_checkout_never_creates_a_real_order(): void
     {
+        $this->startCheckout();
+
         $this->post('/checkout/mock', $this->checkoutPayload())
             ->assertOk()
             ->assertSee('本機 MOCK')
@@ -216,9 +235,9 @@ class StorefrontTest extends TestCase
     {
         $id = ServiceVariant::query()->where('sku', 'fb-views-standard')->value('id');
 
+        $this->startCheckout($id, 5000);
+
         $this->post('/checkout/mock', $this->checkoutPayload([
-            'variant' => $id,
-            'quantity' => 5000,
             'target' => 'https://facebook.com/reel/123456',
             'payment' => 'ecpay',
         ]))->assertOk()
@@ -226,45 +245,53 @@ class StorefrontTest extends TestCase
             ->assertSee('綠界付款');
     }
 
-    public function test_mock_checkout_rejects_quantity_below_minimum(): void
+    public function test_checkout_start_rejects_quantity_below_minimum(): void
     {
-        $this->post('/checkout/mock', $this->checkoutPayload(['quantity' => 10]))
-            ->assertSessionHasErrors('quantity');
+        $this->post('/checkout/start', [
+            'variant' => $this->followersVariantId(),
+            'quantity' => 10,
+        ])->assertSessionHasErrors('quantity');
     }
 
-    public function test_mock_checkout_rejects_quantity_above_maximum(): void
+    public function test_checkout_start_rejects_quantity_above_maximum(): void
     {
         $id = ServiceVariant::query()->where('sku', 'ig-followers-taiwan')->value('id');
 
-        $this->post('/checkout/mock', $this->checkoutPayload([
-            'variant' => $id,
-            'quantity' => 999999,
-        ]))->assertSessionHasErrors('quantity');
+        $this->post('/checkout/start', ['variant' => $id, 'quantity' => 999999])
+            ->assertSessionHasErrors('quantity');
     }
 
-    public function test_mock_checkout_rejects_quantity_not_matching_step(): void
+    public function test_checkout_start_rejects_quantity_not_matching_step(): void
     {
-        $this->post('/checkout/mock', $this->checkoutPayload(['quantity' => 155]))
-            ->assertSessionHasErrors('quantity');
+        $this->post('/checkout/start', [
+            'variant' => $this->followersVariantId(),
+            'quantity' => 155,
+        ])->assertSessionHasErrors('quantity');
     }
 
     public function test_mock_checkout_recalculates_amount_server_side(): void
     {
         // 1000 × 0.59 = 590；前端即使送出別的金額也不會被採用。
+        $this->startCheckout();
+
         $this->post('/checkout/mock', $this->checkoutPayload([
             'price' => 1,
             'amount' => 1,
         ]))->assertOk()->assertSee('NT$590');
     }
 
-    public function test_mock_checkout_rejects_unknown_variant_and_payment(): void
+    public function test_checkout_start_rejects_an_unknown_variant(): void
     {
-        $this->post('/checkout/mock', [
-            'variant' => 999999,
-            'quantity' => 1000,
-            'target' => 'example_account',
-            'payment' => 'not-a-gateway',
-        ])->assertSessionHasErrors(['variant', 'payment']);
+        $this->post('/checkout/start', ['variant' => 999999, 'quantity' => 1000])
+            ->assertSessionHasErrors('variant');
+    }
+
+    public function test_mock_checkout_rejects_an_unknown_payment(): void
+    {
+        $this->startCheckout();
+
+        $this->post('/checkout/mock', $this->checkoutPayload(['payment' => 'not-a-gateway']))
+            ->assertSessionHasErrors('payment');
     }
 
     public function test_draft_variants_are_not_purchasable(): void
@@ -272,12 +299,8 @@ class StorefrontTest extends TestCase
         $variant = ServiceVariant::query()->where('sku', 'ig-followers-real')->first();
         $variant->update(['status' => 'draft']);
 
-        $this->post('/checkout/mock', [
-            'variant' => $variant->id,
-            'quantity' => 1000,
-            'target' => 'example_account',
-            'payment' => 'line-pay',
-        ])->assertSessionHasErrors('variant');
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1000])
+            ->assertSessionHasErrors('variant');
     }
 
     public function test_draft_service_is_not_publicly_reachable(): void

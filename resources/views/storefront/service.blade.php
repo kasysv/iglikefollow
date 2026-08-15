@@ -15,6 +15,13 @@
         'unit' => (string) $v->quantity_unit,
     ]])->all();
     $hasAnyDescription = $variants->contains(fn ($v) => filled($v->description));
+
+    // 從 /checkout 返回修改時沿用原本的選擇，⛔ 否則客人得重新挑一次。
+    $resumed = ($resumedVariantId ?? null) !== null
+        ? $variants->firstWhere('id', $resumedVariantId)
+        : null;
+    $default = $resumed ?? $default;
+    $startQuantity = $resumedQuantity ?? $default?->default_quantity;
 @endphp
 
 @extends('layouts.app', [
@@ -27,6 +34,15 @@
     @if (! empty($isPreview))
         <p class="bg-amber-100 px-5 py-3 text-center text-sm font-bold text-amber-900">
             草稿預覽模式：此頁包含尚未發布的內容，不會對外公開。
+        </p>
+    @endif
+
+    @if (session('checkout_notice'))
+        {{-- 選購資料過期或商品變更時的安全返回提示，⛔ 不得直接 500。 --}}
+        <p class="mx-auto max-w-[1320px] px-5 pt-6 sm:px-8" role="status">
+            <span class="block rounded-2xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-900">
+                {{ session('checkout_notice') }}
+            </span>
         </p>
     @endif
 
@@ -68,13 +84,12 @@
             </div>
         </section>
     @else
+    {{-- 服務頁只管選品：服務項目、數量與即時試算。
+         付款方式與電子發票狀態已移到 /checkout，⛔ 這裡不再持有。 --}}
     <div x-data="{
             variant: '{{ $default->id }}',
-            payment: 'line-pay',
             bounds: {{ Illuminate\Support\Js::from($bounds) }},
-            quantity: {{ $default->default_quantity }},
-            invoiceKind: '{{ old('invoice_kind', 'personal') }}',
-            personalMode: '{{ old('personal_invoice_mode', 'email') }}',
+            quantity: {{ $startQuantity }},
             get b() { return this.bounds[this.variant] },
             selectVariant(key) { this.variant = key; this.quantity = this.bounds[key].default },
             get estimate() {
@@ -158,218 +173,62 @@
                 </aside>
             </div>
 
-            {{-- 卡片加入聯絡資料與電子發票後已高於多數 viewport，sticky 會讓底部的
-                 付款與 CTA 永遠捲不到，因此改為隨頁面正常捲動。
-                 ⛔ 也不加內層 scrollbar，那同樣難以操作。 --}}
-            <div>
-                <section id="checkout" class="surface p-5 sm:p-7" aria-labelledby="checkout-title">
+            {{-- 右欄只做選品試算；履約、聯絡、發票與付款一律在 /checkout 填寫。
+                 卡片短，sticky 不會讓任何欄位捲不到，⛔ 也不加內層 scrollbar。 --}}
+            <div class="lg:sticky lg:top-6">
+                <section id="checkout" class="surface p-5 sm:p-7" aria-labelledby="estimate-title">
                     <div class="flex items-start justify-between gap-5">
                         <div>
-                            <p class="eyebrow">Quick checkout</p>
-                            <h2 id="checkout-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">快速選購</h2>
+                            <p class="eyebrow">Estimate</p>
+                            <h2 id="estimate-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">方案試算</h2>
                         </div>
                         <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</span>
                     </div>
 
-                    <form id="checkout-form" action="{{ route('checkout.mock') }}" method="post" class="mt-7 space-y-7">
+                    {{-- 服務項目的 radio 在左欄，⛔ 這裡不重複第二組 selector。 --}}
+                    <dl class="mt-6 space-y-2 border-b border-black/10 pb-5 text-sm">
+                        <div class="flex justify-between gap-4">
+                            <dt class="text-black/55">已選服務項目</dt>
+                            <dd class="font-bold" x-text="b.label">{{ $default->label }}</dd>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <dt class="text-black/55">單價</dt>
+                            <dd class="font-semibold tabular-nums">
+                                NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>／<span
+                                    x-text="b.unit">{{ $default->quantity_unit }}</span>
+                            </dd>
+                        </div>
+                    </dl>
+
+                    <form id="checkout-form" action="{{ route('checkout.start') }}" method="post" class="mt-6">
                         @csrf
+                        {{-- 左欄的 radio 用 form="checkout-form" 綁到這張表單，值同步到這裡。 --}}
+                        <input type="hidden" name="variant" :value="variant" value="{{ $default->id }}">
 
-                        <div>
-                            <label for="quantity" class="mb-3 block text-sm font-bold">
-                                1. 輸入數量（{{ $unit }}）
-                            </label>
-                            <input id="quantity" name="quantity" type="number" inputmode="numeric" required
-                                   x-model="quantity"
-                                   :min="b.min" :max="b.max" :step="b.step"
-                                   value="{{ old('quantity', $default->default_quantity) }}"
-                                   aria-describedby="quantity-hint"
-                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
-                            <p id="quantity-hint" class="mt-2 text-xs leading-5 text-black/55">
-                                可輸入 <span x-text="Number(b.min).toLocaleString()">{{ number_format($default->min_quantity) }}</span>
-                                至 <span x-text="Number(b.max).toLocaleString()">{{ number_format($default->max_quantity) }}</span>
-                                {{ $unit }}，需為 <span x-text="b.step">{{ $default->step_quantity }}</span> 的倍數。
-                            </p>
-                            <p class="mt-2 text-sm" x-show="!valid" x-cloak>
-                                <span class="text-red-700">數量不符合此服務項目的可購買範圍。</span>
-                            </p>
-                            @error('quantity') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                            @error('variant') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                        </div>
+                        <label for="quantity" class="mb-3 block text-sm font-bold">
+                            輸入數量（<span x-text="b.unit">{{ $unit }}</span>）
+                        </label>
+                        <input id="quantity" name="quantity" type="number" inputmode="numeric" required
+                               x-model="quantity"
+                               :min="b.min" :max="b.max" :step="b.step"
+                               value="{{ old('quantity', $startQuantity) }}"
+                               aria-describedby="quantity-hint"
+                               class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
+                        <p id="quantity-hint" class="mt-2 text-xs leading-5 text-black/55">
+                            可輸入 <span x-text="Number(b.min).toLocaleString()">{{ number_format($default->min_quantity) }}</span>
+                            至 <span x-text="Number(b.max).toLocaleString()">{{ number_format($default->max_quantity) }}</span>
+                            <span x-text="b.unit">{{ $unit }}</span>，需為
+                            <span x-text="b.step">{{ $default->step_quantity }}</span> 的倍數。
+                        </p>
+                        <p class="mt-2 text-sm" x-show="!valid" x-cloak>
+                            <span class="text-red-700">數量不符合此服務項目的可購買範圍。</span>
+                        </p>
+                        @error('quantity') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
+                        @error('variant') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
 
-                        <div>
-                            <label for="target" class="mb-3 block text-sm font-bold">2. {{ $service->input_label }}</label>
-                            <input id="target" name="target" value="{{ old('target') }}" required maxlength="255"
-                                   placeholder="{{ $service->input_hint }}"
-                                   aria-describedby="target-hint"
-                                   class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base placeholder:text-black/35">
-                            <p id="target-hint" class="mt-2 text-xs leading-5 text-black/50">{{ $service->delivery_summary }}</p>
-                            @error('target') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                        </div>
-
-                        {{-- 3. 聯絡資料：只收通知所需的最小欄位，⛔ 不要求姓名、地址或會員帳號。 --}}
-                        <fieldset>
-                            <legend class="mb-3 text-sm font-bold">3. 聯絡資料</legend>
-                            <div class="space-y-4">
-                                <div>
-                                    <label for="customer_email" class="mb-2 block text-sm font-semibold">
-                                        Email <span class="text-red-700" aria-hidden="true">*</span>
-                                    </label>
-                                    <input id="customer_email" name="customer_email" type="email" required
-                                           inputmode="email" autocomplete="email" maxlength="80"
-                                           value="{{ old('customer_email') }}"
-                                           aria-describedby="email-hint"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base">
-                                    <p id="email-hint" class="mt-2 text-xs leading-5 text-black/50">
-                                        用來接收訂單與電子發票通知。
-                                    </p>
-                                    @error('customer_email') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-
-                                <div>
-                                    <label for="customer_phone" class="mb-2 block text-sm font-semibold">
-                                        手機 <span class="font-normal text-black/45">（選填）</span>
-                                    </label>
-                                    <input id="customer_phone" name="customer_phone" type="tel"
-                                           inputmode="tel" autocomplete="tel" maxlength="20"
-                                           value="{{ old('customer_phone') }}"
-                                           aria-describedby="phone-hint"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
-                                    <p id="phone-hint" class="mt-2 text-xs leading-5 text-black/50">
-                                        客服需要聯絡時使用。
-                                    </p>
-                                    @error('customer_phone') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-                            </div>
-                        </fieldset>
-
-                        {{-- 4. 電子發票：全程無紙化，⛔ 不提供紙本、列印或郵寄欄位。 --}}
-                        <fieldset>
-                            <legend class="mb-3 text-sm font-bold">4. 電子發票</legend>
-
-                            <div class="grid gap-2 sm:grid-cols-2">
-                                <label class="payment-card">
-                                    <input type="radio" name="invoice_kind" value="personal"
-                                           x-model="invoiceKind" @checked(old('invoice_kind', 'personal') === 'personal')>
-                                    <span class="font-bold">個人電子發票</span>
-                                </label>
-                                <label class="payment-card">
-                                    <input type="radio" name="invoice_kind" value="business"
-                                           x-model="invoiceKind" @checked(old('invoice_kind') === 'business')>
-                                    <span class="font-bold">公司統編發票</span>
-                                </label>
-                            </div>
-                            @error('invoice_kind') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-
-                            {{-- 個人：選擇發票存放方式 --}}
-                            <div x-show="invoiceKind === 'personal'" x-cloak class="mt-4">
-                                <p class="mb-2 text-sm font-semibold">發票存放方式</p>
-                                <div class="space-y-2">
-                                    @foreach ([
-                                        'email' => ['Email 電子發票', '開立後寄送到上方 Email。'],
-                                        'mobile_barcode' => ['手機條碼載具', '存入你的手機條碼，可自行歸戶。'],
-                                        'donation' => ['捐贈發票', '將這張發票捐贈給社福機構。'],
-                                    ] as $mode => [$modeLabel, $modeHint])
-                                        <label class="invoice-option">
-                                            <input type="radio" name="personal_invoice_mode" value="{{ $mode }}"
-                                                   x-model="personalMode"
-                                                   :disabled="invoiceKind !== 'personal'"
-                                                   @checked(old('personal_invoice_mode', 'email') === $mode)>
-                                            <span>
-                                                <span class="block font-semibold">{{ $modeLabel }}</span>
-                                                <span class="mt-0.5 block text-xs leading-5 text-black/50">{{ $modeHint }}</span>
-                                            </span>
-                                        </label>
-                                    @endforeach
-                                </div>
-                                @error('personal_invoice_mode') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-
-                                {{-- 條件欄位：隱藏時一律 disabled，⛔ 不可把前一模式的殘留值送出。 --}}
-                                <div x-show="personalMode === 'mobile_barcode'" x-cloak class="mt-4">
-                                    <label for="carrier_number" class="mb-2 block text-sm font-semibold">手機條碼</label>
-                                    <input id="carrier_number" name="carrier_number" maxlength="8" placeholder="/ABC1234"
-                                           value="{{ old('carrier_number') }}"
-                                           :disabled="!(invoiceKind === 'personal' && personalMode === 'mobile_barcode')"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base uppercase placeholder:normal-case placeholder:text-black/35">
-                                    <p class="mt-2 text-xs leading-5 text-black/50">格式為 / 加 7 碼大寫英數字。</p>
-                                    @error('carrier_number') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-
-                                <div x-show="personalMode === 'donation'" x-cloak class="mt-4">
-                                    <label for="love_code" class="mb-2 block text-sm font-semibold">愛心碼</label>
-                                    <input id="love_code" name="love_code" inputmode="numeric" maxlength="7" placeholder="12345"
-                                           value="{{ old('love_code') }}"
-                                           :disabled="!(invoiceKind === 'personal' && personalMode === 'donation')"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums placeholder:text-black/35">
-                                    <p class="mt-2 text-xs leading-5 text-black/50">3 至 7 位數字。捐贈後不另開立個人發票。</p>
-                                    @error('love_code') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-                            </div>
-
-                            {{-- 公司：固定為無紙化 Email 電子載具，⛔ 不顯示捐贈、紙本或地址欄位。 --}}
-                            <div x-show="invoiceKind === 'business'" x-cloak class="mt-4 space-y-4">
-                                <div>
-                                    <label for="buyer_tax_id" class="mb-2 block text-sm font-semibold">統一編號</label>
-                                    <input id="buyer_tax_id" name="buyer_tax_id" inputmode="numeric" maxlength="8"
-                                           placeholder="12345678" value="{{ old('buyer_tax_id') }}"
-                                           :disabled="invoiceKind !== 'business'"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums placeholder:text-black/35">
-                                    <p class="mt-2 text-xs leading-5 text-black/50">8 位數字。</p>
-                                    @error('buyer_tax_id') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-
-                                <div>
-                                    <label for="buyer_name" class="mb-2 block text-sm font-semibold">公司／行號登記名稱</label>
-                                    <input id="buyer_name" name="buyer_name" maxlength="60"
-                                           value="{{ old('buyer_name') }}"
-                                           :disabled="invoiceKind !== 'business'"
-                                           class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base">
-                                    @error('buyer_name') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                                </div>
-
-                                <p class="rounded-xl bg-paper px-4 py-3 text-xs leading-6 text-black/60">
-                                    電子發票寄送至上方 Email，不提供紙本與郵寄。
-                                </p>
-                            </div>
-                        </fieldset>
-
-                        <fieldset>
-                            <legend class="mb-3 text-sm font-bold">5. 選擇付款方式</legend>
-                            <div class="grid gap-2 sm:grid-cols-2">
-                                <label class="payment-card">
-                                    <input type="radio" name="payment" value="line-pay" x-model="payment" checked>
-                                    <span class="font-bold">LINE Pay</span>
-                                </label>
-                                <label class="payment-card">
-                                    <input type="radio" name="payment" value="ecpay" x-model="payment">
-                                    <span class="font-bold">綠界付款</span>
-                                </label>
-                            </div>
-                            @error('payment') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
-                        </fieldset>
-
-                        <div class="rounded-2xl bg-paper p-5">
-                            <p class="mb-3 text-sm font-bold">6. 訂單試算</p>
-                            <dl class="space-y-2 text-sm">
-                                <div class="flex justify-between gap-4">
-                                    <dt class="text-black/55">服務項目</dt>
-                                    <dd class="font-semibold" x-text="b.label">{{ $default->label }}</dd>
-                                </div>
-                                <div class="flex justify-between gap-4">
-                                    <dt class="text-black/55">數量</dt>
-                                    <dd class="font-semibold tabular-nums">
-                                        <span x-text="Number(quantity || 0).toLocaleString()"></span>
-                                        <span x-text="b.unit">{{ $unit }}</span>
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-4">
-                                    <dt class="text-black/55">單價</dt>
-                                    <dd class="font-semibold tabular-nums">
-                                        NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>
-                                    </dd>
-                                </div>
-                            </dl>
-                            <div class="mt-3 flex items-baseline justify-between gap-4 border-t border-black/10 pt-3">
-                                <span class="text-sm font-bold">試算金額</span>
+                        <div class="mt-6 rounded-2xl bg-paper p-5">
+                            <div class="flex items-baseline justify-between gap-4">
+                                <span class="text-sm font-bold">試算總額</span>
                                 <span class="text-2xl font-bold tabular-nums tracking-[-0.03em]">
                                     NT$<span x-text="estimate">—</span>
                                 </span>
@@ -379,14 +238,12 @@
                             </p>
                         </div>
 
-                        <ul class="space-y-1.5 text-xs leading-5 text-black/55">
-                            <li>· {{ $service->input_label }}須為公開狀態才能交付。</li>
-                            <li>· 電子發票將寄送至上方 Email；本站不提供紙本發票與郵寄。</li>
-                            {{-- ⛔ 按鈕文案不得寫成已可真實付款；正式版才改為「前往付款」。 --}}
-                            <li>· 目前為本機 MOCK：不扣款、不建立真實訂單、不開立發票。</li>
-                        </ul>
+                        <button type="submit" class="primary-button mt-6">繼續結帳</button>
 
-                        <button type="submit" class="primary-button">測試單頁結帳</button>
+                        <p class="mt-4 text-xs leading-5 text-black/55">
+                            下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。<br>
+                            本機 MOCK：不扣款、不建立訂單。
+                        </p>
                     </form>
                 </section>
             </div>

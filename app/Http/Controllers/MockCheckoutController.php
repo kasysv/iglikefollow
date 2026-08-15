@@ -2,10 +2,10 @@
 
 namespace App\Http\Controllers;
 
-use App\Support\CatalogRepository;
+use App\Support\CheckoutSession;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class MockCheckoutController extends Controller
@@ -14,29 +14,27 @@ class MockCheckoutController extends Controller
 
     public const PERSONAL_MODES = ['email', 'mobile_barcode', 'donation'];
 
-    public function __construct(private readonly CatalogRepository $catalog) {}
+    public function __construct(private readonly CheckoutSession $checkout) {}
 
-    public function store(Request $request): View
+    public function store(Request $request): View|RedirectResponse
     {
         abort_unless(app()->environment(['local', 'testing']), 404);
 
-        // 白名單改由資料庫的 published variants 重建；⛔ draft／archived 不可購買。
-        $purchasable = $this->catalog->purchasableVariants();
+        // 商品一律取自 server-side session，⛔ 不接受表單送來的 variant／quantity。
+        // 這裡會重查 published allowlist、重驗數量並重新計價。
+        $selection = $this->checkout->resolve($request);
 
-        $validated = $request->validate(
-            $this->rules($purchasable->keys()->all(), $request),
-            $this->messages()
-        );
-
-        $variant = $purchasable->get((int) $validated['variant']);
-        $quantity = (int) $validated['quantity'];
-
-        // 數量邊界永遠由伺服器重新驗證，不信任前端送出的值。
-        if (! $variant->quantityIsValid($quantity)) {
-            throw ValidationException::withMessages([
-                'quantity' => "數量必須介於 {$variant->min_quantity} 至 {$variant->max_quantity} 之間，且為 {$variant->step_quantity} 的倍數。",
-            ]);
+        if ($selection === null) {
+            return redirect()->route('checkout');
         }
+
+        $variant = $selection['variant'];
+        $quantity = $selection['quantity'];
+
+        $validated = $request->validate($this->rules($request), $this->messages());
+
+        // 送出後即清除選購資料，⛔ 重新整理或重送不得再產生任何東西。
+        $this->checkout->forget($request);
 
         return view('storefront.mock-success', [
             'variantLabel' => $variant->label,
@@ -44,7 +42,7 @@ class MockCheckoutController extends Controller
             'platformName' => $variant->service->platform->name,
             'quantity' => $quantity,
             'quantityUnit' => $variant->quantity_unit,
-            // 金額一律由伺服器依單價重算，⛔ 忽略前端傳來的任何價格欄位。
+            // 金額一律由伺服器依「當下」單價重算，⛔ 不採用 start 當時或前端的金額。
             'mockAmount' => $variant->amountFor($quantity),
             'target' => $validated['target'],
             'paymentLabel' => $validated['payment'] === 'line-pay' ? 'LINE Pay' : '綠界付款',
@@ -56,10 +54,9 @@ class MockCheckoutController extends Controller
     }
 
     /**
-     * @param  list<int>  $purchasableIds
      * @return array<string, mixed>
      */
-    private function rules(array $purchasableIds, Request $request): array
+    private function rules(Request $request): array
     {
         // 條件驗證一律在後端重做，⛔ Alpine 的顯示／隱藏不具任何安全意義。
         // Rule::requiredIf 的 closure 不會收到參數，因此直接讀 request。
@@ -71,8 +68,7 @@ class MockCheckoutController extends Controller
         $personalMode = fn (string $wanted): callable => fn (): bool => $kind === 'personal' && $mode === $wanted;
 
         return [
-            'variant' => ['required', Rule::in($purchasableIds)],
-            'quantity' => ['required', 'integer'],
+            // ⛔ variant 與 quantity 不在此驗證：它們來自 session，不接受表單覆寫。
             'target' => ['required', 'string', 'max:255'],
             'payment' => ['required', Rule::in(['line-pay', 'ecpay'])],
 

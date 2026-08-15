@@ -150,7 +150,8 @@ class AdminFieldsRenderTest extends TestCase
         // 另一個服務項目仍必須可以被選到；它的說明由 Alpine 從 x-data 取用
         // （Js::from 會做 unicode escape，比對原字串沒有意義，故只驗選項存在）。
         $this->assertStringContainsString('真人粉絲', $html);
-        $this->assertSame(2, substr_count($html, 'name="variant"'));
+        // 只數 radio；表單另有一個 hidden variant 欄位供送出使用。
+        $this->assertSame(2, substr_count($html, 'type="radio" name="variant"'));
     }
 
     public function test_the_variant_description_is_not_printed_twice(): void
@@ -260,8 +261,18 @@ class AdminFieldsRenderTest extends TestCase
         }
 
         $page = $this->get('/services/instagram/followers')->assertOk();
-        foreach (['SERVICE-H1-値', 'SUMMARY-値', 'SERVICE-INTRO-値', 'INPUT-LABEL-値', 'INPUT-HINT-値', 'FAQ-QUESTION-値', 'FAQ-ANSWER-値'] as $value) {
+        foreach (['SERVICE-H1-値', 'SUMMARY-値', 'SERVICE-INTRO-値', 'INPUT-LABEL-値', 'FAQ-QUESTION-値', 'FAQ-ANSWER-値'] as $value) {
             $page->assertSee($value, false);
         }
+
+        // input_hint 是交付欄位的 placeholder，改為兩頁式後屬於 /checkout。
+        $variant = $service->variants()->first();
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => $variant->default_quantity])
+            ->assertRedirect(route('checkout'));
+
+        $this->get('/checkout')->assertOk()
+            ->assertSee('INPUT-HINT-値', false)
+            ->assertSee('INPUT-LABEL-値', false)
+            ->assertSee('DELIVERY-値', false);
     }
 }
