@@ -56,11 +56,19 @@ class AppServiceProvider extends ServiceProvider
         User::class,
     ];
 
-    /** Models that carry publish state and a lockable slug. */
+    /**
+     * Models that carry publish state.
+     *
+     * Sections and FAQs have no slug or first_published_at, so only the
+     * owner-only status rule applies to them; the observer keys its slug and
+     * parent locks off the attributes themselves.
+     */
     private const PUBLISHABLE = [
         Platform::class,
         Service::class,
         ServiceVariant::class,
+        ServiceContentSection::class,
+        Faq::class,
     ];
 
     public function register(): void

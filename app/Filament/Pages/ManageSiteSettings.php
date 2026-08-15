@@ -55,7 +55,8 @@ class ManageSiteSettings extends Page
                     ->schema([
                         TextInput::make('company_name')
                             ->label('公司名稱')
-                            ->helperText('例如：IGLIKEFOLLOW。留空會自動使用 IGLIKEFOLLOW。')
+                            // 這個欄位是必填，⛔ 說明不可再寫「留空會自動使用預設值」。
+                            ->helperText('必填。例如：IGLIKEFOLLOW。')
                             ->required()
                             ->maxLength(255),
                     ]),
@@ -116,8 +117,10 @@ class ManageSiteSettings extends Page
 
                         Select::make('primary_cta_service_id')
                             ->label('指定服務')
-                            ->helperText('只列出已發布的服務。')
+                            ->helperText('只列出「服務與其所屬平台都已發布」的項目。')
+                            // 平台未發布時該服務頁不可公開存取，⛔ 不可列出必然回退首頁的選項。
                             ->options(fn () => Service::query()->where('status', 'published')
+                                ->whereHas('platform', fn ($q) => $q->where('status', 'published'))
                                 ->with('platform')->orderBy('sort_order')->get()
                                 ->mapWithKeys(fn (Service $s) => [$s->id => ($s->platform?->name ?? '—').'／'.$s->name]))
                             ->searchable()
