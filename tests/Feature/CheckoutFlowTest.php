@@ -165,11 +165,47 @@ class CheckoutFlowTest extends TestCase
         $taiwan = $this->variant('ig-followers-taiwan');
         $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300]);
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        // 「返回修改」帶 ?resume=1，不得要求客人重新挑一次。
+        $html = $this->get('/services/instagram/followers?resume=1')->assertOk()->getContent();
 
-        // 「返回修改」不得要求客人重新挑一次。
         $this->assertStringContainsString("variant: '{$taiwan->id}'", $html);
         $this->assertStringContainsString('quantity: 300', $html);
+    }
+
+    public function test_a_plain_visit_shows_the_default_variant_not_the_last_selection(): void
+    {
+        $taiwan = $this->variant('ig-followers-taiwan');
+        $featured = $this->variant('ig-followers-standard');
+
+        $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300]);
+
+        // ⛔ 一般瀏覽（重新整理、從導覽再進來）必須回到預設項目，
+        // 不能一直停在上次選的那張卡片。
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        $this->assertStringContainsString("variant: '{$featured->id}'", $html);
+        $this->assertStringNotContainsString("variant: '{$taiwan->id}'", $html);
+        $this->assertStringContainsString('quantity: '.$featured->default_quantity, $html);
+    }
+
+    public function test_the_default_variant_card_is_checked_on_a_plain_visit(): void
+    {
+        $featured = $this->variant('ig-followers-standard');
+
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // 第一張卡片必須帶 checked，⛔ 否則沒有任何卡片顯示為選中。
+        $this->assertMatchesRegularExpression(
+            '/value="'.$featured->id.'"[^>]*checked/',
+            $html
+        );
+    }
+
+    public function test_the_return_link_carries_the_resume_flag(): void
+    {
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+
+        $this->get('/checkout')->assertOk()->assertSee('resume=1', false);
     }
 
     // ---------------------------------------------------------- 最終提交

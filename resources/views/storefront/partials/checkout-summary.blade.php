@@ -29,8 +29,9 @@
     <span class="text-2xl font-bold tabular-nums tracking-[-0.03em]">NT${{ number_format($amount) }}</span>
 </div>
 
-{{-- 回商品頁修改；session 仍保留，⛔ 不必重新找商品。 --}}
-<a href="{{ $returnUrl }}#checkout"
+{{-- 回商品頁修改；?resume=1 才會帶回原本的選擇。
+     ⛔ 不可讓一般瀏覽也套用 session，否則客人下次進來會看到上次選的項目。 --}}
+<a href="{{ $returnUrl }}?resume=1#checkout"
    class="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-full border border-black/15 bg-white px-5 text-sm font-bold transition-colors duration-200 hover:border-ink">
     返回修改
 </a>

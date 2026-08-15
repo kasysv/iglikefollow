@@ -58,8 +58,13 @@ class StorefrontController extends Controller
 
         abort_if($record === null, 404);
 
-        // 從 /checkout 按「返回修改」時帶回原本的選擇，⛔ 不讓客人重選一次。
-        $selection = $this->checkout->resolve($request);
+        // 只有從 /checkout 按「返回修改」（?resume=1）才帶回原本的選擇。
+        // ⛔ 一般瀏覽不得套用 session：否則客人下次進來會看到上次選的項目，
+        // 而不是這個服務的預設項目。
+        $selection = $request->boolean('resume')
+            ? $this->checkout->resolve($request)
+            : null;
+
         $resumed = $selection !== null && $selection['variant']->service->is($record)
             ? $selection
             : null;
