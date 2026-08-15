@@ -3,11 +3,15 @@
 namespace Tests\Feature;
 
 use App\Support\IndexingPolicy;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Tests\TestCase;
 
 class IndexingSafetyTest extends TestCase
 {
+    // 前台已改讀資料庫，故需要 schema；⛔ 測試使用 :memory:，不動開發資料庫。
+    use RefreshDatabase;
+
     public function test_home_is_noindex_by_default(): void
     {
         $this->get('/')

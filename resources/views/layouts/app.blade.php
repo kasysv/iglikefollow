@@ -16,9 +16,9 @@
                      class="h-auto w-44 sm:w-52" width="715" height="143">
             </a>
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
-                <a href="{{ route('platform', 'instagram') }}" class="hover:opacity-60">Instagram</a>
-                <a href="{{ route('platform', 'facebook') }}" class="hover:opacity-60">Facebook</a>
-                <a href="{{ route('platform', 'threads') }}" class="hover:opacity-60">Threads</a>
+                @foreach ($navPlatforms as $navPlatform)
+                    <a href="{{ route('platform', $navPlatform->slug) }}" class="hover:opacity-60">{{ $navPlatform->name }}</a>
+                @endforeach
                 <a href="{{ route('home') }}#platforms" class="rounded-full bg-ink px-5 py-3 text-white">選擇服務</a>
             </nav>
             <a href="{{ route('home') }}#platforms"
@@ -30,17 +30,21 @@
 
     <footer class="border-t border-black/10 bg-white">
         <div class="mx-auto max-w-[1220px] px-5 py-12 sm:px-8">
+            {{-- 頁尾只列已發布內容；⛔ draft／archived 不得出現在公開導覽。 --}}
             <nav aria-label="頁尾服務導覽" class="grid gap-8 sm:grid-cols-3">
-                @foreach (config('catalog.platforms') as $footerPlatform)
+                @foreach ($navPlatforms as $footerPlatform)
                     <div>
-                        <p class="text-sm font-bold">{{ $footerPlatform['name'] }}</p>
-                        @if ($footerPlatform['available'])
+                        <p class="text-sm font-bold">{{ $footerPlatform->name }}</p>
+                        @php $footerServices = $footerPlatform->status === 'published'
+                            ? $footerPlatform->services()->published()->orderBy('sort_order')->get()
+                            : collect(); @endphp
+                        @if ($footerServices->isNotEmpty())
                             <ul class="mt-3 space-y-2 text-sm text-black/60">
-                                @foreach ($footerPlatform['services'] as $footerService)
+                                @foreach ($footerServices as $footerService)
                                     <li>
                                         <a class="hover:text-ink hover:underline"
-                                           href="{{ route('service', [$footerPlatform['slug'], $footerService['slug']]) }}">
-                                            {{ $footerService['name'] }}
+                                           href="{{ route('service', [$footerPlatform->slug, $footerService->slug]) }}">
+                                            {{ $footerService->name }}
                                         </a>
                                     </li>
                                 @endforeach

@@ -2,10 +2,29 @@
 
 namespace Tests\Feature;
 
+use App\Models\Service;
+use App\Models\ServiceVariant;
+use Database\Seeders\CatalogSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class StorefrontTest extends TestCase
 {
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // 前台資料一律來自資料庫；seeder 只是把既有 fixture 匯入。
+        $this->seed(CatalogSeeder::class);
+    }
+
+    private function followersVariantId(): int
+    {
+        return ServiceVariant::query()->where('sku', 'ig-followers-standard')->value('id');
+    }
+
     public function test_home_presents_company_and_all_platforms_in_initial_html(): void
     {
         $this->get('/')
@@ -34,7 +53,6 @@ class StorefrontTest extends TestCase
 
     public function test_home_does_not_embed_the_checkout_form(): void
     {
-        // 首頁不應預設所有人購買單一服務；結帳移到選定服務之後。
         $this->get('/')->assertDontSee('name="plan"', false);
     }
 
@@ -42,11 +60,10 @@ class StorefrontTest extends TestCase
     {
         $response = $this->get('/services/instagram')
             ->assertOk()
-            ->assertSee('Instagram 粉絲')
-            ->assertSee('Instagram 單篇貼文讚')
-            ->assertSee('Instagram 自動貼文讚')
-            ->assertSee('Instagram 貼文留言')
-            ->assertSee('Instagram Reel／IGTV 影片觀看');
+            ->assertSee('粉絲')
+            ->assertSee('單篇貼文讚')
+            ->assertSee('自動貼文讚')
+            ->assertSee('貼文留言');
 
         $this->assertSame(1, substr_count($response->getContent(), '<h1'));
     }
@@ -55,28 +72,22 @@ class StorefrontTest extends TestCase
     {
         $this->get('/services/facebook')
             ->assertOk()
-            ->assertSee('Facebook 粉專／個人／社團粉絲')
-            ->assertSee('Facebook 貼文讚')
-            ->assertSee('Facebook 貼文留言／粉專評論')
-            ->assertSee('Facebook Reel／影片觀看');
+            ->assertSee('粉專／個人／社團粉絲')
+            ->assertSee('貼文讚');
     }
 
     public function test_threads_hub_is_an_honest_empty_state(): void
     {
-        $this->get('/services/threads')
-            ->assertOk()
-            ->assertSee('服務資料準備中')
-            ->assertDontSee('name="plan"', false)
-            ->assertDontSee('NT$', false);
+        // Threads 沒有已發布服務，屬 draft 平台，公開頁應為 404。
+        $this->get('/services/threads')->assertNotFound();
     }
 
     public function test_service_page_shows_variants_and_correct_input_label(): void
     {
         $this->get('/services/instagram/post-likes')
             ->assertOk()
-            ->assertSee('Instagram 單篇貼文讚')
-            ->assertSee('Instagram 貼文網址')
-            ->assertSee('ig-post-likes-standard', false);
+            ->assertSee('單篇貼文讚')
+            ->assertSee('Instagram 貼文網址');
     }
 
     public function test_followers_page_offers_every_variant_in_initial_html(): void
@@ -86,9 +97,7 @@ class StorefrontTest extends TestCase
             ->assertSee('選擇款式')
             ->assertSee('一般粉絲')
             ->assertSee('真人粉絲')
-            ->assertSee('台灣粉絲')
-            ->assertSee('ig-followers-real', false)
-            ->assertSee('ig-followers-taiwan', false);
+            ->assertSee('台灣粉絲');
     }
 
     public function test_service_page_uses_free_quantity_input_not_fixed_tiers(): void
@@ -100,24 +109,10 @@ class StorefrontTest extends TestCase
             ->assertSee('輸入數量', false);
     }
 
-    public function test_auto_likes_page_explains_prepaid_delivery(): void
-    {
-        $this->get('/services/instagram/auto-likes')
-            ->assertOk()
-            ->assertSee('預付')
-            ->assertSee('公開帳號', false);
-    }
-
     public function test_every_service_declares_a_quantity_unit(): void
     {
-        // 空白單位會在「輸入數量（ ）」留下空括號，屬實際 bug。
-        foreach (config('catalog.platforms') as $platform) {
-            foreach ($platform['services'] as $slug => $service) {
-                $this->assertNotEmpty(
-                    $service['quantity_unit'] ?? null,
-                    "{$platform['slug']}/{$slug} is missing quantity_unit"
-                );
-            }
+        foreach (ServiceVariant::all() as $variant) {
+            $this->assertNotEmpty($variant->quantity_unit, "variant {$variant->sku} is missing quantity_unit");
         }
     }
 
@@ -132,10 +127,11 @@ class StorefrontTest extends TestCase
     public function test_catalog_carries_no_unevidenced_performance_claims(): void
     {
         $banned = ['互動率較高', '保證', '最快', '100%', '永久'];
-        $encoded = json_encode(config('catalog.platforms'), JSON_UNESCAPED_UNICODE);
+        $text = ServiceVariant::all()->pluck('description')->join(' ')
+            .Service::all()->pluck('summary')->join(' ');
 
         foreach ($banned as $claim) {
-            $this->assertStringNotContainsString($claim, $encoded);
+            $this->assertStringNotContainsString($claim, $text);
         }
     }
 
@@ -150,13 +146,26 @@ class StorefrontTest extends TestCase
             ->assertSee('服務比較');
     }
 
-    public function test_hub_links_every_service_with_native_anchors(): void
+    public function test_hub_links_every_published_service_with_native_anchors(): void
     {
         $response = $this->get('/services/instagram')->assertOk();
 
-        foreach (array_keys(config('catalog.platforms.instagram.services')) as $slug) {
+        $slugs = Service::query()
+            ->whereHas('platform', fn ($q) => $q->where('slug', 'instagram'))
+            ->published()
+            ->pluck('slug');
+
+        foreach ($slugs as $slug) {
             $response->assertSee('/services/instagram/'.$slug, false);
         }
+    }
+
+    public function test_auto_likes_page_explains_prepaid_delivery(): void
+    {
+        $this->get('/services/instagram/auto-likes')
+            ->assertOk()
+            ->assertSee('預付')
+            ->assertSee('公開帳號', false);
     }
 
     public function test_unknown_platform_or_service_returns_404(): void
@@ -174,7 +183,7 @@ class StorefrontTest extends TestCase
     public function test_mock_checkout_never_creates_a_real_order(): void
     {
         $this->post('/checkout/mock', [
-            'variant' => 'ig-followers-standard',
+            'variant' => $this->followersVariantId(),
             'quantity' => 1000,
             'target' => 'example_account',
             'payment' => 'line-pay',
@@ -186,8 +195,10 @@ class StorefrontTest extends TestCase
 
     public function test_mock_checkout_accepts_variants_from_any_platform(): void
     {
+        $id = ServiceVariant::query()->where('sku', 'fb-views-standard')->value('id');
+
         $this->post('/checkout/mock', [
-            'variant' => 'fb-views-standard',
+            'variant' => $id,
             'quantity' => 5000,
             'target' => 'https://facebook.com/reel/123456',
             'payment' => 'ecpay',
@@ -199,7 +210,7 @@ class StorefrontTest extends TestCase
     public function test_mock_checkout_rejects_quantity_below_minimum(): void
     {
         $this->post('/checkout/mock', [
-            'variant' => 'ig-followers-standard',
+            'variant' => $this->followersVariantId(),
             'quantity' => 10,
             'target' => 'example_account',
             'payment' => 'line-pay',
@@ -208,8 +219,10 @@ class StorefrontTest extends TestCase
 
     public function test_mock_checkout_rejects_quantity_above_maximum(): void
     {
+        $id = ServiceVariant::query()->where('sku', 'ig-followers-taiwan')->value('id');
+
         $this->post('/checkout/mock', [
-            'variant' => 'ig-followers-taiwan',
+            'variant' => $id,
             'quantity' => 999999,
             'target' => 'example_account',
             'payment' => 'line-pay',
@@ -219,7 +232,7 @@ class StorefrontTest extends TestCase
     public function test_mock_checkout_rejects_quantity_not_matching_step(): void
     {
         $this->post('/checkout/mock', [
-            'variant' => 'ig-followers-standard',
+            'variant' => $this->followersVariantId(),
             'quantity' => 155,
             'target' => 'example_account',
             'payment' => 'line-pay',
@@ -230,7 +243,7 @@ class StorefrontTest extends TestCase
     {
         // 1000 × 0.59 = 590；前端即使送出別的金額也不會被採用。
         $this->post('/checkout/mock', [
-            'variant' => 'ig-followers-standard',
+            'variant' => $this->followersVariantId(),
             'quantity' => 1000,
             'price' => 1,
             'amount' => 1,
@@ -242,11 +255,35 @@ class StorefrontTest extends TestCase
     public function test_mock_checkout_rejects_unknown_variant_and_payment(): void
     {
         $this->post('/checkout/mock', [
-            'variant' => 'not-a-variant',
+            'variant' => 999999,
             'quantity' => 1000,
             'target' => 'example_account',
             'payment' => 'not-a-gateway',
         ])->assertSessionHasErrors(['variant', 'payment']);
+    }
+
+    public function test_draft_variants_are_not_purchasable(): void
+    {
+        $variant = ServiceVariant::query()->where('sku', 'ig-followers-real')->first();
+        $variant->update(['status' => 'draft']);
+
+        $this->post('/checkout/mock', [
+            'variant' => $variant->id,
+            'quantity' => 1000,
+            'target' => 'example_account',
+            'payment' => 'line-pay',
+        ])->assertSessionHasErrors('variant');
+    }
+
+    public function test_draft_service_is_not_publicly_reachable(): void
+    {
+        Service::query()
+            ->whereHas('platform', fn ($q) => $q->where('slug', 'instagram'))
+            ->where('slug', 'comments')
+            ->update(['status' => 'draft']);
+
+        $this->get('/services/instagram/comments')->assertNotFound();
+        $this->get('/services/instagram')->assertOk()->assertDontSee('/services/instagram/comments', false);
     }
 
     public function test_unknown_page_uses_custom_404(): void

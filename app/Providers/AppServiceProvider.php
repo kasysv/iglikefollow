@@ -17,7 +17,9 @@ use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
 use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
+use App\Support\CatalogRepository;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -56,5 +58,10 @@ class AppServiceProvider extends ServiceProvider
         foreach (self::AUDITED as $model) {
             $model::observe(AuditObserver::class);
         }
+
+        // Header 與 footer 的平台導覽一律從資料庫讀取，⛔ 不再讀 config fixture。
+        View::composer('layouts.app', function ($view) {
+            $view->with('navPlatforms', app(CatalogRepository::class)->navigablePlatforms());
+        });
     }
 }
