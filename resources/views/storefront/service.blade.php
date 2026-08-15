@@ -156,7 +156,10 @@
                              aria-live="polite" aria-atomic="true">
                             <p class="text-xs font-bold text-black/50">服務項目簡介</p>
                             <p class="mt-2 font-bold" x-text="b.label">{{ $default->label }}</p>
-                            <p class="mt-1.5 leading-7 text-black/60"
+                            {{-- whitespace-pre-line 讓後台輸入的換行在前台保留；
+                                 ⛔ 沒有它時 HTML 會把換行折成一整段。x-text 也會照樣
+                                 輸出換行字元，所以切換服務項目後仍然分行。 --}}
+                            <p class="mt-1.5 whitespace-pre-line leading-7 text-black/60"
                                x-text="b.description || '這個服務項目尚未填寫簡介。'">
                                 {{ $default->description ?: '這個服務項目尚未填寫簡介。' }}
                             </p>

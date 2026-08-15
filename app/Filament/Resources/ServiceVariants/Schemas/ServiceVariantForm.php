@@ -40,9 +40,9 @@ class ServiceVariantForm
                     // 這段會顯示在服務頁「服務項目簡介」框，改用 Textarea 方便寫完整說明。
                     Textarea::make('description')
                         ->label('服務項目說明')
-                        ->helperText('會顯示在服務頁服務項目卡片下方的「服務項目簡介」框，客人切換服務項目時跟著換。說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
-                        ->rows(3)
-                        ->maxLength(255)
+                        ->helperText('會顯示在服務頁服務項目卡片下方的「服務項目簡介」框，客人切換服務項目時跟著換。可以換行分點寫，前台會保留換行。說明這款和別款差在哪。⚠️ 不要寫「互動率較高」「保證不掉」這類沒有證據的話。')
+                        ->rows(6)
+                        ->maxLength(1000)
                         ->columnSpanFull(),
 
                     Toggle::make('is_featured')

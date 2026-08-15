@@ -181,6 +181,54 @@ class AdminFieldsRenderTest extends TestCase
         );
     }
 
+    public function test_a_multi_line_variant_description_keeps_its_line_breaks(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+
+        $description = "- 帳號類型：台灣普通｜男女混合\n- 掉粉機率：極低\n- 執行時間：6–48 小時內啟動";
+
+        ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'description' => $description,
+            'is_featured' => true,
+        ]);
+
+        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+
+        // ⛔ 沒有 whitespace-pre-line 時 HTML 會把後台輸入的換行折成一整段。
+        $this->assertMatchesRegularExpression(
+            '/whitespace-pre-line[^>]*"\s+x-text="b\.description/',
+            $html,
+            '服務項目簡介框缺少 whitespace-pre-line，後台的換行不會顯示'
+        );
+
+        // 換行字元本身也必須保留在初始 HTML 裡。
+        $this->assertStringContainsString("- 掉粉機率：極低\n", $html);
+    }
+
+    public function test_a_long_variant_description_survives_the_round_trip(): void
+    {
+        $platform = $this->platform();
+        $service = Service::factory()->published()->create([
+            'platform_id' => $platform->id, 'slug' => 'followers',
+        ]);
+
+        // 中文在 VARCHAR(255) 是 3 bytes/字，約 90 字就會逼近上限並被截斷。
+        $description = str_repeat('帳號類型台灣普通男女混合隨機配置非男女各半。', 12);
+        $this->assertGreaterThan(255, strlen($description));
+
+        $variant = ServiceVariant::factory()->published()->create([
+            'service_id' => $service->id,
+            'description' => $description,
+            'is_featured' => true,
+        ]);
+
+        $this->assertSame($description, $variant->fresh()->description);
+    }
+
     public function test_the_summary_box_is_omitted_when_no_variant_has_a_description(): void
     {
         $platform = $this->platform();
