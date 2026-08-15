@@ -220,11 +220,16 @@
     @endif
 
     {{-- 內容區塊：固定安全模板輸出 H2／段落；⛔ 後台內容不得注入 HTML 或 script --}}
-    @if ($service->contentSections->isNotEmpty())
+    @if (filled($service->intro) || $service->contentSections->isNotEmpty())
         <section class="border-t border-black/10 bg-white">
             <div class="mx-auto max-w-3xl px-5 py-14 sm:px-8">
+                {{-- 「詳細介紹」是長文欄位，放在長文區塊開頭；hero 只留一句話說明。 --}}
+                @if (filled($service->intro))
+                    <p class="whitespace-pre-line leading-8 text-black/70">{{ $service->intro }}</p>
+                @endif
+
                 @foreach ($service->contentSections as $section)
-                    <article class="@if (! $loop->first) mt-10 @endif">
+                    <article class="@if (! $loop->first || filled($service->intro)) mt-10 @endif">
                         <h2 class="text-2xl font-bold tracking-[-0.035em]">{{ $section->heading }}</h2>
                         <p class="mt-3 whitespace-pre-line leading-8 text-black/60">{{ $section->body }}</p>
                         @if ($section->image_path)

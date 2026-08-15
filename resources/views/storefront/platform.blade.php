@@ -211,6 +211,16 @@
             </div>
         </section>
 
+        {{-- 「詳細介紹」在有服務時同樣要顯示，⛔ 不可只出現在空狀態。 --}}
+        @if (filled($platform->intro))
+            <section class="border-t border-black/10 bg-white">
+                <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8 lg:py-16">
+                    <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">關於 {{ $platform->name }} 服務</h2>
+                    <p class="mt-4 whitespace-pre-line leading-8 text-black/60">{{ $platform->intro }}</p>
+                </div>
+            </section>
+        @endif
+
         @if ($faqs->isNotEmpty())
             <section class="border-t border-black/10 bg-paper">
                 <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8 lg:py-16">
