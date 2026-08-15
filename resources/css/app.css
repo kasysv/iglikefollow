@@ -1,0 +1,66 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source "../**/*.blade.php";
+@source "../**/*.js";
+@source "../**/*.vue";
+
+@theme {
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+    --color-ink: #10110f;
+    --color-paper: #f7f7f4;
+    --color-mist: #ecece7;
+    --color-trust: #165b45;
+}
+
+@layer base {
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+        margin: 0;
+        min-width: 320px;
+        overflow-x: hidden;
+        background: var(--color-paper);
+        color: var(--color-ink);
+        font-family: var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3 { text-wrap: balance; }
+    p { text-wrap: pretty; }
+    button, input { font: inherit; }
+    :focus-visible { outline: 3px solid #6d5bd0; outline-offset: 3px; }
+}
+
+@layer components {
+    .eyebrow {
+        @apply text-xs font-bold uppercase tracking-[0.16em] text-trust;
+    }
+    .surface {
+        @apply rounded-[1.75rem] border border-black/10 bg-white shadow-[0_22px_60px_rgba(16,17,15,0.07)];
+    }
+    .choice-card {
+        @apply relative flex min-h-24 cursor-pointer flex-col justify-between rounded-2xl border border-black/10 bg-white p-4 transition;
+    }
+    .choice-card:has(input:checked) {
+        @apply border-ink bg-ink text-white shadow-lg;
+    }
+    .payment-card {
+        @apply flex min-h-14 cursor-pointer items-center gap-3 rounded-2xl border border-black/10 bg-white px-4 py-3 transition;
+    }
+    .payment-card:has(input:checked) {
+        @apply border-ink ring-1 ring-ink;
+    }
+    .primary-button {
+        @apply inline-flex min-h-14 w-full items-center justify-center rounded-full bg-ink px-6 py-4 text-base font-bold text-white transition hover:-translate-y-0.5 hover:bg-black;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}
