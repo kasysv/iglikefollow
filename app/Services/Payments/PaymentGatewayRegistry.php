@@ -27,23 +27,19 @@ class PaymentGatewayRegistry
     /** 本輪的 sandbox 付款預設關閉，需明確開啟。 */
     public function sandboxEnabled(): bool
     {
-        return (bool) config('integrations.payments.sandbox_enabled', false);
+        return SandboxGuard::enabled();
     }
 
     /**
      * The adapter for this provider, or null if it cannot be used.
      *
-     * ⛔ Production is refused outright: this milestone covers sandbox only,
-     * and the check is here rather than in config alone so that flipping a
-     * config value cannot by itself start taking real money.
+     * ⛔ This is one of several entry points, not the only one — the adapters
+     * and the callback each enforce the same guard themselves, because a public
+     * callback route never passes through here.
      */
     public function for(string $provider): ?PaymentGateway
     {
-        if (! $this->sandboxEnabled()) {
-            return null;
-        }
-
-        if ($this->container->environment('production')) {
+        if (! SandboxGuard::enabled()) {
             return null;
         }
 

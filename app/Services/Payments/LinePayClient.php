@@ -51,6 +51,11 @@ class LinePayClient
      */
     private function call(string $uri, array $body, int $timeout): LinePayResponse
     {
+        // ⛔ 最靠近網路的一層也要擋：關閉或 production 時，一個 request 都不送。
+        if (! SandboxGuard::enabled()) {
+            return LinePayResponse::unavailable();
+        }
+
         $setting = $this->setting();
 
         if ($setting === null) {
@@ -80,6 +85,17 @@ class LinePayClient
             // ⛔ 逾時或連線失敗＝結果不明，不是失敗：對方可能已經處理了。
             // 也不帶出 exception 訊息，那裡面常有連線字串與 channel id。
             return LinePayResponse::timeout();
+        }
+
+        /*
+         * ⛔ 先看 HTTP 狀態，再談 body 裡寫什麼。
+         *
+         * LINE Pay 的正常回應固定是 200。非 200 代表這次交握沒有正常完成，
+         * 此時 body 內容不可採信——即使它剛好寫著 returnCode=0000。少了這道
+         * 檢查，一個 500 加上偽裝的成功內容就能讓訂單被標記為已付款。
+         */
+        if ($response->status() !== 200) {
+            return LinePayResponse::unreadable();
         }
 
         $json = null;

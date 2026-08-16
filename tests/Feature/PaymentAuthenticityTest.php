@@ -44,6 +44,9 @@ class PaymentAuthenticityTest extends TestCase
 
         Http::preventStrayRequests();
 
+        // R2：sandbox 付款預設關閉，測試必須明確開啟。
+        config()->set('integrations.payments.sandbox_enabled', true);
+
         $setting = IntegrationSetting::factory()
             ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
             ->create(['identifier' => self::MERCHANT]);

@@ -12,6 +12,7 @@ use App\Http\Controllers\Controller;
 use App\Models\IntegrationSetting;
 use App\Models\PaymentAttempt;
 use App\Services\Payments\EcpayCheckMac;
+use App\Services\Payments\SandboxGuard;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
@@ -42,6 +43,12 @@ class EcpayCallbackController extends Controller
 
     public function __invoke(Request $request): Response
     {
+        // ⛔ 公開路由，不經過 registry：這裡必須自己擋下 sandbox 關閉與
+        // production 的情況，否則整條 callback 就是繞過開關的後門。
+        if (! SandboxGuard::enabled()) {
+            return $this->reject();
+        }
+
         $payload = $request->all();
 
         $setting = $this->setting();
@@ -91,17 +98,15 @@ class EcpayCallbackController extends Controller
 
         // ── 以下都是「已確認來自綠界」的資料，才可以開始寫入 ──
 
-        // 4. 金額必須等於我們自己算出來的整數台幣。
-        //    ⛔ 不信任回傳金額：這是防止被改價的最後一道。
-        if ((string) ($payload['TradeAmt'] ?? '') !== (string) (int) $attempt->amount) {
-            $this->markUncertain->handle($attempt, PaymentFailureReason::AmountMismatch);
-
-            return $this->reject();
-        }
-
-        // 5. SimulatePaid 是綠界的「只測回呼」旗標，沒有任何金流發生。
-        //    ⛔ 絕不可據此標記已付款、發出 OrderPaid、開發票或履約；
-        //    但仍要回 1|OK，否則綠界會持續重送。
+        /*
+         * 4. SimulatePaid 先處理，⛔ 在任何金額比對或寫入之前。
+         *
+         * 這個旗標代表綠界只是在測回呼，沒有任何金流發生，所以它的 payload
+         * 本來就不必和真實訂單對得上。若先比金額，一個測試用的回呼就會把
+         * 正常的付款嘗試推進待對帳——用測試功能弄壞真的訂單。
+         *
+         * 仍然要回 1|OK，否則綠界會持續重送。
+         */
         if ((string) ($payload['SimulatePaid'] ?? '0') === '1') {
             Log::info('ECPay sandbox SimulatePaid callback received.', [
                 // ⛔ 只記自己的參考碼，不記 raw payload 或任何個資。
@@ -109,6 +114,14 @@ class EcpayCallbackController extends Controller
             ]);
 
             return $this->acknowledge();
+        }
+
+        // 5. 金額必須等於我們自己算出來的整數台幣。
+        //    ⛔ 不信任回傳金額：這是防止被改價的最後一道。
+        if ((string) ($payload['TradeAmt'] ?? '') !== (string) (int) $attempt->amount) {
+            $this->markUncertain->handle($attempt, PaymentFailureReason::AmountMismatch);
+
+            return $this->reject();
         }
 
         $this->applyResult($attempt, $payload);
@@ -135,10 +148,23 @@ class EcpayCallbackController extends Controller
         $tradeNo = (string) ($payload['TradeNo'] ?? '');
 
         if ($code === '1') {
+            /*
+             * ⛔ 成功必須帶著對方的交易編號。
+             *
+             * 沒有它，日後要跟綠界對這筆帳就只剩我們自己的參考碼——退款、
+             * 爭議與對帳都少了唯一能連起兩邊的鍵。「成功但不知道是哪一筆」
+             * 不是成功，是需要人看的狀況。
+             */
+            if ($tradeNo === '') {
+                $this->markUncertain->handle($attempt, PaymentFailureReason::UnreadableResponse);
+
+                return;
+            }
+
             $this->recordPayment->handle(
                 $attempt,
                 PaymentStatus::Succeeded,
-                providerReference: $tradeNo !== '' ? $tradeNo : null,
+                providerReference: $tradeNo,
             );
 
             return;

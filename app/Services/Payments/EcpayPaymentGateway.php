@@ -30,6 +30,12 @@ class EcpayPaymentGateway implements PaymentGateway
 
     public function initiate(PaymentAttempt $attempt): PaymentInitiation
     {
+        // ⛔ 同樣的檢查放在 adapter 自己身上：有人直接從 container 取出這個
+        // 類別時，registry 那道防線根本不會被執行到。
+        if (! SandboxGuard::enabled()) {
+            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
+        }
+
         $setting = $this->setting();
 
         if ($setting === null) {

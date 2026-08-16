@@ -3,6 +3,7 @@
 namespace App\Services\Payments;
 
 use App\Actions\Orders\MarkPaymentPending;
+use App\Actions\Orders\MarkPaymentUncertain;
 use App\Contracts\PaymentGateway;
 use App\DTO\PaymentInitiation;
 use App\Enums\PaymentFailureReason;
@@ -36,6 +37,7 @@ class LinePayGateway implements PaymentGateway
     public function __construct(
         private readonly LinePayClient $client,
         private readonly MarkPaymentPending $markPending,
+        private readonly MarkPaymentUncertain $markUncertain,
     ) {}
 
     public function provider(): string
@@ -45,6 +47,11 @@ class LinePayGateway implements PaymentGateway
 
     public function initiate(PaymentAttempt $attempt): PaymentInitiation
     {
+        // ⛔ adapter 自己也要擋：直接從 container 取出時不會經過 registry。
+        if (! SandboxGuard::enabled()) {
+            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
+        }
+
         $order = $attempt->order;
 
         // ⛔ 全部取自伺服器端快照：金額、幣別、訂單編號都不來自請求。
@@ -69,19 +76,39 @@ class LinePayGateway implements PaymentGateway
             ],
         ]);
 
-        if (! $response->isSuccess()) {
+        /*
+         * ⛔ 「請求根本沒送出」與「送出了但不知道結果」必須分開處理。
+         *
+         * 沒送出（缺設定、缺憑證、缺 endpoint）代表對方那邊什麼都沒發生，
+         * 記為本地失敗、允許客人換個方式再試是安全的。
+         *
+         * 一旦送出去了就不同：逾時、看不懂的回應、不認識的代碼——對方可能
+         * 已經建立了一筆付款交易。此時把 attempt 留在可重送的狀態，等於允許
+         * 對同一張訂單開出第二個付款 session。
+         */
+        if ($response->neverSent()) {
             return PaymentInitiation::failed($response->reason());
+        }
+
+        if (! $response->isSuccess()) {
+            $reason = $response->reason();
+
+            // 明確的拒絕才算失敗；其餘一律進人工對帳。
+            if ($reason->isUncertain()) {
+                $this->markUncertain->handle($attempt, $reason);
+            }
+
+            return PaymentInitiation::failed($reason);
         }
 
         $url = $response->paymentUrl;
 
-        if ($url === null || ! $this->redirectIsAllowed($url)) {
-            // ⛔ 拿到不該去的網址就當作驗證失敗，不把客人送過去。
-            return PaymentInitiation::failed(PaymentFailureReason::VerificationFailed);
-        }
+        // 成功回應卻缺少 transactionId 或給了不該去的網址：對方狀態不明。
+        // ⛔ 不能當成單純失敗，因為那筆交易可能真的已經建立了。
+        if ($response->transactionId === null || $url === null || ! $this->redirectIsAllowed($url)) {
+            $this->markUncertain->handle($attempt, PaymentFailureReason::UnreadableResponse);
 
-        if ($response->transactionId === null) {
-            return PaymentInitiation::failed(PaymentFailureReason::UnreadableResponse);
+            return PaymentInitiation::failed(PaymentFailureReason::VerificationFailed);
         }
 
         // 記下 transaction id：稍後 confirm 就是對著它做的。

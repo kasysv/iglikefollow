@@ -30,6 +30,7 @@ final class LinePayResponse
         public readonly ?int $payInfoTotal = null,
         public readonly bool $payInfoIsValid = false,
         public readonly ?PaymentFailureReason $transportReason = null,
+        private readonly bool $neverSent = false,
     ) {}
 
     /** @param array<string, mixed> $json */
@@ -65,7 +66,9 @@ final class LinePayResponse
      */
     private static function sumPayInfo(mixed $payInfo): array
     {
-        if (! is_array($payInfo) || $payInfo === []) {
+        // ⛔ 必須是非空的「list」：關聯陣列代表結構與官方文件不同，
+        // 那就不是我們知道怎麼解讀的回應。
+        if (! is_array($payInfo) || $payInfo === [] || ! array_is_list($payInfo)) {
             return [null, false];
         }
 
@@ -78,15 +81,14 @@ final class LinePayResponse
 
             $amount = $entry['amount'];
 
-            // ⛔ 只接受非負整數：字串、小數、null 與負數都代表結構不如預期，
-            // 而「看不懂的金額」不能當成「金額正確」。
-            if (! is_int($amount) && ! (is_float($amount) && floor($amount) === $amount)) {
-                return [null, false];
-            }
-
-            $amount = (int) $amount;
-
-            if ($amount < 0) {
+            /*
+             * ⛔ 必須是真正的 PHP int。
+             *
+             * 連 `590.0` 這種「剛好可以轉成整數」的 float 也拒絕：它代表對方
+             * 送來的 JSON 結構跟我們以為的不一樣，而在錢的事情上，「形狀不對
+             * 但湊得出數字」不能當成「數字正確」。
+             */
+            if (! is_int($amount) || $amount < 0) {
                 return [null, false];
             }
 
@@ -115,7 +117,20 @@ final class LinePayResponse
     /** 沒有可用設定，根本沒有送出請求。 */
     public static function unavailable(): self
     {
-        return new self('', transportReason: PaymentFailureReason::ProviderUnavailable);
+        return new self('', transportReason: PaymentFailureReason::ProviderUnavailable, neverSent: true);
+    }
+
+    /**
+     * Did we fail before anything left this machine?
+     *
+     * ⛔ The distinction decides whether a retry is safe. If no request was
+     * sent, the provider has no record and the customer may try again. If one
+     * was sent and the answer was lost, they may already have a live payment,
+     * and a retry risks a second one.
+     */
+    public function neverSent(): bool
+    {
+        return $this->neverSent;
     }
 
     /** LINE Pay 以 `0000` 表示成功。 */

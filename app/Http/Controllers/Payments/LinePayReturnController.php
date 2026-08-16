@@ -11,6 +11,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
 use App\Services\Payments\LinePayClient;
+use App\Services\Payments\SandboxGuard;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -34,6 +35,12 @@ class LinePayReturnController extends Controller
     public function confirm(Request $request, string $reference): RedirectResponse
     {
         $order = Order::where('reference', $reference)->firstOrFail();
+
+        // ⛔ 公開路由，不經過 registry：關閉或 production 時 0 呼叫、0 寫入。
+        if (! SandboxGuard::enabled()) {
+            return $this->toStatus($order);
+        }
+
         $attempt = $this->openAttemptFor($order);
 
         // 已經有結果就直接看訂單狀態；重複返回不重複確認。
@@ -122,6 +129,11 @@ class LinePayReturnController extends Controller
     public function cancel(Request $request, string $reference): RedirectResponse
     {
         $order = Order::where('reference', $reference)->firstOrFail();
+
+        if (! SandboxGuard::enabled()) {
+            return $this->toStatus($order);
+        }
+
         $attempt = $this->openAttemptFor($order);
 
         // ⛔ 同樣的身分檢查：一個可偽造的 GET 不足以終止一筆付款嘗試。

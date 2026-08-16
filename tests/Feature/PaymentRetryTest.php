@@ -44,6 +44,9 @@ class PaymentRetryTest extends TestCase
 
         Http::preventStrayRequests();
 
+        // R2：sandbox 付款預設關閉，測試必須明確開啟。
+        config()->set('integrations.payments.sandbox_enabled', true);
+
         $setting = IntegrationSetting::factory()
             ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
             ->create(['identifier' => self::MERCHANT]);
@@ -110,29 +113,51 @@ class PaymentRetryTest extends TestCase
         $this->assertNotSame($first->id, $second->id);
     }
 
-    public function test_an_untouched_attempt_is_reused(): void
+    /**
+     * ⭐ R2 更正：claim 之後就不能再開始第二筆。
+     *
+     * ⛔ R1 的舊測試斷言「第二次會拿到不同的 attempt」——那描述的正是雙重
+     * 付款風險，卻被寫成通過的預期。resolver 現在會在 order row lock 內把
+     * attempt 推進 pending 作為 claim，第二次呼叫必須什麼都拿不到。
+     */
+    public function test_a_second_start_is_refused_while_one_is_in_flight(): void
     {
         $order = $this->order();
 
         $first = $this->resolve()->handle($order, 'ecpay');
-        $second = $this->resolve()->handle($order->fresh(), 'ecpay');
 
-        // 還沒交給 provider 的那筆可以直接再用，⛔ 不必累積一堆空紀錄。
-        $this->assertSame($first->id, $second->id);
+        // 第一次就已經 claim 成 pending。
+        $this->assertSame(PaymentStatus::Pending, $first->status);
+
+        // ⛔ 同時兩次送出時，第二次不得取得任何 attempt。
+        $this->assertNull($this->resolve()->handle($order->fresh(), 'ecpay'));
+        $this->assertSame(1, $order->paymentAttempts()->count());
     }
 
-    public function test_a_pending_attempt_is_not_reused(): void
+    public function test_a_second_start_with_another_provider_is_also_refused(): void
     {
         $order = $this->order();
 
-        $first = $this->resolve()->handle($order, 'ecpay');
-        // 已經交給 provider（有交易編號）。
-        $first->forceFill(['status' => PaymentStatus::Pending, 'provider_reference' => 'TXN-1'])->save();
+        $this->resolve()->handle($order, 'ecpay');
 
-        $second = $this->resolve()->handle($order->fresh(), 'ecpay');
+        // ⛔ 換 provider 也不能繞過：綠界那邊已經有一個活著的付款。
+        $this->assertNull($this->resolve()->handle($order->fresh(), 'line-pay'));
+        $this->assertSame(1, $order->paymentAttempts()->count());
+    }
 
-        // ⛔ 重用會讓同一個 reference 對應兩次付款嘗試。
-        $this->assertNotSame($first->id, $second->id);
+    public function test_two_sequential_submits_yield_one_claim(): void
+    {
+        $order = $this->order();
+
+        // 依序模擬兩次併發送出。⛔ 單行程無法真的並行；resolver 的保證來自
+        // order row lock，這裡驗證「後到的看到 pending 就止步」。
+        $claims = array_filter([
+            $this->resolve()->handle($order, 'ecpay'),
+            $this->resolve()->handle($order->fresh(), 'ecpay'),
+            $this->resolve()->handle($order->fresh(), 'line-pay'),
+        ]);
+
+        $this->assertCount(1, $claims);
     }
 
     public function test_a_paid_order_cannot_start_another_payment(): void
