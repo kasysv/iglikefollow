@@ -51,8 +51,12 @@ class ViewOrder extends ViewRecord
                     TextEntry::make('items.quantity')->label('數量')
                         ->formatStateUsing(fn ($state) => number_format((int) $state)),
                     // 完整四位小數快照，⛔ 不四捨五入成兩位顯示。
-                    TextEntry::make('items.unit_price_mills')->label('單價')
-                        ->formatStateUsing(fn ($state) => 'NT$'.Money::format((int) $state)),
+                    // ⛔ 標示為「計價率」：這不是客人付的錢，實際收款是下方的整數金額。
+                    TextEntry::make('items.unit_price_mills')->label('單價（計價率）')
+                        ->helperText('每一單位的計價率，不是實際收款金額。')
+                        ->formatStateUsing(fn ($state) => 'NT$'.Money::format((int) $state).' / 單位'),
+                    TextEntry::make('items.amount')->label('應付金額（整數台幣）')
+                        ->formatStateUsing(fn ($state) => 'NT$'.number_format((int) $state)),
                     TextEntry::make('items.target_value')->label('交付對象'),
                 ])->columns(3),
 

@@ -339,12 +339,18 @@ class OrderLifecycleTest extends TestCase
 
     // ================================================ 6. 快照不可變
 
-    public function test_editing_the_catalogue_does_not_change_an_existing_order(): void
+    public function test_editing_the_catalogue_does_not_change_an_existing_orders_snapshot(): void
     {
         $this->checkout()->assertOk();
 
         $item = Order::latest('id')->firstOrFail()->items()->firstOrFail();
-        $before = $item->only(['variant_label', 'unit_price_cents', 'amount', 'sku']);
+
+        // ⛔ 明確列出預期值，不用 only() 比對兩邊：欄位若不存在，兩邊都會是空的，
+        // 測試會在什麼都沒保證的情況下通過。
+        $this->assertSame('一般粉絲', $item->variant_label);
+        $this->assertSame(5900, (int) $item->unit_price_mills);   // 0.59 元／個
+        $this->assertSame(590, (int) $item->amount);              // 整數台幣應付額
+        $this->assertSame('ig-followers-standard', $item->sku);
 
         // 改價、改名、下架。
         $this->variant()->update([
@@ -353,7 +359,12 @@ class OrderLifecycleTest extends TestCase
             'status' => 'archived',
         ]);
 
-        $this->assertSame($before, $item->fresh()->only(['variant_label', 'unit_price_cents', 'amount', 'sku']));
+        $item = $item->fresh();
+
+        $this->assertSame('一般粉絲', $item->variant_label);
+        $this->assertSame(5900, (int) $item->unit_price_mills);
+        $this->assertSame(590, (int) $item->amount);
+        $this->assertSame('ig-followers-standard', $item->sku);
         $this->assertSame(590, Order::latest('id')->value('total_amount'));
     }
 

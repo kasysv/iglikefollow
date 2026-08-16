@@ -99,7 +99,8 @@ return [
                         'ig-auto-likes-standard' => [
                             'label' => '自動讚',
                             'description' => '依購買篇數，對之後的新貼文自動交付。',
-                            'quantity' => ['min' => 5, 'max' => 200, 'step' => 5, 'default' => 30, 'unit_price' => 42.67],
+                            // 42.67 × 5 = 213.35，不是整數台幣，客人無法付款；⛔ mock 價改為可整除的 42.60。
+                            'quantity' => ['min' => 5, 'max' => 200, 'step' => 5, 'default' => 30, 'unit_price' => 42.60],
                             'featured' => true,
                         ],
                     ],
@@ -197,7 +198,8 @@ return [
                         'fb-comments-standard' => [
                             'label' => '一般留言',
                             'description' => '隨機留言內容。',
-                            'quantity' => ['min' => 5, 'max' => 500, 'step' => 5, 'default' => 30, 'unit_price' => 24.67],
+                            // 24.67 × 5 = 123.35，同上；⛔ mock 價改為可整除的 24.60。
+                            'quantity' => ['min' => 5, 'max' => 500, 'step' => 5, 'default' => 30, 'unit_price' => 24.60],
                             'featured' => true,
                         ],
                         'fb-comments-review' => [

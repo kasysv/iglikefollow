@@ -2,18 +2,29 @@
 
 namespace App\Support;
 
+use App\Exceptions\NonIntegerAmountException;
+
 /**
  * Exact money arithmetic for catalogue prices and order amounts.
  *
- * Unit prices are decimal(12,4): a variant may legitimately cost NT$0.1234.
- * Multiplying that by a quantity in binary floating point loses precision at
- * exactly the scale that matters — 0.1 + 0.2 is famously not 0.3 — so every
- * calculation here works on integers.
+ * Two different quantities are involved here and conflating them is what this
+ * class exists to prevent:
  *
- * The internal unit is a "mill": one ten-thousandth of a NT dollar, which is
- * the full precision the price column can express. Totals are rounded to whole
- * NT dollars once, at the end, using half-up — the convention a customer
- * expects when a price lands on half a dollar.
+ *  - a *unit rate*, stored as decimal(12,4), which may legitimately be
+ *    NT$0.59 or even NT$0.1234 per follower. It is a rate, not a price anyone
+ *    is ever charged.
+ *  - a *payable amount*, which is always a whole number of NT dollars. TWD has
+ *    no sub-dollar denomination and no payment provider accepts one.
+ *
+ * Multiplying a rate by a quantity in binary floating point loses precision at
+ * exactly the scale that matters — 0.1 + 0.2 is famously not 0.3 — so every
+ * calculation here works on integers. The internal unit is a "mill": one
+ * ten-thousandth of a NT dollar, the full precision the price column can hold.
+ *
+ * ⛔ A product of rate × quantity that is not a whole number of dollars is NOT
+ * rounded. Rounding would quietly turn a misconfigured product into a payable
+ * order and charge the customer something the catalogue never advertised; the
+ * fault belongs to the price/step configuration, so it is raised there.
  */
 class Money
 {
@@ -52,14 +63,32 @@ class Money
     /**
      * Total payable in whole NT dollars.
      *
-     * quantity is an integer and unitPriceMills is an integer, so the product
-     * is exact; only the final division rounds, and it rounds half up.
+     * Both operands are integers, so the product is exact. If it does not
+     * divide into whole dollars the result is not payable in TWD at all, and
+     * ⛔ it is rejected rather than rounded — see the class comment.
+     *
+     * @throws NonIntegerAmountException
      */
     public static function total(int $unitPriceMills, int $quantity): int
     {
         $mills = $unitPriceMills * $quantity;
 
-        return intdiv($mills + intdiv(self::SCALE, 2), self::SCALE);
+        if ($mills % self::SCALE !== 0) {
+            throw new NonIntegerAmountException($unitPriceMills, $quantity, $mills);
+        }
+
+        return intdiv($mills, self::SCALE);
+    }
+
+    /**
+     * Would this rate and quantity produce a payable whole-dollar amount?
+     *
+     * Callers that must not throw — a catalogue validator checking every step
+     * in a range, say — ask this first.
+     */
+    public static function divides(int $unitPriceMills, int $quantity): bool
+    {
+        return ($unitPriceMills * $quantity) % self::SCALE === 0;
     }
 
     /** Mills back to a display string, e.g. 1234 → "0.1234". */

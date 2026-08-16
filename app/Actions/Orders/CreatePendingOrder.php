@@ -66,6 +66,8 @@ class CreatePendingOrder
                 'external_sku' => $variant->external_sku,
                 // ⛔ 保存完整四位小數精度；分為單位會把 0.1234 截成 0.12。
                 'unit_price_mills' => $variant->unitPriceMills(),
+                // legacy 欄位在 rollback window 內同步維護，⛔ 讓回退後的舊程式仍讀得到值。
+                'unit_price_cents' => intdiv($variant->unitPriceMills(), 100),
                 'quantity' => $quantity,
                 'quantity_unit' => $variant->quantity_unit,
                 'amount' => $amount,

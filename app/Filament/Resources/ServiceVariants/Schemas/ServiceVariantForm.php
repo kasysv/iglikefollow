@@ -3,6 +3,8 @@
 namespace App\Filament\Resources\ServiceVariants\Schemas;
 
 use App\Filament\Support\ImageField;
+use App\Models\ServiceVariant;
+use App\Support\Money;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -51,15 +53,22 @@ class ServiceVariantForm
                 ])))->columns(2),
 
             Section::make('價格與數量')
-                ->description('客人可以自己輸入數量，但必須在你設定的範圍內。金額由系統用「單價 × 數量」自動計算。')
+                ->description('客人可以自己輸入數量，但必須在你設定的範圍內。實際收款金額由系統用「單價 × 數量」自動計算，且一定是整數台幣。')
                 ->schema([
                     TextInput::make('unit_price')
-                        ->label('單價')
-                        ->helperText('一個多少錢，可以用小數。例如 0.59 代表一個粉絲 0.59 元；買 1000 個就是 590 元。')
+                        ->label('單價（計價率）')
+                        ->helperText('一個多少錢，可以用小數。例如 0.59 代表一個粉絲 0.59 元；買 1000 個就是 590 元。'
+                            .'⚠️ 這是計價用的單價，不是客人實際付的錢。實際收款一定是整數台幣，'
+                            .'所以「單價 × 任何客人買得到的數量」都必須剛好是整數元——例如單價 0.59 就要把數量間隔設成 100。')
                         ->numeric()
                         ->required()
                         ->minValue(0)
-                        ->prefix('NT$'),
+                        ->prefix('NT$')
+                        ->rules([
+                            fn ($get) => function (string $attribute, $value, $fail) use ($get) {
+                                self::failIfAnyQuantityIsNotWholeDollars($get, $value, $fail);
+                            },
+                        ]),
 
                     TextInput::make('quantity_unit')
                         ->label('數量單位')
@@ -192,5 +201,47 @@ class ServiceVariantForm
                         ->required(),
                 ])->columns(2),
         ]);
+    }
+
+    /**
+     * Reject a price/step combination that cannot be charged in whole dollars.
+     *
+     * The same rule is enforced by VariantIntegrityObserver, which is the
+     * actual guarantee — this exists so the admin sees the problem attached to
+     * the price field while editing, rather than as a save failure.
+     */
+    private static function failIfAnyQuantityIsNotWholeDollars($get, $value, \Closure $fail): void
+    {
+        if (blank($value) || ! is_numeric($value)) {
+            return;
+        }
+
+        try {
+            $rate = Money::toMills((string) $value);
+        } catch (\InvalidArgumentException) {
+            // 精度或格式問題由 numeric()／欄位本身回報，這裡不重複報錯。
+            return;
+        }
+
+        // firstNonIntegerQuantity() 讀 raw unit_price，故用 setRawAttributes 塞入表單當下的值。
+        $probe = new ServiceVariant;
+        $probe->setRawAttributes([
+            'unit_price' => (string) $value,
+            'min_quantity' => (int) ($get('min_quantity') ?: 1),
+            'max_quantity' => (int) ($get('max_quantity') ?: 1),
+            'step_quantity' => (int) ($get('step_quantity') ?: 1),
+        ], true);
+
+        if ($probe->min_quantity > $probe->max_quantity) {
+            return; // 範圍本身有錯，由數量欄位的規則回報。
+        }
+
+        $offending = $probe->firstNonIntegerQuantity();
+
+        if ($offending !== null) {
+            $amount = Money::format($rate * $offending);
+            $fail("單價 {$value} × 數量 {$offending} = {$amount} 元，不是整數新台幣，客人無法付款。"
+                .'請調整單價，或把數量間隔改成能整除的數字。');
+        }
     }
 }
