@@ -63,6 +63,7 @@ class EcpayCallbackController extends Controller
         }
 
         // 2. 交易編號必須對應一筆真實存在的付款嘗試。
+        //    ⛔ 唯讀查詢，這一步不寫入任何東西。
         $attempt = PaymentAttempt::query()
             ->where('provider', 'ecpay')
             ->where('reference', (string) ($payload['MerchantTradeNo'] ?? ''))
@@ -72,16 +73,29 @@ class EcpayCallbackController extends Controller
             return $this->reject();
         }
 
-        // 3. 金額必須等於我們自己算出來的整數台幣。
+        /*
+         * 3. 簽章必須先通過，而且要在「任何寫入之前」。
+         *
+         * ⛔ 順序是安全性的一部分，不是風格問題。先比金額再驗簽的話，知道
+         * attempt reference 的人只要送出錯誤金額＋垃圾簽章，就能把這筆嘗試
+         * 推進 reconciliation_required；客人真正的付款結果隨後抵達時，該
+         * 嘗試已經不是 open，於是永遠完成不了。那是一種用「寫入我們根本
+         * 不該相信的請求」達成的阻斷服務。
+         *
+         * constant-time 比對：字串比較會在第一個不同的位元組短路，洩漏
+         * 「猜對了幾個字元」。
+         */
+        if (! EcpayCheckMac::matches($payload, $hashKey, $hashIv, $payload['CheckMacValue'] ?? null)) {
+            return $this->reject();
+        }
+
+        // ── 以下都是「已確認來自綠界」的資料，才可以開始寫入 ──
+
+        // 4. 金額必須等於我們自己算出來的整數台幣。
         //    ⛔ 不信任回傳金額：這是防止被改價的最後一道。
         if ((string) ($payload['TradeAmt'] ?? '') !== (string) (int) $attempt->amount) {
             $this->markUncertain->handle($attempt, PaymentFailureReason::AmountMismatch);
 
-            return $this->reject();
-        }
-
-        // 4. 簽章必須通過，且以 constant-time 比對。
-        if (! EcpayCheckMac::matches($payload, $hashKey, $hashIv, $payload['CheckMacValue'] ?? null)) {
             return $this->reject();
         }
 
@@ -107,8 +121,13 @@ class EcpayCallbackController extends Controller
      */
     private function applyResult(PaymentAttempt $attempt, array $payload): void
     {
-        // 已經有結果的嘗試不再改寫；重複通知在這裡就停下來。
-        if (! $attempt->status->isOpen()) {
+        /*
+         * 已經有結果的嘗試不再改寫；重複通知在這裡就停下來。
+         *
+         * 待對帳是例外：它表示「結果不明」，而這裡的資料已經通過驗簽，
+         * 正是它在等的答案。⛔ 已成功的嘗試永遠不會走到這裡被降級。
+         */
+        if (! $attempt->status->isOpen() && ! $attempt->status->needsReconciliation()) {
             return;
         }
 

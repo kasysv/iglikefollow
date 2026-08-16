@@ -2,12 +2,10 @@
 
 namespace App\Http\Controllers\Payments;
 
+use App\Actions\Payments\ResolvePaymentAttempt;
 use App\Actions\Payments\StartCheckout;
-use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CheckoutRequest;
-use App\Models\Order;
-use App\Models\PaymentAttempt;
 use App\Services\Payments\PaymentGatewayRegistry;
 use App\Support\CheckoutSession;
 use Illuminate\Http\RedirectResponse;
@@ -25,6 +23,7 @@ class StartPaymentController extends Controller
 {
     public function __construct(
         private readonly StartCheckout $startCheckout,
+        private readonly ResolvePaymentAttempt $resolveAttempt,
         private readonly PaymentGatewayRegistry $registry,
         private readonly CheckoutSession $checkout,
     ) {}
@@ -47,10 +46,19 @@ class StartPaymentController extends Controller
         }
 
         $order = $result['order'];
-        $attempt = $this->openAttemptFor($order);
+
+        // ⛔ 依「這次選的 provider」取得或建立嘗試，不是拿最新的任何一筆：
+        // 用 LINE adapter 去處理 provider=ecpay 的嘗試，會讓交易編號屬於一個
+        // 系統、紀錄屬於另一個，之後任何 callback 都對不回來。
+        $attempt = $this->resolveAttempt->handle($order, $gateway->provider());
 
         if ($attempt === null) {
-            // 這張訂單已經沒有可付款的嘗試（多半已付款）。
+            // 已付款，或有待對帳的嘗試——兩種情況都不該再開始付款。
+            return redirect()->route('payments.status', ['reference' => $order->reference]);
+        }
+
+        // 最後一道：adapter 只能處理屬於自己的嘗試。
+        if ($attempt->provider !== $gateway->provider()) {
             return redirect()->route('payments.status', ['reference' => $order->reference]);
         }
 
@@ -76,14 +84,5 @@ class StartPaymentController extends Controller
             'endpoint' => $initiation->endpoint,
             'fields' => $initiation->fields,
         ]);
-    }
-
-    /** 這張訂單目前還能付款的那一筆嘗試。 */
-    private function openAttemptFor(Order $order): ?PaymentAttempt
-    {
-        return $order->paymentAttempts()
-            ->whereIn('status', [PaymentStatus::Initiated, PaymentStatus::Pending])
-            ->latest('id')
-            ->first();
     }
 }

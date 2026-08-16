@@ -51,8 +51,18 @@ class RecordPaymentResult
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            // 已經有結果的嘗試不再改寫：重複通知在這裡就停下來。
-            if (! $locked->status->isOpen()) {
+            /*
+             * 已經有結果的嘗試不再改寫：重複通知在這裡就停下來。
+             *
+             * 唯一的例外是「待對帳」。那個狀態的意思是「我們不知道結果」，
+             * 不是「結果是失敗」——所以一個經過驗簽的後續結果正是它在等的
+             * 答案，應該讓它收斂，否則這筆嘗試會永遠卡著。
+             *
+             * ⛔ 這不是自動重送：呼叫端仍必須先驗證來源（綠界驗簽、LINE 的
+             * signed confirm）。`isOpen()` 也刻意不包含待對帳，避免任何
+             * 「還開著就再送一次」的流程把它撿回去重打。
+             */
+            if (! $locked->status->isOpen() && ! $locked->status->needsReconciliation()) {
                 return $locked;
             }
 

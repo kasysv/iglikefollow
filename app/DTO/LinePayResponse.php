@@ -13,8 +13,12 @@ use App\Enums\PaymentFailureReason;
  * see a local reason token instead.
  *
  * The fields kept are only those we independently verify against our own
- * record: transaction id, order id, amount and currency. Everything else is
- * discarded at this boundary rather than filtered later.
+ * record: transaction id, order id, and the total of `info.payInfo[]`.
+ * Everything else is discarded at this boundary rather than filtered later.
+ *
+ * ⛔ There is no currency here, because the confirm response does not carry
+ * one. Keeping a field the provider never sends would mean a check that never
+ * runs — which is worse than no check, since it reads as though it does.
  */
 final class LinePayResponse
 {
@@ -23,8 +27,8 @@ final class LinePayResponse
         public readonly ?string $transactionId = null,
         public readonly ?string $paymentUrl = null,
         public readonly ?string $orderId = null,
-        public readonly ?int $amount = null,
-        public readonly ?string $currency = null,
+        public readonly ?int $payInfoTotal = null,
+        public readonly bool $payInfoIsValid = false,
         public readonly ?PaymentFailureReason $transportReason = null,
     ) {}
 
@@ -37,17 +41,64 @@ final class LinePayResponse
         $payment = $info['paymentUrl'] ?? [];
         $payment = is_array($payment) ? $payment : [];
 
-        // 金額可能出現在 info 或 info.payInfo；⛔ 只取數字，不接受字串運算。
-        $amount = $info['amount'] ?? null;
+        [$total, $valid] = self::sumPayInfo($info['payInfo'] ?? null);
 
         return new self(
             returnCode: (string) ($json['returnCode'] ?? ''),
             transactionId: isset($info['transactionId']) ? (string) $info['transactionId'] : null,
             paymentUrl: isset($payment['web']) ? (string) $payment['web'] : null,
             orderId: isset($info['orderId']) ? (string) $info['orderId'] : null,
-            amount: is_numeric($amount) ? (int) $amount : null,
-            currency: isset($info['currency']) ? (string) $info['currency'] : null,
+            payInfoTotal: $total,
+            payInfoIsValid: $valid,
         );
+    }
+
+    /**
+     * Total the amounts LINE Pay reports it actually took.
+     *
+     * ⛔ The confirm response puts money in `info.payInfo[]`, one entry per
+     * method — a payment split between LINE Pay and POINT arrives as two. There
+     * is no `info.amount` to read, so a check written against one would simply
+     * never run, and every confirm would pass the amount comparison by default.
+     *
+     * @return array{0: ?int, 1: bool} total, and whether the structure was sound
+     */
+    private static function sumPayInfo(mixed $payInfo): array
+    {
+        if (! is_array($payInfo) || $payInfo === []) {
+            return [null, false];
+        }
+
+        $total = 0;
+
+        foreach ($payInfo as $entry) {
+            if (! is_array($entry) || ! array_key_exists('amount', $entry)) {
+                return [null, false];
+            }
+
+            $amount = $entry['amount'];
+
+            // ⛔ 只接受非負整數：字串、小數、null 與負數都代表結構不如預期，
+            // 而「看不懂的金額」不能當成「金額正確」。
+            if (! is_int($amount) && ! (is_float($amount) && floor($amount) === $amount)) {
+                return [null, false];
+            }
+
+            $amount = (int) $amount;
+
+            if ($amount < 0) {
+                return [null, false];
+            }
+
+            // ⛔ 溢位前就停下，不讓總和變成 float。
+            if ($amount > PHP_INT_MAX - $total) {
+                return [null, false];
+            }
+
+            $total += $amount;
+        }
+
+        return [$total, true];
     }
 
     /** 連線失敗或逾時：⛔ 結果不明，不是失敗。 */

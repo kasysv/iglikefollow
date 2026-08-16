@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Payments;
 
 use App\Actions\Orders\MarkPaymentUncertain;
 use App\Actions\Orders\RecordPaymentResult;
+use App\DTO\LinePayResponse;
 use App\Enums\PaymentFailureReason;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
@@ -11,6 +12,7 @@ use App\Models\Order;
 use App\Models\PaymentAttempt;
 use App\Services\Payments\LinePayClient;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 
 /**
  * Where LINE Pay sends the customer back.
@@ -29,7 +31,7 @@ class LinePayReturnController extends Controller
         private readonly MarkPaymentUncertain $markUncertain,
     ) {}
 
-    public function confirm(string $reference): RedirectResponse
+    public function confirm(Request $request, string $reference): RedirectResponse
     {
         $order = Order::where('reference', $reference)->firstOrFail();
         $attempt = $this->openAttemptFor($order);
@@ -44,6 +46,22 @@ class LinePayReturnController extends Controller
         if (blank($transactionId)) {
             $this->markUncertain->handle($attempt, PaymentFailureReason::UnreadableResponse);
 
+            return $this->toStatus($order);
+        }
+
+        /*
+         * ⛔ LINE Pay 導回時一定會帶 orderId 與 transactionId；沒有帶、或帶得
+         * 不對，就不是它導回來的。
+         *
+         * 少了這道檢查，任何人只要知道訂單編號就能用一個 GET 觸發 confirm。
+         * 那不只是多送一次請求：對方若回未就緒或未知代碼，這筆嘗試會被卡進
+         * 待對帳，客人真正付款完成後就再也收斂不了。
+         *
+         * ⛔ query 的值只用來與本地已存值做精確比對，不拿來當金額、查詢條件
+         * 或導向目標。
+         */
+        if (! $this->identityMatches($request, $attempt, (string) $transactionId)) {
+            // ⛔ 不呼叫 provider、不寫入任何狀態。
             return $this->toStatus($order);
         }
 
@@ -101,40 +119,79 @@ class LinePayReturnController extends Controller
      * ⛔ Only an attempt that is still open may be cancelled: a payment that
      * already succeeded must not be downgraded by a stray cancel URL.
      */
-    public function cancel(string $reference): RedirectResponse
+    public function cancel(Request $request, string $reference): RedirectResponse
     {
         $order = Order::where('reference', $reference)->firstOrFail();
         $attempt = $this->openAttemptFor($order);
 
-        if ($attempt !== null) {
-            $this->recordPayment->handle(
-                $attempt,
-                PaymentStatus::Canceled,
-                failureCode: PaymentFailureReason::CanceledByUser->value,
-                failureMessage: PaymentFailureReason::CanceledByUser->message(),
-            );
+        // ⛔ 同樣的身分檢查：一個可偽造的 GET 不足以終止一筆付款嘗試。
+        // 客人可能其實付款成功了，只是有人先送了這個網址。
+        if ($attempt === null
+            || ! $this->identityMatches($request, $attempt, (string) $attempt->provider_reference)) {
+            return $this->toStatus($order);
         }
+
+        $this->recordPayment->handle(
+            $attempt,
+            PaymentStatus::Canceled,
+            failureCode: PaymentFailureReason::CanceledByUser->value,
+            failureMessage: PaymentFailureReason::CanceledByUser->message(),
+        );
 
         return $this->toStatus($order);
     }
 
-    /** 金額、幣別、訂單編號與交易編號全部一致才算數。 */
-    private function responseMatchesAttempt($response, PaymentAttempt $attempt): bool
+    /**
+     * Do the return-URL query parameters match what we already stored?
+     *
+     * ⛔ Exact comparison against local values only. The query is evidence that
+     * LINE Pay sent the customer here; it is never a source of data.
+     */
+    private function identityMatches(Request $request, PaymentAttempt $attempt, string $transactionId): bool
     {
-        if ($response->amount !== null && $response->amount !== (int) $attempt->amount) {
+        $orderId = $request->query('orderId');
+        $providerTransactionId = $request->query('transactionId');
+
+        if (! is_string($orderId) || ! is_string($providerTransactionId)) {
             return false;
         }
 
-        if ($response->currency !== null && $response->currency !== ($attempt->currency ?: 'TWD')) {
+        return hash_equals($attempt->reference, $orderId)
+            && $transactionId !== ''
+            && hash_equals($transactionId, $providerTransactionId);
+    }
+
+    /**
+     * Does this confirm response actually describe our payment?
+     *
+     * ⛔ Every field is *required*, not "checked if present". Treating a missing
+     * field as a pass means a response that omits it — or a shape we guessed
+     * wrong — silently satisfies the check, which is how an amount comparison
+     * ends up never running at all.
+     *
+     * ⛔ The currency is not compared: LINE Pay's confirm response does not
+     * carry one. It is guaranteed instead by the signed request we sent and by
+     * the database constraint that every attempt is TWD; inventing a field to
+     * compare would be checking our own fixture, not their answer.
+     */
+    private function responseMatchesAttempt(LinePayResponse $response, PaymentAttempt $attempt): bool
+    {
+        // payInfo 必須存在且結構完整；⛔ 空陣列、缺欄、字串或負數都不算數。
+        if (! $response->payInfoIsValid || $response->payInfoTotal === null) {
             return false;
         }
 
-        if ($response->orderId !== null && $response->orderId !== $attempt->reference) {
+        // 各付款方式（LINE Pay＋POINT 可能拆成多筆）的總和必須精確相等。
+        if ($response->payInfoTotal !== (int) $attempt->amount) {
             return false;
         }
 
-        if ($response->transactionId !== null
-            && $response->transactionId !== (string) $attempt->provider_reference) {
+        if ($response->orderId === null || $response->orderId !== $attempt->reference) {
+            return false;
+        }
+
+        if ($response->transactionId === null
+            || $response->transactionId !== (string) $attempt->provider_reference) {
             return false;
         }
 

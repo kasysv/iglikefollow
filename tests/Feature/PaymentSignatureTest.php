@@ -49,6 +49,69 @@ class PaymentSignatureTest extends TestCase
 
     // ============================================ ECPay CheckMacValue
 
+    /**
+     * ⭐ The worked example from ECPay's own documentation.
+     *
+     * Every other test here compares this implementation against itself, which
+     * proves it is consistent but not that it is *correct* — a wrong encoding
+     * step would be wrong identically on both sides and still pass. This is the
+     * only case with an expected digest that does not come from our own code.
+     *
+     * ⛔ The key and IV below are the ones printed in the public specification
+     * as a teaching example. They belong to nobody, authorise nothing, and are
+     * here so the algorithm can be re-verified without asking anyone for a real
+     * credential. No live merchant value is in this repository.
+     *
+     * Source: <https://developers.ecpay.com.tw/?p=2902>
+     */
+    public function test_the_mac_matches_the_published_worked_example(): void
+    {
+        $fields = [
+            'MerchantID' => '2000132',
+            'MerchantTradeNo' => '20130589723',
+            'MerchantTradeDate' => '2013/03/12 15:30:23',
+            'PaymentType' => 'aio',
+            'TotalAmount' => '1000',
+            'TradeDesc' => '促銷方案',
+            'ItemName' => 'Apple iphone 5',
+            'ReturnURL' => 'http://www.ecpay.com.tw/receive.php',
+            'ChoosePayment' => 'ALL',
+        ];
+
+        $this->assertSame(
+            '6A6C4ABCBD95416E6CB980FD31BC6098A85513B6C15E225A466FD4E03F0841B5',
+            EcpayCheckMac::generate($fields, '5294y06JbISpM5x9', 'v77hoKGq4kWxNNIS'),
+        );
+    }
+
+    /**
+     * The .NET-compatibility substitutions, pinned individually.
+     *
+     * ⛔ These are the step implementations usually get wrong, and getting one
+     * wrong produces a system where *some* orders can pay and others cannot —
+     * the hardest kind of fault to notice.
+     */
+    public function test_the_encoding_substitutions_are_applied(): void
+    {
+        // ⛔ 直接檢查被雜湊的那個字串，而不是比較兩個雜湊：
+        // 兩邊都錯的話，比較雜湊會一起錯得一模一樣而通過。
+        $encode = new \ReflectionMethod(EcpayCheckMac::class, 'dotNetUrlEncode');
+
+        $encoded = $encode->invoke(null, 'a b-c_d.e!f*g(h)i');
+
+        // 空白 → +
+        $this->assertStringContainsString('+', $encoded);
+        $this->assertStringNotContainsString('%20', $encoded);
+
+        // 這些字元必須維持原樣，⛔ 不得 percent-encode。
+        foreach (['-', '_', '.', '!', '*', '(', ')'] as $char) {
+            $this->assertStringContainsString($char, $encoded, "{$char} 不應被 percent-encode");
+        }
+
+        // 其餘字元仍要編碼，且整體轉小寫。
+        $this->assertSame(strtolower($encoded), $encoded, '編碼結果必須全小寫');
+    }
+
     public function test_the_mac_is_stable_for_the_same_input(): void
     {
         $first = EcpayCheckMac::generate($this->fields(), self::HASH_KEY, self::HASH_IV);

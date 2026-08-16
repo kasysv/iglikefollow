@@ -16,6 +16,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -219,98 +220,186 @@ class LinePayFlowTest extends TestCase
         ]);
     }
 
+    /**
+     * A confirm response in the shape LINE Pay actually returns.
+     *
+     * ⛔ The money is in `info.payInfo[]`, one entry per method — there is no
+     * `info.amount`. A check written against a field the provider never sends
+     * simply never runs, so every confirm would pass the amount comparison by
+     * default.
+     *
+     * @param  list<array<string, mixed>>|null  $payInfo
+     */
+    private function officialConfirm(
+        PaymentAttempt $attempt,
+        ?array $payInfo = null,
+        array $overrides = [],
+    ): array {
+        $info = array_merge([
+            'orderId' => $attempt->reference,
+            'transactionId' => '2026081700000001',
+            'payInfo' => $payInfo ?? [
+                ['method' => 'CREDIT_CARD', 'amount' => (int) $attempt->amount],
+            ],
+        ], $overrides);
+
+        return ['returnCode' => '0000', 'returnMessage' => 'Success.', 'info' => $info];
+    }
+
+    /** LINE Pay 導回時固定附加的 query。 */
+    private function returnUrl(PaymentAttempt $attempt, string $action = 'confirm', array $query = []): string
+    {
+        $query = array_merge([
+            'orderId' => $attempt->reference,
+            'transactionId' => (string) $attempt->provider_reference,
+        ], $query);
+
+        return "/payments/linepay/{$attempt->order->reference}/{$action}?".http_build_query($query);
+    }
+
     public function test_a_confirmed_payment_marks_the_order_paid(): void
     {
         $attempt = $this->pendingAttempt();
+        $this->fakeConfirm($this->officialConfirm($attempt));
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                'amount' => 590,
-                'currency' => 'TWD',
-            ],
-        ]);
-
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm")
-            ->assertRedirect();
+        $this->get($this->returnUrl($attempt))->assertRedirect();
 
         $this->assertSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
         $this->assertSame(OrderStatus::Paid, $attempt->order->fresh()->order_status);
     }
 
-    public function test_a_browser_return_alone_cannot_mark_paid(): void
+    public function test_a_split_payment_totals_correctly(): void
     {
         $attempt = $this->pendingAttempt();
 
-        // 對方說「這筆不存在」——瀏覽器回來了，但確認失敗。
-        $this->fakeConfirm(['returnCode' => '1150', 'returnMessage' => 'no such transaction']);
+        // LINE Pay 與 POINT 拆成兩筆，合計正好等於訂單金額。
+        $this->fakeConfirm($this->officialConfirm($attempt, [
+            ['method' => 'BALANCE', 'amount' => 500],
+            ['method' => 'POINT', 'amount' => 90],
+        ]));
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
-        // ⛔ 未知代碼進人工對帳，絕不標記為已付款。
+        $this->assertSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+    }
+
+    public function test_a_split_payment_that_does_not_add_up_is_refused(): void
+    {
+        $attempt = $this->pendingAttempt();
+
+        // 合計 580，訂單是 590。
+        $this->fakeConfirm($this->officialConfirm($attempt, [
+            ['method' => 'BALANCE', 'amount' => 500],
+            ['method' => 'POINT', 'amount' => 80],
+        ]));
+
+        $this->get($this->returnUrl($attempt));
+
         $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
         $this->assertSame(OrderStatus::PendingPayment, $attempt->order->fresh()->order_status);
     }
 
-    public function test_an_amount_mismatch_never_marks_paid(): void
+    public static function malformedPayInfoProvider(): array
+    {
+        return [
+            'empty array' => [[]],
+            'missing amount' => [[['method' => 'BALANCE']]],
+            'string amount' => [[['method' => 'BALANCE', 'amount' => '590']]],
+            'negative amount' => [[['method' => 'BALANCE', 'amount' => -590]]],
+            'fractional amount' => [[['method' => 'BALANCE', 'amount' => 589.5]]],
+            'not a list' => [[['amount' => 590], 'nonsense']],
+        ];
+    }
+
+    /** ⛔ 看不懂的金額不能當成「金額正確」。 */
+    #[DataProvider('malformedPayInfoProvider')]
+    public function test_malformed_pay_info_never_marks_paid(array $payInfo): void
+    {
+        $attempt = $this->pendingAttempt();
+        $this->fakeConfirm($this->officialConfirm($attempt, $payInfo));
+
+        $this->get($this->returnUrl($attempt));
+
+        $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+        $this->assertSame(OrderStatus::PendingPayment, $attempt->order->fresh()->order_status);
+    }
+
+    public function test_a_missing_pay_info_never_marks_paid(): void
     {
         $attempt = $this->pendingAttempt();
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                // ⛔ 對方說 1 元，我們的訂單是 590。
-                'amount' => 1,
-                'currency' => 'TWD',
-            ],
-        ]);
+        $confirm = $this->officialConfirm($attempt);
+        unset($confirm['info']['payInfo']);
+        $this->fakeConfirm($confirm);
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
-        $this->assertSame(PaymentStatus::ReconciliationRequired, $attempt->fresh()->status);
-        $this->assertSame(OrderStatus::PendingPayment, $attempt->order->fresh()->order_status);
+        $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+    }
+
+    public function test_a_missing_order_id_never_marks_paid(): void
+    {
+        $attempt = $this->pendingAttempt();
+
+        $confirm = $this->officialConfirm($attempt);
+        unset($confirm['info']['orderId']);
+        $this->fakeConfirm($confirm);
+
+        $this->get($this->returnUrl($attempt));
+
+        // ⛔ 欄位缺少不得被當成「略過比較」。
+        $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+    }
+
+    public function test_a_missing_transaction_id_never_marks_paid(): void
+    {
+        $attempt = $this->pendingAttempt();
+
+        $confirm = $this->officialConfirm($attempt);
+        unset($confirm['info']['transactionId']);
+        $this->fakeConfirm($confirm);
+
+        $this->get($this->returnUrl($attempt));
+
+        $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
     }
 
     public function test_an_order_id_mismatch_never_marks_paid(): void
     {
         $attempt = $this->pendingAttempt();
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => 'SOMEONE-ELSES-ORDER',
-                'amount' => 590,
-                'currency' => 'TWD',
-            ],
-        ]);
+        $this->fakeConfirm($this->officialConfirm($attempt, null, [
+            'orderId' => 'SOMEONE-ELSES-ORDER',
+        ]));
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
         $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
     }
 
-    public function test_a_currency_mismatch_never_marks_paid(): void
+    public function test_a_transaction_id_mismatch_never_marks_paid(): void
     {
         $attempt = $this->pendingAttempt();
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                'amount' => 590,
-                'currency' => 'JPY',
-            ],
-        ]);
+        $this->fakeConfirm($this->officialConfirm($attempt, null, [
+            'transactionId' => '9999999999999999',
+        ]));
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
         $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+    }
+
+    public function test_a_browser_return_alone_cannot_mark_paid(): void
+    {
+        $attempt = $this->pendingAttempt();
+
+        $this->fakeConfirm(['returnCode' => '1150', 'returnMessage' => 'no such transaction']);
+
+        $this->get($this->returnUrl($attempt));
+
+        $this->assertNotSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+        $this->assertSame(OrderStatus::PendingPayment, $attempt->order->fresh()->order_status);
     }
 
     public function test_a_confirm_timeout_goes_to_reconciliation(): void
@@ -321,7 +410,7 @@ class LinePayFlowTest extends TestCase
             self::BASE.'/v4/payments/*/confirm' => fn () => throw new ConnectionException('timeout'),
         ]);
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
         // ⛔ 錢可能已經扣了：不得記為失敗，也不得自動重送。
         $this->assertSame(PaymentStatus::ReconciliationRequired, $attempt->fresh()->status);
@@ -330,17 +419,9 @@ class LinePayFlowTest extends TestCase
     public function test_the_confirm_uses_our_own_amount(): void
     {
         $attempt = $this->pendingAttempt();
+        $this->fakeConfirm($this->officialConfirm($attempt));
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                'amount' => 590, 'currency' => 'TWD',
-            ],
-        ]);
-
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
         Http::assertSent(function ($request) {
             if (! str_contains($request->url(), '/confirm')) {
@@ -352,13 +433,58 @@ class LinePayFlowTest extends TestCase
         });
     }
 
-    // ============================================ 5. 取消與重複
+    // ============================================ 5. 導回身分檢查
 
-    public function test_cancel_marks_an_open_attempt_canceled(): void
+    public function test_a_return_without_query_calls_nobody(): void
+    {
+        $attempt = $this->pendingAttempt();
+        Http::fake();
+
+        $this->get("/payments/linepay/{$attempt->order->reference}/confirm")
+            ->assertRedirect();
+
+        // ⛔ 沒有官方 query 就不是 LINE Pay 導回的，不得呼叫 provider。
+        Http::assertNothingSent();
+        $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
+    }
+
+    public function test_a_return_with_a_forged_order_id_calls_nobody(): void
+    {
+        $attempt = $this->pendingAttempt();
+        Http::fake();
+
+        $this->get($this->returnUrl($attempt, 'confirm', ['orderId' => 'NOT-MINE']));
+
+        Http::assertNothingSent();
+        $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
+    }
+
+    public function test_a_return_with_a_forged_transaction_id_calls_nobody(): void
+    {
+        $attempt = $this->pendingAttempt();
+        Http::fake();
+
+        $this->get($this->returnUrl($attempt, 'confirm', ['transactionId' => '123']));
+
+        Http::assertNothingSent();
+        $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
+    }
+
+    public function test_cancel_without_query_changes_nothing(): void
     {
         $attempt = $this->pendingAttempt();
 
         $this->get("/payments/linepay/{$attempt->order->reference}/cancel")->assertRedirect();
+
+        // ⛔ 一個可偽造的 GET 不足以終止付款：客人可能其實已經付成功了。
+        $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
+    }
+
+    public function test_cancel_with_official_query_marks_canceled(): void
+    {
+        $attempt = $this->pendingAttempt();
+
+        $this->get($this->returnUrl($attempt, 'cancel'))->assertRedirect();
 
         $this->assertSame(PaymentStatus::Canceled, $attempt->fresh()->status);
     }
@@ -366,21 +492,12 @@ class LinePayFlowTest extends TestCase
     public function test_cancel_cannot_downgrade_a_paid_order(): void
     {
         $attempt = $this->pendingAttempt();
+        $this->fakeConfirm($this->officialConfirm($attempt));
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                'amount' => 590, 'currency' => 'TWD',
-            ],
-        ]);
-
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
         $this->assertSame(OrderStatus::Paid, $attempt->order->fresh()->order_status);
 
-        // 之後才到的取消。
-        $this->get("/payments/linepay/{$attempt->order->reference}/cancel");
+        $this->get($this->returnUrl($attempt, 'cancel'));
 
         // ⛔ 已付款不得被降級。
         $this->assertSame(OrderStatus::Paid, $attempt->order->fresh()->order_status);
@@ -392,17 +509,9 @@ class LinePayFlowTest extends TestCase
         Event::fake([OrderPaid::class]);
 
         $attempt = $this->pendingAttempt();
+        $this->fakeConfirm($this->officialConfirm($attempt));
 
-        $this->fakeConfirm([
-            'returnCode' => '0000',
-            'info' => [
-                'transactionId' => '2026081700000001',
-                'orderId' => $attempt->reference,
-                'amount' => 590, 'currency' => 'TWD',
-            ],
-        ]);
-
-        $url = "/payments/linepay/{$attempt->order->reference}/confirm";
+        $url = $this->returnUrl($attempt);
         $this->get($url);
         $this->get($url);
         $this->get($url);
@@ -421,7 +530,7 @@ class LinePayFlowTest extends TestCase
             'returnMessage' => 'ChannelSecret=test-channel-secret-0001 buyer@example.com',
         ]);
 
-        $this->get("/payments/linepay/{$attempt->order->reference}/confirm");
+        $this->get($this->returnUrl($attempt));
 
         $raw = json_encode([
             DB::table('payment_attempts')->get(),
