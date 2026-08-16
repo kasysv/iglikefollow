@@ -113,6 +113,46 @@ class AdminFieldsRenderTest extends TestCase
             ->assertSee('平台服務準備中的說明。');
     }
 
+    public function test_the_platform_intro_appears_near_the_top_of_the_page(): void
+    {
+        $platform = $this->platform(['intro' => 'PLATFORM-INTRO-値', 'tagline' => 'TAGLINE-値']);
+        $this->service($platform);
+
+        $html = $this->get('/services/instagram')->assertOk()->getContent();
+
+        $intro = strpos($html, 'PLATFORM-INTRO-値');
+        $tagline = strpos($html, 'TAGLINE-値');
+        // 「選擇服務」在頁首導覽也是純文字，⛔ 必須比對 <h2> 標籤才是服務區塊本身。
+        $picker = strpos($html, '>選擇服務</h2>');
+
+        // 詳細介紹屬於頁首內容：接在一句話介紹之後、服務列表之前。
+        // ⛔ 之前輸出在整頁約 79% 的位置，管理者填了會以為沒有生效。
+        $this->assertNotFalse($intro);
+        $this->assertGreaterThan($tagline, $intro, '詳細介紹應該排在一句話介紹之後');
+        $this->assertLessThan($picker, $intro, '詳細介紹應該排在服務列表之前');
+    }
+
+    public function test_the_platform_intro_is_not_printed_twice(): void
+    {
+        $platform = $this->platform(['intro' => 'UNIQUE-PLATFORM-INTRO']);
+        $this->service($platform);
+
+        $html = $this->get('/services/instagram')->assertOk()->getContent();
+
+        $this->assertSame(1, substr_count($html, 'UNIQUE-PLATFORM-INTRO'));
+    }
+
+    public function test_the_empty_state_does_not_repeat_the_platform_intro(): void
+    {
+        // 沒有已發布服務的平台：hero 顯示一次即可。
+        $this->platform(['intro' => 'UNIQUE-EMPTY-INTRO']);
+
+        $html = $this->get('/services/instagram')->assertOk()->getContent();
+
+        $this->assertSame(1, substr_count($html, 'UNIQUE-EMPTY-INTRO'));
+        $this->assertStringContainsString('服務資料準備中', $html);
+    }
+
     public function test_admin_supplied_intro_is_escaped_not_executed(): void
     {
         $platform = $this->platform(['intro' => '<script>alert(1)</script>']);

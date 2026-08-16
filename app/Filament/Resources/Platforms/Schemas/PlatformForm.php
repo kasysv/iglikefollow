@@ -49,7 +49,7 @@ class PlatformForm
                 ])->columns(2),
 
             Section::make('平台頁面內容')
-                ->description('平台總覽頁上顯示的文字。留空會自動使用預設值。')
+                ->description('平台總覽頁最上方的文字。顯示順序：小標籤 → 頁面大標題 → 一句話介紹（在上面「基本資料」設定）→ 詳細介紹。')
                 ->schema([
                     TextInput::make('eyebrow')
                         ->label('小標籤')
@@ -63,8 +63,8 @@ class PlatformForm
 
                     Textarea::make('intro')
                         ->label('詳細介紹')
-                        ->helperText('較長的說明文字。平台尚未開放時，這段會顯示為「準備中」的說明。')
-                        ->rows(4)
+                        ->helperText('顯示在平台頁最上方，接在「一句話介紹」下面。可以換行分段，前台會保留換行。')
+                        ->rows(5)
                         ->columnSpanFull(),
 
                     ImageField::upload('hero_image_path')->label('主視覺圖片'),

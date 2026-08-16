@@ -54,6 +54,15 @@
             <p class="mt-5 max-w-xl text-base leading-8 text-black/60 sm:text-lg">
                 {{ $platform->tagline }}
             </p>
+
+            {{-- 「詳細介紹」屬於平台頁最上方的內容，接在一句話介紹之後。
+                 ⛔ 原本只輸出在頁面最下方（約 79% 處），管理者填了會找不到。 --}}
+            @if (filled($platform->intro))
+                <p class="mt-4 max-w-xl whitespace-pre-line leading-8 text-black/60">
+                    {{ $platform->intro }}
+                </p>
+            @endif
+
             @if ($isAvailable && $goals->isNotEmpty())
                 <div class="mt-7 flex flex-wrap gap-2">
                     @foreach ($goals->keys() as $goal)
@@ -211,15 +220,7 @@
             </div>
         </section>
 
-        {{-- 「詳細介紹」在有服務時同樣要顯示，⛔ 不可只出現在空狀態。 --}}
-        @if (filled($platform->intro))
-            <section class="border-t border-black/10 bg-white">
-                <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8 lg:py-16">
-                    <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">關於 {{ $platform->name }} 服務</h2>
-                    <p class="mt-4 whitespace-pre-line leading-8 text-black/60">{{ $platform->intro }}</p>
-                </div>
-            </section>
-        @endif
+        {{-- 「詳細介紹」已改在頁面上方的 hero 顯示，⛔ 這裡不再重複輸出同一段文字。 --}}
 
         @if ($faqs->isNotEmpty())
             <section class="border-t border-black/10 bg-paper">
@@ -241,8 +242,9 @@
             <div class="mx-auto max-w-3xl px-5 py-14 sm:px-8 lg:py-20">
                 <div class="surface p-7 sm:p-9">
                     <h2 class="text-2xl font-bold tracking-[-0.03em] sm:text-3xl">服務資料準備中</h2>
+                    {{-- 詳細介紹已在上方 hero 顯示，⛔ 這裡不重複；只說明目前沒有方案。 --}}
                     <p class="mt-4 leading-8 text-black/60">
-                        {{ $platform->intro ?: '目前沒有可販售的方案、價格或交付時間可以提供。等到服務資料確認後，這一頁才會顯示實際內容。' }}
+                        目前沒有可販售的方案、價格或交付時間可以提供。等到服務資料確認後，這一頁才會顯示實際內容。
                     </p>
                     <a href="{{ route('home') }}#platforms"
                        class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full border border-black/15 bg-white px-6 text-base font-bold transition-colors duration-200 hover:border-ink">
