@@ -13,10 +13,36 @@ use Illuminate\Validation\ValidationException;
  * because an inconsistent variant is not merely untidy: a default quantity
  * outside the allowed range means the checkout page opens in a state the
  * server will reject, so the customer cannot buy at all.
+ *
+ * The rules come in two kinds, and the difference matters:
+ *
+ *  - *structural* rules describe a coherent record and apply in every state.
+ *    A step of zero or a default outside the range is meaningless whether the
+ *    variant is published or not.
+ *  - *sellability* rules describe something a customer can actually buy, and
+ *    ⛔ apply only when the variant will be published after this save.
+ *
+ * Applying sellability rules to drafts would trap broken data: a variant that
+ * was published before these rules existed could not be taken down, because
+ * the save that unpublishes it would be rejected for the very defect being
+ * removed from sale. Unpublishing must always be possible — it is the fix.
  */
 class VariantIntegrityObserver
 {
     public function saving(ServiceVariant $variant): void
+    {
+        $this->assertStructureIsCoherent($variant);
+
+        // ⛔ 只有「存檔後會是已發布」才需要通過可售性檢查。
+        if ($variant->status === 'published') {
+            $this->assertPriceIsSellable($variant);
+            $this->assertRangeContainsAPurchasableQuantity($variant);
+            $this->assertEveryQuantityIsPayable($variant);
+        }
+    }
+
+    /** 結構規則：任何狀態都必須成立，草稿也不例外。 */
+    private function assertStructureIsCoherent(ServiceVariant $variant): void
     {
         $min = (int) $variant->min_quantity;
         $max = (int) $variant->max_quantity;
@@ -46,10 +72,6 @@ class VariantIntegrityObserver
                 'default_quantity' => "預設數量必須是數量間隔（{$step}）的倍數。",
             ]);
         }
-
-        $this->assertPriceIsSellable($variant);
-        $this->assertRangeContainsAPurchasableQuantity($variant);
-        $this->assertEveryQuantityIsPayable($variant);
     }
 
     /**

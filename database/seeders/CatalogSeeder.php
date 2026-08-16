@@ -103,31 +103,46 @@ class CatalogSeeder extends Seeder
         }
     }
 
+    /**
+     * Create missing variants from the fixture; ⛔ never overwrite existing ones.
+     *
+     * These are mock starting values, but once a variant exists it is managed
+     * from the admin: prices, quantity steps and publication status are business
+     * decisions someone made deliberately. Re-running the seeder used to reset
+     * all of them, which would silently republish a draft that was taken down on
+     * purpose and undo corrected quantity steps. A seeder is for filling gaps,
+     * not for asserting authority over live data.
+     */
     private function seedVariants(Service $service, array $serviceData): void
     {
         $unit = $serviceData['quantity_unit'] ?? '個';
         $order = 0;
 
         foreach ($serviceData['variants'] as $sku => $variantData) {
-            $variant = ServiceVariant::withTrashed()->updateOrCreate(
-                ['sku' => $sku],
-                [
-                    'service_id' => $service->id,
-                    'label' => $variantData['label'],
-                    'description' => $variantData['description'],
-                    'quantity_unit' => $unit,
-                    'min_quantity' => $variantData['quantity']['min'],
-                    'max_quantity' => $variantData['quantity']['max'],
-                    'step_quantity' => $variantData['quantity']['step'],
-                    'default_quantity' => $variantData['quantity']['default'],
-                    'unit_price' => $variantData['quantity']['unit_price'],
-                    'currency' => 'TWD',
-                    'is_featured' => ! empty($variantData['featured']),
-                    'status' => 'published',
-                    'sort_order' => $order++,
-                    'deleted_at' => null,
-                ]
-            );
+            $position = $order++;
+
+            // ⛔ 已存在（含軟刪除）就完全不碰：狀態、價格、數量與上架時間都不動。
+            if (ServiceVariant::withTrashed()->where('sku', $sku)->exists()) {
+                continue;
+            }
+
+            $variant = ServiceVariant::create([
+                'sku' => $sku,
+                'service_id' => $service->id,
+                'label' => $variantData['label'],
+                'description' => $variantData['description'],
+                'quantity_unit' => $unit,
+                'min_quantity' => $variantData['quantity']['min'],
+                'max_quantity' => $variantData['quantity']['max'],
+                'step_quantity' => $variantData['quantity']['step'],
+                'default_quantity' => $variantData['quantity']['default'],
+                'unit_price' => $variantData['quantity']['unit_price'],
+                'currency' => 'TWD',
+                'is_featured' => ! empty($variantData['featured']),
+                // fixture 未指定就預設上架；未確認價格組合的商品明確標為草稿。
+                'status' => $variantData['status'] ?? 'published',
+                'sort_order' => $position,
+            ]);
 
             $variant->forceFill([
                 'first_published_at' => $variant->first_published_at ?? now(),

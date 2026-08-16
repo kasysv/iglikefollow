@@ -17,6 +17,10 @@
 | ⛔ min / max / unit_price 全為 mock，不是正式售價或正式級距。
 | ⛔ 正式值仍為 unknown（ACTIVE ISSUE-01），取得前不得對外承諾。
 |
+| variant 可加 'status' => 'draft'，代表全新建立時不上架（價格組合尚未確認）。
+| 未指定即為 published。⛔ 這裡的值只在 variant 不存在時使用：seeder 不覆寫
+| 後台已管理的資料。
+|
 */
 
 return [
@@ -101,6 +105,8 @@ return [
                             'description' => '依購買篇數，對之後的新貼文自動交付。',
                             // 42.67 × 5 = 213.35，不是整數台幣，客人無法付款；⛔ mock 價改為可整除的 42.60。
                             'quantity' => ['min' => 5, 'max' => 200, 'step' => 5, 'default' => 30, 'unit_price' => 42.60],
+                            // ⛔ 正式價格與數量組合尚未確認前不上架。
+                            'status' => 'draft',
                             'featured' => true,
                         ],
                     ],
@@ -200,6 +206,8 @@ return [
                             'description' => '隨機留言內容。',
                             // 24.67 × 5 = 123.35，同上；⛔ mock 價改為可整除的 24.60。
                             'quantity' => ['min' => 5, 'max' => 500, 'step' => 5, 'default' => 30, 'unit_price' => 24.60],
+                            // ⛔ 正式價格與數量組合尚未確認前不上架。
+                            'status' => 'draft',
                             'featured' => true,
                         ],
                         'fb-comments-review' => [
