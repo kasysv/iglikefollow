@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentFailureReason;
 use App\Enums\PaymentStatus;
 use App\Events\OrderPaid;
 use App\Models\IntegrationSetting;
@@ -171,7 +172,14 @@ class LinePayFlowTest extends TestCase
 
     // ============================================ 3. request 失敗與不明
 
-    public function test_a_business_error_does_not_start_a_payment(): void
+    /**
+     * `1106` 是官方表上的 **request header error**——是我們送錯了。
+     *
+     * ⛔ 舊名稱把它說成 business decline。那會讓客人被告知「你的卡片被拒絕」，
+     * 於是換卡、打給銀行、最後放棄——而真正的問題出在我們的請求標頭。
+     * 付款訊息的措辭本身就是信任問題。
+     */
+    public function test_a_request_header_error_is_not_blamed_on_the_customer(): void
     {
         Http::fake([
             self::BASE.'/v4/payments/request' => Http::response([
@@ -184,8 +192,11 @@ class LinePayFlowTest extends TestCase
         $result = $this->gateway()->initiate($attempt);
 
         $this->assertTrue($result->isFailed());
-        // 尚未開始付款，狀態不變。
-        $this->assertSame(PaymentStatus::Initiated, $attempt->fresh()->status);
+        // ⛔ 不得對客人說「你被拒絕了」。
+        $this->assertNotSame(PaymentFailureReason::Declined, $result->reason);
+        $this->assertSame(PaymentFailureReason::VerificationFailed, $result->reason);
+        // 確定沒有付款 session，收斂成 failed 讓客人能再試。
+        $this->assertSame(PaymentStatus::Failed, $attempt->fresh()->status);
     }
 
     public function test_malformed_json_is_treated_as_unreadable(): void

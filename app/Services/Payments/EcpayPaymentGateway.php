@@ -2,6 +2,8 @@
 
 namespace App\Services\Payments;
 
+use App\Actions\Orders\MarkPaymentPending;
+use App\Actions\Payments\FailPaymentInitiation;
 use App\Contracts\PaymentGateway;
 use App\DTO\PaymentInitiation;
 use App\Enums\IntegrationEnvironment;
@@ -23,6 +25,11 @@ use App\Models\PaymentAttempt;
  */
 class EcpayPaymentGateway implements PaymentGateway
 {
+    public function __construct(
+        private readonly FailPaymentInitiation $failInitiation,
+        private readonly MarkPaymentPending $markPending,
+    ) {}
+
     public function provider(): string
     {
         return 'ecpay';
@@ -36,24 +43,31 @@ class EcpayPaymentGateway implements PaymentGateway
             return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
         }
 
+        /*
+         * ⛔ 以下每一種情況都代表「確定沒有付款 session」，所以必須把已經
+         * claim 的 attempt 收斂成 failed。
+         *
+         * 只回一個 failed initiation 是不夠的：attempt 會留在 pending，而
+         * resolver 正確地擋下任何 pending，於是這張訂單再也付不了款——連換
+         * 一家 provider 都不行。claim 一旦取得，就有責任放掉。
+         */
         $setting = $this->setting();
 
         if ($setting === null) {
-            // ⛔ 沒有可用設定就誠實失敗，不假裝付款開始了。
-            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
+            return $this->giveUp($attempt);
         }
 
         $endpoint = (string) config('integrations.endpoints.ecpay_payment.sandbox');
 
         if ($endpoint === '') {
-            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
+            return $this->giveUp($attempt);
         }
 
         $hashKey = $setting->secret('HashKey');
         $hashIv = $setting->secret('HashIV');
 
         if ($hashKey === null || $hashIv === null || blank($setting->identifier)) {
-            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
+            return $this->giveUp($attempt);
         }
 
         $fields = $this->fieldsFor($attempt, (string) $setting->identifier);
@@ -61,7 +75,28 @@ class EcpayPaymentGateway implements PaymentGateway
         // 簽章在最後一步加上，⛔ 涵蓋所有其他欄位。
         $fields['CheckMacValue'] = EcpayCheckMac::generate($fields, $hashKey, $hashIv);
 
+        /*
+         * 訂單的付款狀態要跟著這筆嘗試走。
+         *
+         * ⛔ 否則會出現 attempt=pending 但 order=initiated 的不一致：後台看到
+         * 的訂單狀態，和實際上正在進行的付款對不上。
+         */
+        $this->markPending->handle($attempt);
+
         return PaymentInitiation::formPost($endpoint, $fields);
+    }
+
+    /**
+     * Release the claim: this initiation is definitely not happening.
+     *
+     * ⛔ Safe only because nothing was sent — no ECPay request is made until the
+     * customer's browser posts the form, so there is no session to reconcile.
+     */
+    private function giveUp(PaymentAttempt $attempt): PaymentInitiation
+    {
+        $this->failInitiation->handle($attempt, PaymentFailureReason::ProviderUnavailable);
+
+        return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
     }
 
     /**

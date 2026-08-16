@@ -148,9 +148,16 @@ final class LinePayResponse
     /**
      * Map a business return code to one of our own reasons.
      *
-     * ⛔ Only a small set is classified. Anything else becomes Unknown and goes
-     * to reconciliation rather than being recorded as a definite failure —
-     * "we do not recognise this code" is not evidence that no money moved.
+     * ⛔ The mapping decides what the customer is told, so a merchant-side
+     * mistake must never surface as "your card was declined". A shopper who
+     * reads that will change cards, call their bank, and give up — while the
+     * actual fault was our request header or our amount configuration.
+     *
+     * ⛔ Only codes with a current official meaning are classified. Anything
+     * else stays Unknown and goes to reconciliation: not recognising a code is
+     * not evidence that no money moved.
+     *
+     * Source: <https://developers-pay.line.me/online-api-v4/#result-code>
      */
     public function reason(): PaymentFailureReason
     {
@@ -159,11 +166,22 @@ final class LinePayResponse
         }
 
         return match ($this->returnCode) {
-            '1104', '1105' => PaymentFailureReason::ProviderUnavailable,
-            '1106', '1124' => PaymentFailureReason::Declined,
-            '1113', '1183' => PaymentFailureReason::Declined,
+            /*
+             * 我們這邊送錯了——header、金額或最低消費設定有問題。
+             *
+             * ⛔ 用 VerificationFailed 而非 AmountMismatch：後者被歸類為
+             * 「結果不明」，那是為了 callback 情境（錢可能已經動了）。這裡是
+             * request 被當場拒絕，確定沒有建立付款 session，屬於可安全重試的
+             * 確定性失敗——留在待對帳只會把訂單鎖死。
+             */
+            '1104', '1105', '1106', '1124', '1183' => PaymentFailureReason::VerificationFailed,
+
+            // 真正屬於客戶／付款方式被拒的代碼。
+            '1101', '1102', '1110', '1142', '1298' => PaymentFailureReason::Declined,
+
             '1155' => PaymentFailureReason::AmountMismatch,
             '1198' => PaymentFailureReason::Timeout,
+
             default => PaymentFailureReason::Unknown,
         };
     }

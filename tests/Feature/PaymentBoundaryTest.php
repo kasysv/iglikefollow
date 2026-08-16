@@ -341,7 +341,13 @@ class PaymentBoundaryTest extends TestCase
         $this->assertSame(OrderStatus::PendingPayment, $attempt->order->fresh()->order_status);
     }
 
-    public function test_a_missing_credential_stays_retryable(): void
+    /**
+     * ⭐ R3 更正：這個測試的名字原本說「可重試」，斷言的卻是 `Pending`。
+     *
+     * ⛔ 那正是卡死狀態——resolver 會擋下任何 pending，所以那張訂單其實
+     * 永遠付不了款。「可重試」的意思是收斂成 failed 之後真的能再開一筆。
+     */
+    public function test_a_missing_credential_converges_so_a_retry_is_possible(): void
     {
         $attempt = $this->lineAttempt();
         DB::table('integration_settings')->update(['is_enabled' => false]);
@@ -349,9 +355,10 @@ class PaymentBoundaryTest extends TestCase
 
         app(LinePayGateway::class)->initiate($attempt);
 
-        // ⛔ 根本沒送出去：對方那邊什麼都沒發生，客人可以換方式再試。
+        // ⛔ 根本沒送出去：對方那邊什麼都沒發生。
         Http::assertNothingSent();
-        $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
+        $this->assertSame(PaymentStatus::Failed, $attempt->fresh()->status);
+        $this->assertNotNull($attempt->fresh()->completed_at);
     }
 
     // ==================================== R2-4：綠界 callback 完整性

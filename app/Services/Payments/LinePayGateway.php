@@ -4,6 +4,7 @@ namespace App\Services\Payments;
 
 use App\Actions\Orders\MarkPaymentPending;
 use App\Actions\Orders\MarkPaymentUncertain;
+use App\Actions\Payments\FailPaymentInitiation;
 use App\Contracts\PaymentGateway;
 use App\DTO\PaymentInitiation;
 use App\Enums\PaymentFailureReason;
@@ -20,24 +21,28 @@ use App\Models\PaymentAttempt;
 class LinePayGateway implements PaymentGateway
 {
     /**
-     * Hosts a payment redirect may point at.
+     * The only host this sandbox adapter may send a customer to.
      *
      * ⛔ An allowlist, because this URL comes from an HTTP response and we send
-     * a paying customer to it. Without this check a compromised or spoofed
-     * response turns our checkout into an open redirect — one that arrives
-     * exactly when the customer is expecting to type card details.
+     * a paying customer to it. Without the check a spoofed response turns
+     * checkout into an open redirect — arriving exactly when the customer
+     * expects to type card details.
+     *
+     * ⛔ Exactly one host, and it is the sandbox *payment page*. The production
+     * hosts do not belong to this environment, and `sandbox-api-pay.line.me` is
+     * the API endpoint, not somewhere a person should ever be sent. Listing
+     * production here "for later" would mean a production redirect silently
+     * passing a sandbox-only check the day someone flips an environment.
      */
     private const ALLOWED_REDIRECT_HOSTS = [
         'sandbox-web-pay.line.me',
-        'web-pay.line.me',
-        'pay.line.me',
-        'sandbox-api-pay.line.me',
     ];
 
     public function __construct(
         private readonly LinePayClient $client,
         private readonly MarkPaymentPending $markPending,
         private readonly MarkPaymentUncertain $markUncertain,
+        private readonly FailPaymentInitiation $failInitiation,
     ) {}
 
     public function provider(): string
@@ -87,15 +92,22 @@ class LinePayGateway implements PaymentGateway
          * 對同一張訂單開出第二個付款 session。
          */
         if ($response->neverSent()) {
+            // ⛔ 收斂成 failed 而不是留著 pending：claim 一旦取得就有責任放掉，
+            // 否則 resolver 會永遠擋住這張訂單的下一次付款。
+            $this->failInitiation->handle($attempt, $response->reason());
+
             return PaymentInitiation::failed($response->reason());
         }
 
         if (! $response->isSuccess()) {
             $reason = $response->reason();
 
-            // 明確的拒絕才算失敗；其餘一律進人工對帳。
             if ($reason->isUncertain()) {
+                // 送出去了卻不知道結果：對方可能已建立交易。
                 $this->markUncertain->handle($attempt, $reason);
+            } else {
+                // 對方明確拒絕，確定沒有付款 session，可以安全重試。
+                $this->failInitiation->handle($attempt, $reason);
             }
 
             return PaymentInitiation::failed($reason);

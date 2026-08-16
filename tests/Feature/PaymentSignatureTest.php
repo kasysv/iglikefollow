@@ -85,6 +85,39 @@ class PaymentSignatureTest extends TestCase
     }
 
     /**
+     * ⭐ The current worked example on ECPay's specification page.
+     *
+     * Kept alongside the older one rather than replacing it: two independent
+     * vectors, computed from different amounts, item names and dates, make it
+     * far harder for a wrong encoding step to satisfy both by coincidence.
+     *
+     * ⛔ The key and IV are the public teaching values printed in the
+     * specification. They belong to nobody and authorise nothing.
+     *
+     * Source: <https://developers.ecpay.com.tw/2902/>
+     */
+    public function test_the_mac_matches_the_current_published_example(): void
+    {
+        $fields = [
+            'TradeDesc' => '促銷方案',
+            'PaymentType' => 'aio',
+            'MerchantTradeDate' => '2023/03/12 15:30:23',
+            'MerchantTradeNo' => 'ecpay20230312153023',
+            'MerchantID' => '3002607',
+            'ReturnURL' => 'https://www.ecpay.com.tw/receive.php',
+            'ItemName' => 'Apple iphone 15',
+            'TotalAmount' => '30000',
+            'ChoosePayment' => 'ALL',
+            'EncryptType' => '1',
+        ];
+
+        $this->assertSame(
+            '6C51C9E6888DE861FD62FB1DD17029FC742634498FD813DC43D4243B5685B840',
+            EcpayCheckMac::generate($fields, 'pwFHCqoQZGmho4w6', 'EkRm7iFT261dpevs'),
+        );
+    }
+
+    /**
      * The .NET-compatibility substitutions, pinned individually.
      *
      * ⛔ These are the step implementations usually get wrong, and getting one
