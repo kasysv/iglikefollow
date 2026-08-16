@@ -4,6 +4,7 @@ namespace App\Services\Invoices;
 
 use App\Contracts\InvoiceGateway;
 use App\DTO\InvoiceIssueResult;
+use App\Enums\InvoiceFailureReason;
 use App\Models\Invoice;
 
 /**
@@ -21,9 +22,8 @@ class FakeInvoiceGateway implements InvoiceGateway
 {
     private string $outcome = 'issued';
 
-    private string $code = 'FAKE_OK';
-
-    private string $message = '';
+    /** ⛔ reason 是 enum，不是字串：測試也無法藉此塞入任意文字。 */
+    private InvoiceFailureReason $reason = InvoiceFailureReason::Unknown;
 
     /** @var list<string> */
     public array $calls = [];
@@ -33,18 +33,22 @@ class FakeInvoiceGateway implements InvoiceGateway
         $this->outcome = 'issued';
     }
 
-    public function alwaysFail(string $code = 'FAKE_REJECTED', string $message = '測試用的確定性失敗。'): void
+    /**
+     * ⛔ 只接受已定義的 reason。
+     *
+     * 舊版可以傳任意 code 與 message，等於留了一條「把任意文字送進資料庫」
+     * 的公開路徑——測試方便，但那正是要防的東西。
+     */
+    public function alwaysFail(InvoiceFailureReason $reason = InvoiceFailureReason::InvalidBuyerDetails): void
     {
         $this->outcome = 'failed';
-        $this->code = $code;
-        $this->message = $message;
+        $this->reason = $reason;
     }
 
-    public function alwaysBeAmbiguous(string $code = 'FAKE_TIMEOUT', string $message = '測試用的逾時，結果不明。'): void
+    public function alwaysBeAmbiguous(InvoiceFailureReason $reason = InvoiceFailureReason::Timeout): void
     {
         $this->outcome = 'ambiguous';
-        $this->code = $code;
-        $this->message = $message;
+        $this->reason = $reason;
     }
 
     public function issue(Invoice $invoice, string $idempotencyKey): InvoiceIssueResult
@@ -53,8 +57,8 @@ class FakeInvoiceGateway implements InvoiceGateway
         $this->calls[] = $idempotencyKey;
 
         return match ($this->outcome) {
-            'failed' => InvoiceIssueResult::failed($this->code, $this->message),
-            'ambiguous' => InvoiceIssueResult::ambiguous($this->code, $this->message),
+            'failed' => InvoiceIssueResult::failed($this->reason),
+            'ambiguous' => InvoiceIssueResult::ambiguous($this->reason),
             default => InvoiceIssueResult::issued(
                 // 固定推導，⛔ 不用亂數：同一張發票重跑要得到同一個號碼。
                 invoiceNumber: sprintf('FAKE%08d', $invoice->id),

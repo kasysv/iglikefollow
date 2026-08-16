@@ -9,6 +9,7 @@ use App\Contracts\InvoiceGateway;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\InvoiceAttemptStatus;
+use App\Enums\InvoiceFailureReason;
 use App\Enums\InvoiceStatus;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -277,12 +278,14 @@ class InvoiceLifecycleTest extends TestCase
     public function test_a_deterministic_failure_is_recorded_as_failed(): void
     {
         $this->configureInvoiceGateway();
-        $this->gateway->alwaysFail('BAD_TAX_ID', '統一編號格式不正確。');
+        $this->gateway->alwaysFail(InvoiceFailureReason::InvalidBuyerDetails);
 
         $invoice = $this->issue()->handle($this->create()->handle($this->paidOrder()));
 
         $this->assertSame(InvoiceStatus::Failed, $invoice->status);
-        $this->assertSame('BAD_TAX_ID', $invoice->failure_code);
+        // ⛔ 代碼與訊息都來自本地 allowlist。
+        $this->assertSame('INVALID_BUYER_DETAILS', $invoice->failure_code);
+        $this->assertSame(InvoiceFailureReason::InvalidBuyerDetails->message(), $invoice->failure_message);
         $this->assertNull($invoice->invoice_number);
     }
 
@@ -401,16 +404,26 @@ class InvoiceLifecycleTest extends TestCase
         }
     }
 
-    public function test_a_sanitized_message_keeps_no_structure(): void
+    /**
+     * ⛔ 取代舊的「訊息不含大括號」測試。
+     *
+     * 那個測試保證的是錯的東西：移除結構不等於移除機密。
+     * `MerchantID=SECRET123 buyer@example.com` 完全沒有大括號，舊實作原封不動
+     * 存進資料庫也照樣通過。現在的保證是「provider 的文字根本進不來」。
+     */
+    public function test_the_stored_message_comes_from_our_own_allowlist(): void
     {
         $this->configureInvoiceGateway();
-        $this->gateway->alwaysFail('X', '{"MerchantID":"M1","Email":"buyer@example.com"}');
+        $this->gateway->alwaysFail(InvoiceFailureReason::MerchantRejected);
 
         $invoice = $this->issue()->handle($this->create()->handle($this->paidOrder()));
 
-        // ⛔ 大括號被移除，避免整包原始回應被當成「訊息」存下。
-        $this->assertStringNotContainsString('{', $invoice->failure_message);
-        $this->assertStringNotContainsString('}', $invoice->failure_message);
+        // 訊息逐字等於本地 enum 定義的內容。
+        $this->assertSame(InvoiceFailureReason::MerchantRejected->message(), $invoice->failure_message);
+        $this->assertContains(
+            $invoice->failure_code,
+            array_column(InvoiceFailureReason::cases(), 'value')
+        );
     }
 
     // ============================================ 6. 發票失敗不得影響付款

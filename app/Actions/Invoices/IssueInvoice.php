@@ -4,6 +4,7 @@ namespace App\Actions\Invoices;
 
 use App\Contracts\InvoiceGateway;
 use App\Enums\InvoiceAttemptStatus;
+use App\Enums\InvoiceFailureReason;
 use App\Enums\InvoiceStatus;
 use App\Models\Invoice;
 use App\Models\InvoiceAttempt;
@@ -30,11 +31,6 @@ use Throwable;
  */
 class IssueInvoice
 {
-    /** 未知例外對外的固定訊息；⛔ 不得改成帶入 exception 內容。 */
-    private const UNKNOWN_ERROR_CODE = 'GATEWAY_UNKNOWN';
-
-    private const UNKNOWN_ERROR_MESSAGE = '開立過程發生未知錯誤，結果不明，需人工確認。';
-
     public function __construct(private readonly InvoiceGateway $gateway) {}
 
     public function handle(Invoice $invoice): Invoice
@@ -53,7 +49,10 @@ class IssueInvoice
         } catch (Throwable $e) {
             // ⛔ 逾時或任何未知例外都不是「失敗」：對方可能已經開出發票。
             // 留在 processing／started 會讓紀錄永遠卡住，所以在這裡收斂。
-            $this->recordAmbiguous($invoice, $attempt, self::UNKNOWN_ERROR_CODE, self::UNKNOWN_ERROR_MESSAGE);
+            //
+            // ⛔ 只帶 reason token，不帶 $e->getMessage()：例外訊息常含連線字串、
+            // 商店代號，甚至被回音的請求內容。
+            $this->recordAmbiguous($invoice, $attempt, InvoiceFailureReason::Unknown);
 
             // ⛔ 不重新丟出：丟出會讓 queue 自動重試，等於再呼叫一次 provider。
             return $invoice->fresh();
@@ -64,7 +63,7 @@ class IssueInvoice
         }
 
         if ($result->isAmbiguous()) {
-            $this->recordAmbiguous($invoice, $attempt, $result->code, $result->message);
+            $this->recordAmbiguous($invoice, $attempt, $result->reason ?? InvoiceFailureReason::Unknown);
 
             return $invoice->fresh();
         }
@@ -134,18 +133,21 @@ class IssueInvoice
 
     private function recordFailed(Invoice $invoice, InvoiceAttempt $attempt, $result): Invoice
     {
-        return DB::transaction(function () use ($invoice, $attempt, $result) {
+        // ⛔ 兩個值都來自本地 allowlist，不是 provider 傳來的字串。
+        $reason = $result->reason ?? InvoiceFailureReason::Unknown;
+
+        return DB::transaction(function () use ($invoice, $attempt, $reason) {
             $attempt->forceFill([
                 'status' => InvoiceAttemptStatus::Failed,
-                'failure_code' => $result->code,
-                'failure_message' => $result->message,
+                'failure_code' => $reason->value,
+                'failure_message' => $reason->message(),
                 'completed_at' => now(),
             ])->save();
 
             $invoice->forceFill([
                 'status' => InvoiceStatus::Failed,
-                'failure_code' => $result->code,
-                'failure_message' => $result->message,
+                'failure_code' => $reason->value,
+                'failure_message' => $reason->message(),
             ])->save();
 
             return $invoice->fresh();
@@ -162,21 +164,21 @@ class IssueInvoice
     private function recordAmbiguous(
         Invoice $invoice,
         InvoiceAttempt $attempt,
-        ?string $code,
-        ?string $message,
+        InvoiceFailureReason $reason,
     ): void {
-        DB::transaction(function () use ($invoice, $attempt, $code, $message) {
+        // ⛔ 型別就是 allowlist：這個方法收不到任意字串。
+        DB::transaction(function () use ($invoice, $attempt, $reason) {
             $attempt->forceFill([
                 'status' => InvoiceAttemptStatus::Ambiguous,
-                'failure_code' => $code,
-                'failure_message' => $message,
+                'failure_code' => $reason->value,
+                'failure_message' => $reason->message(),
                 'completed_at' => now(),
             ])->save();
 
             $invoice->forceFill([
                 'status' => InvoiceStatus::ReconciliationRequired,
-                'failure_code' => $code,
-                'failure_message' => $message,
+                'failure_code' => $reason->value,
+                'failure_message' => $reason->message(),
                 'reconciliation_required_at' => now(),
             ])->save();
         });

@@ -11,6 +11,7 @@ use App\DTO\InvoiceIssueResult;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\InvoiceAttemptStatus;
+use App\Enums\InvoiceFailureReason;
 use App\Enums\InvoiceStatus;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -35,12 +36,19 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * The parts of invoicing that only break under concurrency or failure.
+ * The parts of invoicing that only break on duplicate delivery or failure.
  *
  * Everything here defends one outcome: never issuing a second real invoice for
  * one order. That can happen three ways — two workers racing, a timeout being
  * mistaken for a failure, or a redelivered job computing a fresh idempotency
  * key — and each has its own test below.
+ *
+ * ⛔ These are duplicate and interleaved *intent* simulations, not real
+ * OS-level concurrent workers: PHPUnit runs in one process, so it cannot make
+ * two transactions contend for the same row. What the tests do establish is
+ * that a second handler finds the invoice no longer claimable and stops. The
+ * actual race is held off by `lockForUpdate()` and the unique index, which
+ * this suite can only assert indirectly.
  */
 class InvoiceConcurrencyTest extends TestCase
 {
@@ -119,7 +127,15 @@ class InvoiceConcurrencyTest extends TestCase
         $this->assertSame($first, $invoice->fresh()->initialIdempotencyKey());
     }
 
-    public function test_only_one_of_two_concurrent_workers_claims_the_invoice(): void
+    /**
+     * 兩個「意圖」依序執行，⛔ 不是真正的 OS 層並行。
+     *
+     * 這個測試模擬的是重複投遞：第二個 handler 拿著同一張發票再跑一次。真正的
+     * race 需要兩個行程同時打同一列，PHPUnit 單行程做不到——實際的保證來自
+     * `lockForUpdate()` 的 compare-and-set 與 DB unique index，這裡只證明
+     * 「狀態已不是 pending 時不會再呼叫 provider」。
+     */
+    public function test_a_second_issuing_intent_does_not_call_the_provider_again(): void
     {
         $invoice = $this->pendingInvoice();
 
@@ -129,16 +145,17 @@ class InvoiceConcurrencyTest extends TestCase
         $a->handle($invoice);
         $b->handle($invoice->fresh());
 
-        // ⛔ 第二個 worker 不得呼叫 provider，也不得再建一筆嘗試。
+        // ⛔ 第二次不得呼叫 provider，也不得再建一筆嘗試。
         $this->assertCount(1, $this->gateway->calls);
         $this->assertSame(1, InvoiceAttempt::count());
     }
 
-    public function test_a_worker_arriving_after_processing_does_not_call_the_gateway(): void
+    /** 交錯情境：另一個 handler 已經 claim 走（以直接改狀態模擬），⛔ 非真實並行。 */
+    public function test_an_interleaved_handler_arriving_after_processing_does_not_call_the_gateway(): void
     {
         $invoice = $this->pendingInvoice();
 
-        // 模擬另一個 worker 已經 claim 走。
+        // 模擬另一個 handler 已經 claim 走。
         DB::table('invoices')->where('id', $invoice->id)
             ->update(['status' => InvoiceStatus::Processing->value]);
 
@@ -214,7 +231,7 @@ class InvoiceConcurrencyTest extends TestCase
             $this->assertStringNotContainsString($marker, $raw, "落盤出現敏感字串：{$marker}");
         }
 
-        $this->assertSame('GATEWAY_UNKNOWN', Invoice::firstOrFail()->failure_code);
+        $this->assertSame(InvoiceFailureReason::Unknown->value, Invoice::firstOrFail()->failure_code);
     }
 
     public function test_a_gateway_exception_is_not_rethrown_for_queue_retry(): void
