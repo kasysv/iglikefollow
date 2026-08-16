@@ -1,5 +1,6 @@
 <?php
 
+use App\Support\M3bRollbackGuard;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +26,10 @@ return new class extends Migration
             $table->id();
 
             // ⛔ 一張訂單只能有一張發票；這是資料庫層的最終保證。
-            $table->foreignId('order_id')->unique()->constrained()->cascadeOnDelete();
+            //
+            // ⛔ restrictOnDelete，不是 cascade：發票是稅務憑證，刪一張訂單不該
+            // 連帶消滅它。要刪訂單就必須先明確處理發票，而不是讓它悄悄消失。
+            $table->foreignId('order_id')->unique()->constrained()->restrictOnDelete();
 
             $table->string('provider', 32);
             $table->string('status', 32);
@@ -54,29 +58,74 @@ return new class extends Migration
             $table->index('status');
             $table->index('invoice_number');
         });
+
+        $this->addValueConstraints();
     }
 
     /**
-     * ⛔ Refuses to drop a table that holds issued invoices.
+     * Database-level limits on what an invoice may say.
      *
-     * An invoice is a tax record: the authority has its own copy, and dropping
-     * ours silently leaves this business unable to say what it issued. A
-     * rollback is a development convenience, so it gives way to the data — the
-     * operator must export and clear deliberately, not discover the loss later.
+     * The domain observer enforces the same rules, but a constraint holds for
+     * writes that never touch a model — a migration, a repair script, someone
+     * at a SQL prompt. ⛔ An invoice for zero dollars or an unrecognised status
+     * is not a value the application should be able to produce by any route.
+     */
+    private function addValueConstraints(): void
+    {
+        $statuses = "'pending_configuration','pending','processing','issued','failed','reconciliation_required','voided'";
+
+        // ⛔ 兩份運算式分開寫，不用字串取代去加 NEW. 前綴：
+        // 'status' 這個字也出現在狀態值裡，盲目取代會產生無效 SQL。
+        $condition = fn (string $p) => "{$p}amount > 0 AND {$p}currency = 'TWD'"
+            ." AND {$p}status IN ({$statuses})"
+            ." AND {$p}provider IN ('ecpay_invoice')";
+
+        $driver = DB::getDriverName();
+
+        // ⛔ 明確分支：SQLite 的 CHECK 只能在建表時加入，MySQL／Postgres 可事後加。
+        // 遇到沒處理過的驅動就中止，不靜默跳過而讓保護在正式環境不存在。
+        match ($driver) {
+            // SQLite 已在建表後，改用等效的 trigger；語意與 CHECK 相同。
+            'sqlite' => $this->addSqliteTriggers($condition('NEW.')),
+            'mysql', 'mariadb', 'pgsql' => DB::statement(
+                'ALTER TABLE invoices ADD CONSTRAINT invoices_values_check CHECK ('.$condition('').')'
+            ),
+            default => throw new RuntimeException(
+                "未預期的資料庫驅動 {$driver}：⛔ 無法建立 invoices 的值域限制，拒絕在無保護的情況下繼續。"
+            ),
+        };
+    }
+
+    private function addSqliteTriggers(string $condition): void
+    {
+        $message = 'invoices: amount 必須為正整數、currency 必須為 TWD、status 與 provider 必須合法';
+
+        foreach (['insert' => 'INSERT', 'update' => 'UPDATE'] as $suffix => $event) {
+            DB::statement("
+                CREATE TRIGGER invoices_values_check_{$suffix}
+                BEFORE {$event} ON invoices
+                FOR EACH ROW
+                WHEN NOT ({$condition})
+                BEGIN
+                    SELECT RAISE(ABORT, '{$message}');
+                END
+            ");
+        }
+    }
+
+    /**
+     * ⛔ 三張 M3B-A 表任一有資料就整批拒絕；見 M3bRollbackGuard 的說明。
+     *
+     * 發票是稅務憑證，國稅局那邊另有一份；把我們這份靜靜刪掉，等於日後說不出
+     * 自己開過什麼。回滾是開發便利，必須讓路給資料。
      */
     public function down(): void
     {
-        if (! Schema::hasTable('invoices')) {
-            return;
-        }
+        M3bRollbackGuard::assertAllTablesAreEmpty();
 
-        $count = DB::table('invoices')->count();
-
-        if ($count > 0) {
-            throw new RuntimeException(
-                "無法回滾：invoices 已有 {$count} 筆發票紀錄，刪表會失去稅務憑證。"
-                .'請先匯出並確認後再手動清除。'
-            );
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement('DROP TRIGGER IF EXISTS invoices_values_check_insert');
+            DB::statement('DROP TRIGGER IF EXISTS invoices_values_check_update');
         }
 
         Schema::dropIfExists('invoices');

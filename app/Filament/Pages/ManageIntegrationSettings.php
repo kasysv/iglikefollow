@@ -2,7 +2,6 @@
 
 namespace App\Filament\Pages;
 
-use App\Actions\Integrations\RecordCredentialAudit;
 use App\Actions\Integrations\UpdateIntegrationCredentials;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
@@ -161,10 +160,13 @@ class ManageIntegrationSettings extends Page
         return [Action::make('save')->label('儲存')->submit('save')];
     }
 
-    public function save(
-        UpdateIntegrationCredentials $update,
-        RecordCredentialAudit $audit,
-    ): void {
+    /**
+     * ⛔ 稽核不在這裡呼叫：它與寫入同屬一個 transaction，由
+     * UpdateIntegrationCredentials 內部完成。頁面若自己補一次稽核，就會出現
+     * 「憑證已 commit、稽核才失敗」的空窗。
+     */
+    public function save(UpdateIntegrationCredentials $update): void
+    {
         // ⛔ 後端再檢查一次：canAccess() 只擋畫面，擋不住偽造的 Livewire 請求。
         abort_unless(static::canAccess(), 403);
 
@@ -185,7 +187,6 @@ class ManageIntegrationSettings extends Page
             $changed = $update->handle($provider, $environment, $identifier, $secrets);
 
             if ($changed !== []) {
-                $audit->handle($provider, $environment, $changed);
                 $touched[] = $provider->label();
             }
 

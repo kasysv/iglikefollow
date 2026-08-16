@@ -46,16 +46,20 @@ class Invoice extends Model
     }
 
     /**
-     * A stable idempotency key for the next attempt.
+     * The idempotency key for the one automatic issuing attempt.
      *
-     * ⛔ Derived only from facts that do not change between retries. A random
-     * or time-based key would be different on every redelivery, so the unique
-     * constraint would never fire and a retried job would become a second
-     * invoice request.
+     * ⛔ Derived only from facts that never change: the invoice id and the
+     * amount. A key that counted existing attempts would give each redelivery
+     * a *different* key, so the unique index would happily accept both and two
+     * workers could each call the provider — the exact thing the key exists to
+     * prevent. A random or time-based key fails the same way.
+     *
+     * Manual re-issue and voiding are not in this milestone; when they arrive
+     * they need their own explicit, human-triggered key, not a counter.
      */
-    public function idempotencyKeyFor(int $sequence): string
+    public function initialIdempotencyKey(): string
     {
-        return sprintf('inv-%d-%d-%d', $this->id, $this->amount, $sequence);
+        return sprintf('inv-%d-%d-initial', $this->id, $this->amount);
     }
 
     /** 發票號碼遮罩：後台對帳看得出是哪一張，⛔ 但不完整回顯。 */

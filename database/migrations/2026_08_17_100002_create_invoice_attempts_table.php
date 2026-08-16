@@ -1,5 +1,6 @@
 <?php
 
+use App\Support\M3bRollbackGuard;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -26,7 +27,9 @@ return new class extends Migration
         Schema::create('invoice_attempts', function (Blueprint $table) {
             $table->id();
 
-            $table->foreignId('invoice_id')->constrained()->cascadeOnDelete();
+            // ⛔ restrictOnDelete：嘗試紀錄是「我們到底送出過幾次」的唯一證據，
+            // 刪發票不該讓它一起消失，否則對帳時再也還原不了經過。
+            $table->foreignId('invoice_id')->constrained()->restrictOnDelete();
 
             // ⛔ 唯一冪等鍵：重送的 job 會在資料庫這裡就被擋下。
             $table->string('idempotency_key', 128)->unique();
@@ -49,22 +52,58 @@ return new class extends Migration
 
             $table->index(['invoice_id', 'status']);
         });
+
+        $this->addStatusConstraint();
     }
 
-    /** ⛔ 有嘗試紀錄就不刪：這是「我們到底送出過幾次」的唯一證據。 */
+    /** ⛔ 狀態只能是規格中的四個值，資料庫層一併把關。 */
+    private function addStatusConstraint(): void
+    {
+        $statuses = "'started','succeeded','failed','ambiguous'";
+        $driver = DB::getDriverName();
+
+        match ($driver) {
+            'sqlite' => $this->addSqliteTriggers($statuses),
+            'mysql', 'mariadb', 'pgsql' => DB::statement(
+                "ALTER TABLE invoice_attempts ADD CONSTRAINT invoice_attempts_status_check
+                 CHECK (status IN ({$statuses}))"
+            ),
+            default => throw new RuntimeException(
+                "未預期的資料庫驅動 {$driver}：⛔ 無法建立 invoice_attempts 的值域限制。"
+            ),
+        };
+    }
+
+    private function addSqliteTriggers(string $statuses): void
+    {
+        $message = 'invoice_attempts: status 必須是 started／succeeded／failed／ambiguous';
+
+        foreach (['insert' => 'INSERT', 'update' => 'UPDATE'] as $suffix => $event) {
+            DB::statement("
+                CREATE TRIGGER invoice_attempts_status_check_{$suffix}
+                BEFORE {$event} ON invoice_attempts
+                FOR EACH ROW
+                WHEN NEW.status NOT IN ({$statuses})
+                BEGIN
+                    SELECT RAISE(ABORT, '{$message}');
+                END
+            ");
+        }
+    }
+
+    /**
+     * ⛔ 三張 M3B-A 表任一有資料就整批拒絕；見 M3bRollbackGuard 的說明。
+     *
+     * 這張表在 batch rollback 中最先被處理，所以「先檢查全部再動手」特別重要：
+     * 它一旦被 drop，後面的 migration 才報錯已經來不及。
+     */
     public function down(): void
     {
-        if (! Schema::hasTable('invoice_attempts')) {
-            return;
-        }
+        M3bRollbackGuard::assertAllTablesAreEmpty();
 
-        $count = DB::table('invoice_attempts')->count();
-
-        if ($count > 0) {
-            throw new RuntimeException(
-                "無法回滾：invoice_attempts 已有 {$count} 筆開立嘗試紀錄。"
-                .'請先匯出並確認後再手動清除。'
-            );
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement('DROP TRIGGER IF EXISTS invoice_attempts_status_check_insert');
+            DB::statement('DROP TRIGGER IF EXISTS invoice_attempts_status_check_update');
         }
 
         Schema::dropIfExists('invoice_attempts');

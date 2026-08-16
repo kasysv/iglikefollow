@@ -16,6 +16,7 @@ use App\Models\SiteSetting;
 use App\Models\User;
 use App\Observers\AuditObserver;
 use App\Observers\IntegrationSettingObserver;
+use App\Observers\InvoiceIntegrityObserver;
 use App\Observers\LastOwnerObserver;
 use App\Observers\PublishObserver;
 use App\Observers\VariantIntegrityObserver;
@@ -139,6 +140,8 @@ class AppServiceProvider extends ServiceProvider
         User::observe(LastOwnerObserver::class);
         // ⛔ 啟用限制寫在 model 層：前端 disabled 擋不住偽造的 Livewire payload。
         IntegrationSetting::observe(IntegrationSettingObserver::class);
+        // ⛔ 狀態轉移與金額規則同樣在 model 層；資料庫 constraint 是第二層。
+        Invoice::observe(InvoiceIntegrityObserver::class);
 
         // ⛔ ScheduleInvoiceForPaidOrder 不在這裡註冊：Laravel 會依 handle() 的
         // 型別自動探索 app/Listeners，再手動 listen 一次會讓同一張訂單排兩個工作。

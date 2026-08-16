@@ -43,12 +43,38 @@ class CreateInvoiceForPaidOrder
                 return $existing; // ⛔ 一張訂單只開一次。
             }
 
-            $amount = (int) $locked->total_amount;
+            $currency = $locked->currency ?: 'TWD';
 
-            // 發票金額必須就是實際收到的錢；不同金額是稅務問題。
+            // ⛔ 只開立台幣發票：其他幣別的稅務規則完全不同，不得猜測。
+            if ($currency !== 'TWD') {
+                throw new RuntimeException(
+                    "訂單 {$locked->reference} 的幣別為 {$currency}，目前只支援 TWD 電子發票。"
+                );
+            }
+
+            $raw = $locked->total_amount;
+
+            // ⛔ 金額必須是正整數台幣，且就是實際收到的錢；不同金額是稅務問題。
+            if (! is_int($raw) && ! ctype_digit((string) $raw)) {
+                throw new RuntimeException(
+                    "訂單 {$locked->reference} 的金額不是整數，無法開立發票。"
+                );
+            }
+
+            $amount = (int) $raw;
+
             if ($amount <= 0) {
                 throw new RuntimeException(
                     "訂單 {$locked->reference} 的金額為 {$amount}，不是有效的發票金額。"
+                );
+            }
+
+            // 快照與訂單總額必須一致：開出的金額只能是客人真的付掉的那一筆。
+            $itemTotal = (int) $locked->items()->sum('amount');
+
+            if ($itemTotal > 0 && $itemTotal !== $amount) {
+                throw new RuntimeException(
+                    "訂單 {$locked->reference} 的商品金額合計 {$itemTotal} 與訂單總額 {$amount} 不符。"
                 );
             }
 
@@ -60,7 +86,7 @@ class CreateInvoiceForPaidOrder
                     ? InvoiceStatus::Pending
                     : InvoiceStatus::PendingConfiguration,
                 'amount' => $amount,
-                'currency' => $locked->currency ?: 'TWD',
+                'currency' => $currency,
             ]);
         });
     }

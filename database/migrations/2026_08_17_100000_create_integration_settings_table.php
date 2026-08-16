@@ -1,8 +1,8 @@
 <?php
 
+use App\Support\M3bRollbackGuard;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -53,25 +53,15 @@ return new class extends Migration
     }
 
     /**
-     * ⛔ 有設定就不刪。
+     * ⛔ 三張 M3B-A 表任一有資料就整批拒絕。
      *
-     * 這些金鑰無法從備份以外的地方復原——多數 provider 只在建立當下顯示一次，
-     * 刪掉等於要重新申請每一組。回滾必須讓路給資料。
+     * 只檢查自己那張表是不夠的：batch rollback 由後往前執行，等輪到這裡時
+     * invoices 與 invoice_attempts 早就被 drop 了，變成「錯誤訊息＋兩張表已消失」
+     * 的半套回滾。因此三個 migration 都做同一份完整 preflight。
      */
     public function down(): void
     {
-        if (! Schema::hasTable('integration_settings')) {
-            return;
-        }
-
-        $count = DB::table('integration_settings')->count();
-
-        if ($count > 0) {
-            throw new RuntimeException(
-                "無法回滾：integration_settings 已有 {$count} 組串接設定，刪表會失去所有金鑰。"
-                .'請先確認備份後再手動清除。'
-            );
-        }
+        M3bRollbackGuard::assertAllTablesAreEmpty();
 
         Schema::dropIfExists('integration_settings');
     }

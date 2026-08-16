@@ -25,6 +25,8 @@ use Illuminate\Validation\ValidationException;
  */
 class UpdateIntegrationCredentials
 {
+    public function __construct(private readonly RecordCredentialAudit $audit) {}
+
     /**
      * @param  array<string, string|null>  $secrets  keyed by provider secret name
      * @return list<string> the field names that actually changed
@@ -87,6 +89,10 @@ class UpdateIntegrationCredentials
             if ($changed !== []) {
                 $setting->credentials = $credentials;
                 $setting->save();
+
+                // ⛔ 稽核與寫入必須同生共死。分開做的話，稽核失敗時金鑰已經改掉，
+                // 留下一次「沒有人知道發生過」的憑證變更——正是稽核要防的事。
+                $this->audit->handle($provider, $environment, $changed);
             }
 
             return $changed;
