@@ -9,6 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -126,9 +127,7 @@ class CatalogCorrectionTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider correctedStepProvider
-     */
+    #[DataProvider('correctedStepProvider')]
     public function test_the_corrected_step_makes_every_quantity_payable(
         string $sku, string $rate, int $min, int $step
     ): void {
@@ -215,6 +214,30 @@ class CatalogCorrectionTest extends TestCase
         $this->assertSame('draft', $this->variant('ig-auto-likes-standard')->status);
     }
 
+    /**
+     * 從未發布過的草稿不得帶著首次發布時間。
+     *
+     * ⛔ 那個時間戳不只是紀錄：`PublishObserver` 用它永久鎖住 slug，
+     * 所以謊稱一個從未上架的草稿曾經發布，會讓它的網址再也改不了。
+     * 首次發布時間只能由真正的發布動作產生。
+     */
+    public function test_a_fresh_draft_has_never_been_published(): void
+    {
+        foreach (['fb-comments-standard', 'ig-auto-likes-standard'] as $sku) {
+            $variant = $this->variant($sku);
+
+            $this->assertSame('draft', $variant->status);
+            $this->assertNull(
+                $variant->first_published_at,
+                "{$sku} 從未發布，卻有首次發布時間"
+            );
+            // 直接查 raw row，⛔ 確認不是 cast 造成的假象。
+            $this->assertNull(
+                DB::table('service_variants')->where('sku', $sku)->value('first_published_at')
+            );
+        }
+    }
+
     public function test_a_fresh_seed_still_publishes_the_confirmed_products(): void
     {
         foreach ([
@@ -222,8 +245,42 @@ class CatalogCorrectionTest extends TestCase
             'ig-followers-real',
             'ig-post-likes-standard',
         ] as $sku) {
-            $this->assertSame('published', $this->variant($sku)->status, "{$sku} 狀態漂移");
+            $variant = $this->variant($sku);
+
+            $this->assertSame('published', $variant->status, "{$sku} 狀態漂移");
+            // 已發布就必須有首次發布時間，否則 slug 鎖與稽核都失去依據。
+            $this->assertNotNull($variant->first_published_at, "{$sku} 缺少首次發布時間");
         }
+    }
+
+    public function test_publishing_a_seeded_draft_stamps_it_then(): void
+    {
+        $variant = $this->variant('fb-comments-standard');
+        $this->assertNull($variant->first_published_at);
+
+        // 讓它變成可售，才能通過發布時的可售性檢查。
+        $variant->forceFill([
+            'unit_price' => '25.0000',
+            'status' => 'published',
+        ])->save();
+
+        // 首次發布時間由真正的發布動作產生，⛔ 不是 seeder 預先蓋的。
+        $this->assertNotNull($variant->fresh()->first_published_at);
+    }
+
+    public function test_reseeding_does_not_stamp_an_existing_draft(): void
+    {
+        $variant = $this->variant('ig-followers-standard');
+        $variant->forceFill(['status' => 'draft'])->save();
+
+        DB::table('service_variants')->where('id', $variant->id)
+            ->update(['first_published_at' => null]);
+
+        $this->seed(CatalogSeeder::class);
+
+        $this->assertNull(
+            DB::table('service_variants')->where('id', $variant->id)->value('first_published_at')
+        );
     }
 
     // ============================================ 4. 下架不得讓服務頁消失

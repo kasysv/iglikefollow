@@ -126,7 +126,11 @@ class CatalogSeeder extends Seeder
                 continue;
             }
 
-            $variant = ServiceVariant::create([
+            // ⛔ 不在這裡寫 first_published_at：PublishObserver 已經是唯一的發布規則，
+            // 它只在 status 真的是 published 時蓋首次發布時間。這裡再蓋一次會讓
+            // 從未發布的草稿也帶著發布時間，等於謊稱它曾經上架過——而那個時間戳
+            // 還會反過來永久鎖住 slug。
+            ServiceVariant::create([
                 'sku' => $sku,
                 'service_id' => $service->id,
                 'label' => $variantData['label'],
@@ -143,10 +147,6 @@ class CatalogSeeder extends Seeder
                 'status' => $variantData['status'] ?? 'published',
                 'sort_order' => $position,
             ]);
-
-            $variant->forceFill([
-                'first_published_at' => $variant->first_published_at ?? now(),
-            ])->saveQuietly();
         }
     }
 
