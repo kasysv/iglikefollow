@@ -15,7 +15,14 @@ use Illuminate\Support\Facades\Request;
  */
 class AuditObserver
 {
-    /** ⛔ 這些欄位永遠不得寫入 audit JSON。 */
+    /**
+     * ⛔ 這些欄位永遠不得寫入 audit JSON。
+     *
+     * 比對方式是「欄位名稱包含這些字串」，所以 `credential` 必須自己列出來：
+     * 它不含 secret／token／key 任何一個字，光靠原本的清單，整包密文會被
+     * 寫進稽核紀錄。⛔ 密文不是可接受的稽核內容——它會隨備份一起外流，
+     * 而解密金鑰就在同一台機器上。
+     */
     private const REDACTED = [
         'password',
         'password_confirmation',
@@ -26,6 +33,11 @@ class AuditObserver
         'token',
         'session',
         'payment_key',
+        'credential',   // credentials／credential 皆命中
+        'hashkey',
+        'hash_key',
+        'hashiv',
+        'hash_iv',
     ];
 
     public function created(Model $model): void

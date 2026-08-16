@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Contracts\InvoiceGateway;
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
+use App\Models\IntegrationSetting;
+use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Platform;
 use App\Models\Service;
@@ -12,21 +15,26 @@ use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\IntegrationSettingObserver;
 use App\Observers\LastOwnerObserver;
 use App\Observers\PublishObserver;
 use App\Observers\VariantIntegrityObserver;
 use App\Policies\AdminAuditLogPolicy;
 use App\Policies\FaqPolicy;
+use App\Policies\IntegrationSettingPolicy;
+use App\Policies\InvoicePolicy;
 use App\Policies\OrderPolicy;
 use App\Policies\PlatformPolicy;
 use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
 use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Invoices\FakeInvoiceGateway;
 use App\Support\CatalogRepository;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
+use RuntimeException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -41,6 +49,9 @@ class AppServiceProvider extends ServiceProvider
         AdminAuditLog::class => AdminAuditLogPolicy::class,
         // 訂單唯讀：⛔ policy 一律拒絕 create／update／delete。
         Order::class => OrderPolicy::class,
+        // 發票唯讀且僅限 Owner；⛔ 沒有重送或作廢入口。
+        Invoice::class => InvoicePolicy::class,
+        IntegrationSetting::class => IntegrationSettingPolicy::class,
     ];
 
     /**
@@ -77,7 +88,37 @@ class AppServiceProvider extends ServiceProvider
 
     public function register(): void
     {
-        //
+        $this->bindInvoiceGateway();
+    }
+
+    /**
+     * Decide, in one place, what actually issues invoices.
+     *
+     * ⛔ Production code depends on the InvoiceGateway contract, never on the
+     * Fake, so the only way the Fake can run is this binding. Outside local and
+     * testing an unconfigured gateway fails closed rather than silently falling
+     * back to something that issues nothing — a site that believes it is
+     * invoicing while nothing reaches the tax authority is worse than one that
+     * refuses to start.
+     */
+    private function bindInvoiceGateway(): void
+    {
+        $this->app->singleton(InvoiceGateway::class, function () {
+            if ($this->app->environment('local', 'testing')) {
+                return new FakeInvoiceGateway;
+            }
+
+            if (config('integrations.invoice.gateway') === 'fake') {
+                throw new RuntimeException(
+                    'Fake 發票 gateway 只能用於 local 與 testing；'
+                    .'正式環境必須設定真實 adapter 並經過明確批准。'
+                );
+            }
+
+            throw new RuntimeException(
+                '尚未提供正式的發票 gateway adapter；⛔ 不得以 Fake 代替。'
+            );
+        });
     }
 
     public function boot(): void
@@ -96,6 +137,11 @@ class AppServiceProvider extends ServiceProvider
 
         ServiceVariant::observe(VariantIntegrityObserver::class);
         User::observe(LastOwnerObserver::class);
+        // ⛔ 啟用限制寫在 model 層：前端 disabled 擋不住偽造的 Livewire payload。
+        IntegrationSetting::observe(IntegrationSettingObserver::class);
+
+        // ⛔ ScheduleInvoiceForPaidOrder 不在這裡註冊：Laravel 會依 handle() 的
+        // 型別自動探索 app/Listeners，再手動 listen 一次會讓同一張訂單排兩個工作。
 
         // Header 與 footer 的平台導覽一律從資料庫讀取，⛔ 不再讀 config fixture。
         // 公司名稱同樣由後台設定驅動，⛔ 不寫死在版型裡。
