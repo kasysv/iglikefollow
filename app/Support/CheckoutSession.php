@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\ServiceVariant;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 /**
  * The product selection carried between the service page and /checkout.
@@ -47,13 +48,30 @@ class CheckoutSession
     public function put(Request $request, ServiceVariant $variant, int $quantity): void
     {
         $service = $variant->service;
+        $existing = $request->session()->get(self::KEY);
 
         $request->session()->put(self::KEY, [
             'variant_id' => $variant->id,
             'quantity' => $quantity,
             // 回到商品頁用；⛔ 存 URL 而非個資。
             'return_url' => route('service', [$service->platform->slug, $service->slug]),
+            /*
+             * 這一次選購的識別碼，用來防止重複建單。
+             *
+             * 改數量或換服務項目時沿用同一個 token：客人回頭修改仍是同一次結帳，
+             * 不該因此產生第二張訂單。token 會寫進 orders.checkout_token，
+             * ⛔ 由 DB unique constraint 做最終保障，而非只靠應用層判斷。
+             */
+            'token' => $existing['token'] ?? (string) Str::uuid(),
         ]);
+    }
+
+    /** 這一次結帳的識別碼；⛔ 沒有選購資料時不得憑空產生。 */
+    public function token(Request $request): ?string
+    {
+        $stored = $request->session()->get(self::KEY);
+
+        return is_array($stored) ? ($stored['token'] ?? null) : null;
     }
 
     /**

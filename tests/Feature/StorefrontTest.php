@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\PaymentAttempt;
 use App\Models\Service;
 use App\Models\ServiceVariant;
 use Database\Seeders\CatalogSeeder;
@@ -220,14 +221,15 @@ class StorefrontTest extends TestCase
             ->assertSessionHasErrors(['target', 'payment', 'customer_email', 'invoice_kind']);
     }
 
-    public function test_mock_checkout_never_creates_a_real_order(): void
+    public function test_mock_checkout_creates_a_local_order_but_charges_nothing(): void
     {
         $this->startCheckout();
 
+        // M3A 起會真的建立本站訂單；⛔ 但仍不扣款、不呼叫任何金流。
         $this->post('/checkout/mock', $this->checkoutPayload())
             ->assertOk()
             ->assertSee('本機 MOCK')
-            ->assertSee('沒有扣款、沒有建立資料庫訂單')
+            ->assertSee('沒有扣款、沒有呼叫任何金流或履約服務')
             ->assertSee('example_account');
     }
 
@@ -242,7 +244,10 @@ class StorefrontTest extends TestCase
             'payment' => 'ecpay',
         ]))->assertOk()
             ->assertSee('Facebook')
-            ->assertSee('綠界付款');
+            ->assertSee('https://facebook.com/reel/123456');
+
+        // 付款 provider 記在該次付款嘗試上，⛔ 不是訂單上的一段文字。
+        $this->assertSame('ecpay', PaymentAttempt::latest('id')->value('provider'));
     }
 
     public function test_checkout_start_rejects_quantity_below_minimum(): void

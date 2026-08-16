@@ -2,7 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\Orders\CreatePendingOrder;
+use App\Actions\Orders\RecordPaymentResult;
+use App\Enums\PaymentStatus;
+use App\Models\Order;
+use App\Models\ServiceVariant;
 use App\Support\CheckoutSession;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -14,7 +20,11 @@ class MockCheckoutController extends Controller
 
     public const PERSONAL_MODES = ['email', 'mobile_barcode', 'donation'];
 
-    public function __construct(private readonly CheckoutSession $checkout) {}
+    public function __construct(
+        private readonly CheckoutSession $checkout,
+        private readonly CreatePendingOrder $createOrder,
+        private readonly RecordPaymentResult $recordPayment,
+    ) {}
 
     public function store(Request $request): View|RedirectResponse
     {
@@ -23,34 +33,88 @@ class MockCheckoutController extends Controller
         // 商品一律取自 server-side session，⛔ 不接受表單送來的 variant／quantity。
         // 這裡會重查 published allowlist、重驗數量並重新計價。
         $selection = $this->checkout->resolve($request);
+        $token = $this->checkout->token($request);
 
-        if ($selection === null) {
+        if ($selection === null || $token === null) {
             return redirect()->route('checkout');
         }
 
-        $variant = $selection['variant'];
-        $quantity = $selection['quantity'];
-
         $validated = $request->validate($this->rules($request), $this->messages());
 
-        // 送出後即清除選購資料，⛔ 重新整理或重送不得再產生任何東西。
+        $order = $this->orderFor($selection, $validated, $token);
+
+        // 訂單成立後才清除選購資料。
+        // ⛔ 重新整理或重送會因為 checkout_token 已存在而拿回同一張訂單，不會建第二張。
         $this->checkout->forget($request);
 
-        return view('storefront.mock-success', [
-            'variantLabel' => $variant->label,
-            'serviceName' => $variant->service->name,
-            'platformName' => $variant->service->platform->name,
-            'quantity' => $quantity,
-            'quantityUnit' => $variant->quantity_unit,
-            // 金額一律由伺服器依「當下」單價重算，⛔ 不採用 start 當時或前端的金額。
-            'mockAmount' => $variant->amountFor($quantity),
-            'target' => $validated['target'],
-            'paymentLabel' => $validated['payment'] === 'line-pay' ? 'LINE Pay' : '綠界付款',
-            // ⛔ 只回傳遮罩後的摘要；完整 Email／手機／載具／統編不得回顯或保存。
-            'invoiceSummary' => $this->invoiceSummary($validated),
-            'maskedEmail' => $this->maskEmail($validated['customer_email']),
-            'maskedPhone' => $this->maskTail($validated['customer_phone'] ?? null),
-        ]);
+        // Fake 付款結果：僅供 local／testing 觀察生命週期。
+        // ⛔ 不呼叫綠界／LINE Pay，也不代表付款真的發生。
+        $this->applyFakeResult($request, $order);
+
+        return view('storefront.mock-success', ['order' => $order->fresh(['items', 'paymentAttempts', 'events'])]);
+    }
+
+    /**
+     * The order for this checkout, created once.
+     *
+     * Two parallel submissions race here: both may find nothing and both may
+     * try to insert. The unique index on checkout_token means the loser gets a
+     * constraint violation rather than a second order, and simply reads the
+     * winner's row back.
+     *
+     * @param  array{variant: ServiceVariant, quantity: int}  $selection
+     * @param  array<string, mixed>  $validated
+     */
+    private function orderFor(array $selection, array $validated, string $token): Order
+    {
+        $existing = Order::where('checkout_token', $token)->first();
+
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        try {
+            return $this->createOrder->handle(
+                $selection['variant'],
+                $selection['quantity'],
+                $validated,
+                $token,
+                $validated['payment'],
+            );
+        } catch (UniqueConstraintViolationException) {
+            // 另一個 request 先建立了同一次結帳的訂單。
+            return Order::where('checkout_token', $token)->firstOrFail();
+        }
+    }
+
+    /**
+     * Simulate what a payment provider would later report.
+     *
+     * Real payment status may only arrive through a verified server-to-server
+     * callback, so this exists purely to exercise the lifecycle locally; the
+     * outcome is chosen by a test-only field and defaults to success.
+     */
+    private function applyFakeResult(Request $request, Order $order): void
+    {
+        $attempt = $order->paymentAttempts()
+            ->whereIn('status', [PaymentStatus::Initiated, PaymentStatus::Pending])
+            ->latest('id')
+            ->first();
+
+        if ($attempt === null) {
+            return;
+        }
+
+        $outcome = PaymentStatus::tryFrom((string) $request->input('fake_payment_result'))
+            ?? PaymentStatus::Succeeded;
+
+        $this->recordPayment->handle(
+            $attempt,
+            $outcome,
+            providerReference: 'FAKE-'.$attempt->reference,
+            failureCode: $outcome === PaymentStatus::Failed ? 'FAKE_DECLINED' : null,
+            failureMessage: $outcome === PaymentStatus::Failed ? '模擬付款失敗' : null,
+        );
     }
 
     /**
@@ -136,45 +200,5 @@ class MockCheckoutController extends Controller
         ];
     }
 
-    /**
-     * A human label for what kind of invoice would be issued.
-     *
-     * The success page shows only this label — never the carrier number, love
-     * code or tax id — because the mock has no reason to echo identifiers back.
-     *
-     * @param  array<string, mixed>  $validated
-     */
-    private function invoiceSummary(array $validated): string
-    {
-        if ($validated['invoice_kind'] === 'business') {
-            return '公司統編電子發票（統編後 3 碼 '.substr($validated['buyer_tax_id'], -3).'）';
-        }
-
-        return match ($validated['personal_invoice_mode'] ?? 'email') {
-            'mobile_barcode' => '個人電子發票（手機條碼載具）',
-            'donation' => '個人電子發票（捐贈）',
-            default => '個人電子發票（寄送至 Email）',
-        };
-    }
-
-    private function maskEmail(string $email): string
-    {
-        [$name, $domain] = array_pad(explode('@', $email, 2), 2, '');
-
-        $head = mb_substr($name, 0, 1);
-        $visible = $head === '' ? '*' : $head;
-
-        return $visible.str_repeat('*', max(mb_strlen($name) - 1, 1)).'@'.$domain;
-    }
-
-    private function maskTail(?string $value): ?string
-    {
-        if (! filled($value)) {
-            return null;
-        }
-
-        $digits = preg_replace('/\D/', '', $value);
-
-        return $digits === '' ? null : str_repeat('*', max(strlen($digits) - 3, 0)).substr($digits, -3);
-    }
+    // 發票摘要與遮罩改由 Order model 提供，⛔ 讓後台與 mock success 用同一份邏輯。
 }

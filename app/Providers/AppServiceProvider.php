@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
+use App\Models\Order;
 use App\Models\Platform;
 use App\Models\Service;
 use App\Models\ServiceContentSection;
@@ -16,6 +17,7 @@ use App\Observers\PublishObserver;
 use App\Observers\VariantIntegrityObserver;
 use App\Policies\AdminAuditLogPolicy;
 use App\Policies\FaqPolicy;
+use App\Policies\OrderPolicy;
 use App\Policies\PlatformPolicy;
 use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
@@ -37,6 +39,8 @@ class AppServiceProvider extends ServiceProvider
         Faq::class => FaqPolicy::class,
         User::class => UserPolicy::class,
         AdminAuditLog::class => AdminAuditLogPolicy::class,
+        // 訂單唯讀：⛔ policy 一律拒絕 create／update／delete。
+        Order::class => OrderPolicy::class,
     ];
 
     /**

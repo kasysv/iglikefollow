@@ -73,7 +73,8 @@ class CheckoutFlowTest extends TestCase
 
         $stored = session(CheckoutSession::KEY);
 
-        $this->assertSame(['variant_id', 'quantity', 'return_url'], array_keys($stored));
+        // token 是防重複建單用的識別碼，⛔ 不是個資也不是價格。
+        $this->assertSame(['variant_id', 'quantity', 'return_url', 'token'], array_keys($stored));
         // 價格不存 session：⛔ 過期的金額絕不能被拿來結帳。
         $this->assertArrayNotHasKey('amount', $stored);
         $this->assertArrayNotHasKey('unit_price', $stored);
