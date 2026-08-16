@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Exceptions\NonIntegerAmountException;
+use App\Exceptions\UnsellablePriceException;
 
 /**
  * Exact money arithmetic for catalogue prices and order amounts.
@@ -71,7 +72,18 @@ class Money
      */
     public static function total(int $unitPriceMills, int $quantity): int
     {
-        $mills = $unitPriceMills * $quantity;
+        // ⛔ 免費或負價不是折扣，是收不到錢或倒貼；金額欄位不得出現 0 或負數。
+        if ($unitPriceMills <= 0) {
+            throw new UnsellablePriceException(
+                "單價必須大於 0，收到 {$unitPriceMills} 毫。免費或負價的服務項目不可販售。"
+            );
+        }
+
+        if ($quantity <= 0) {
+            throw new UnsellablePriceException("數量必須大於 0，收到 {$quantity}。");
+        }
+
+        $mills = self::multiply($unitPriceMills, $quantity);
 
         if ($mills % self::SCALE !== 0) {
             throw new NonIntegerAmountException($unitPriceMills, $quantity, $mills);
@@ -84,11 +96,48 @@ class Money
      * Would this rate and quantity produce a payable whole-dollar amount?
      *
      * Callers that must not throw — a catalogue validator checking every step
-     * in a range, say — ask this first.
+     * in a range, say — ask this first. ⛔ Says nothing about the amount being
+     * sellable; isPayable() answers that.
      */
     public static function divides(int $unitPriceMills, int $quantity): bool
     {
-        return ($unitPriceMills * $quantity) % self::SCALE === 0;
+        if ($unitPriceMills <= 0 || $quantity <= 0) {
+            return false;
+        }
+
+        return self::multiply($unitPriceMills, $quantity) % self::SCALE === 0;
+    }
+
+    /** Is this rate and quantity a positive, whole-dollar, in-range amount? */
+    public static function isPayable(int $unitPriceMills, int $quantity): bool
+    {
+        try {
+            return self::total($unitPriceMills, $quantity) > 0;
+        } catch (NonIntegerAmountException|UnsellablePriceException) {
+            return false;
+        }
+    }
+
+    /**
+     * rate × quantity, refusing to overflow into a float.
+     *
+     * PHP silently promotes an integer overflow to a float, which would defeat
+     * the entire point of this class: the result would come back as something
+     * like 9.2E+18 and every exactness guarantee below it would be void. Both
+     * operands are known positive here, so a product that has stopped being an
+     * int, or that does not divide back, has overflowed.
+     */
+    private static function multiply(int $a, int $b): int
+    {
+        $product = $a * $b;
+
+        if (! is_int($product) || intdiv($product, $b) !== $a) {
+            throw new UnsellablePriceException(
+                '金額超出可計算範圍，請調低單價或數量上限。'
+            );
+        }
+
+        return $product;
     }
 
     /** Mills back to a display string, e.g. 1234 → "0.1234". */

@@ -223,6 +223,13 @@ class ServiceVariantForm
             return;
         }
 
+        // ⛔ 零與負價不可販售；minValue(0) 連 0 都放行，所以這裡自己擋。
+        if ($rate <= 0) {
+            $fail('單價必須大於 0。免費或負價的服務項目不可販售。');
+
+            return;
+        }
+
         // firstNonIntegerQuantity() 讀 raw unit_price，故用 setRawAttributes 塞入表單當下的值。
         $probe = new ServiceVariant;
         $probe->setRawAttributes([
@@ -234,6 +241,14 @@ class ServiceVariantForm
 
         if ($probe->min_quantity > $probe->max_quantity) {
             return; // 範圍本身有錯，由數量欄位的規則回報。
+        }
+
+        // 範圍內連一個 step 倍數都沒有：客人買不到任何數量。
+        if ($probe->firstPurchasableQuantity() === null) {
+            $fail("在 {$probe->min_quantity} 到 {$probe->max_quantity} 之間沒有任何 "
+                ."{$probe->step_quantity} 的倍數，客人買不到任何數量。");
+
+            return;
         }
 
         $offending = $probe->firstNonIntegerQuantity();

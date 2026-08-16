@@ -21,7 +21,9 @@ return new class extends Migration
      * would fail to decrypt those rows. So up() widens *and* encrypts in place.
      *
      * Laravel's encrypted cast produces a base64 envelope several times longer
-     * than the input and of unpredictable length, so these become TEXT.
+     * than the input and of unpredictable length, so on databases that enforce
+     * column lengths these become TEXT. ⛔ SQLite does not enforce them and is
+     * deliberately left alone — see changePiiColumnsTo().
      * ⛔ No index is added to any of them: an index over ciphertext cannot answer
      * a search anyway, and would only leak equality information.
      *
@@ -58,56 +60,43 @@ return new class extends Migration
     }
 
     /**
-     * Change the PII columns to $type, without losing the child rows.
+     * Change the PII columns to $type, where the database actually needs it.
      *
-     * ⛔ SQLite has no real ALTER COLUMN. The driver rebuilds the whole table:
-     * it copies the rows out, DROPs the original and recreates it — and
-     * dropping `orders` fires order_items' ON DELETE CASCADE, so simply
-     * changing a column on `orders` deletes every order item. That is silent
-     * and total data loss, and it is why this method exists.
+     * ⛔ On SQLite this does nothing at all, and that is the correct behaviour.
+     * SQLite does not enforce VARCHAR lengths — a VARCHAR(10) stores a
+     * 500-character string unchanged — so widening buys nothing there. What it
+     * costs is severe: SQLite has no real ALTER COLUMN, so the driver rebuilds
+     * the table by copying the rows out, DROPping the original and recreating
+     * it. Dropping `orders` fires the ON DELETE CASCADE on every child table,
+     * silently deleting order items, payment attempts and order events.
      *
-     * PRAGMA foreign_keys is not a reliable defence on its own: SQLite ignores
-     * it inside a transaction, and migrations may or may not be wrapped in one.
-     * So the child rows are read out first and restored afterwards, and the
-     * count is checked. Correctness does not depend on the pragma taking effect.
+     * Backing the children up and restoring them was the previous approach, but
+     * it has to enumerate every child table correctly and stay correct as new
+     * ones are added — one forgotten table is silent data loss. Not rebuilding
+     * the table in the first place removes the hazard rather than managing it.
+     *
+     * MySQL and Postgres do enforce the length, so the widening still runs
+     * there, where ALTER COLUMN is a real operation and no rebuild occurs.
      *
      * @param  'text'|'string'  $type
      */
     private function changePiiColumnsTo(string $type): void
     {
-        $items = DB::table('order_items')->orderBy('id')->get();
-        $expected = $items->count();
+        if (DB::getDriverName() === 'sqlite') {
+            return;
+        }
 
-        Schema::withoutForeignKeyConstraints(function () use ($type) {
-            Schema::table('orders', function (Blueprint $table) use ($type) {
-                $table->{$type}('customer_email')->change();
+        Schema::table('orders', function (Blueprint $table) use ($type) {
+            $table->{$type}('customer_email')->change();
 
-                foreach (self::NULLABLE as $column) {
-                    $table->{$type}($column)->nullable()->change();
-                }
-            });
-
-            Schema::table('order_items', function (Blueprint $table) use ($type) {
-                $table->{$type}('target_value')->change();
-            });
+            foreach (self::NULLABLE as $column) {
+                $table->{$type}($column)->nullable()->change();
+            }
         });
 
-        // 被 cascade 掃掉就原樣寫回；沒掉就什麼都不做。
-        if ($expected > 0 && DB::table('order_items')->count() === 0) {
-            foreach ($items->chunk(200) as $chunk) {
-                DB::table('order_items')->insert(
-                    $chunk->map(fn ($row) => (array) $row)->all()
-                );
-            }
-        }
-
-        $actual = DB::table('order_items')->count();
-
-        if ($actual !== $expected) {
-            throw new RuntimeException(
-                "訂單商品在欄位轉換後由 {$expected} 筆變成 {$actual} 筆，migration 已中止。"
-            );
-        }
+        Schema::table('order_items', function (Blueprint $table) use ($type) {
+            $table->{$type}('target_value')->change();
+        });
     }
 
     /**

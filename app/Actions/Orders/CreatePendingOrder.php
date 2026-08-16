@@ -4,6 +4,7 @@ namespace App\Actions\Orders;
 
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
+use App\Exceptions\UnsellablePriceException;
 use App\Models\Order;
 use App\Models\OrderEvent;
 use App\Models\PaymentAttempt;
@@ -32,8 +33,21 @@ class CreatePendingOrder
         string $checkoutToken,
         string $provider,
     ): Order {
+        // ⛔ 最後一道防線：即使有人直接改 DB 或繞過後台驗證寫入不可販售的設定，
+        // 也不得在這裡建立訂單。amountFor() 本身會擋下負數、零與 overflow，
+        // 這裡再確認數量真的買得到，避免任何一條路徑漏掉。
+        if (! $variant->quantityIsValid($quantity)) {
+            throw new UnsellablePriceException(
+                "服務項目 #{$variant->id} 目前無法以數量 {$quantity} 建立訂單。"
+            );
+        }
+
         // 金額一律在這裡依「當下」單價重算，⛔ 不讀前端送來的 price／amount。
         $amount = $variant->amountFor($quantity);
+
+        if ($amount <= 0) {
+            throw new UnsellablePriceException("應付金額必須大於 0，計算結果為 {$amount}。");
+        }
 
         return DB::transaction(function () use ($variant, $quantity, $contact, $checkoutToken, $provider, $amount) {
             $order = Order::create([

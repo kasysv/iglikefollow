@@ -8,6 +8,7 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Events\OrderPaid;
 use App\Exceptions\NonIntegerAmountException;
+use App\Exceptions\UnsellablePriceException;
 use App\Models\Order;
 use App\Models\OrderEvent;
 use App\Models\OrderItem;
@@ -538,7 +539,49 @@ class OrderTransactionIntegrityTest extends TestCase
             'updated_at' => now(),
         ]);
 
+        DB::table('payment_attempts')->insert([
+            'order_id' => $orderId,
+            'provider' => 'line-pay',
+            'reference' => 'PAY-LEGACY000001',
+            'status' => 'initiated',
+            'amount' => 590,
+            'currency' => 'TWD',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('order_events')->insert([
+            'order_id' => $orderId,
+            'type' => 'order_created',
+            'summary' => '舊資料事件',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
         return ['order_id' => $orderId, 'item_id' => $itemId];
+    }
+
+    /**
+     * A checksum of every order table, row by row.
+     *
+     * ⛔ Counting rows is not enough — that is exactly how the cascade bug
+     * survived R1 review. This hashes the full contents so a dropped, added or
+     * altered row in any of the four tables shows up.
+     *
+     * @return array<string, string>
+     */
+    private function orderTablesChecksum(): array
+    {
+        $checksum = [];
+
+        foreach (['orders', 'order_items', 'payment_attempts', 'order_events'] as $table) {
+            $rows = DB::table($table)->orderBy('id')->get()
+                ->map(fn ($row) => (array) $row)->all();
+
+            $checksum[$table] = count($rows).':'.md5(json_encode($rows));
+        }
+
+        return $checksum;
     }
 
     public function test_the_migration_encrypts_rows_that_were_already_plaintext(): void
@@ -569,26 +612,73 @@ class OrderTransactionIntegrityTest extends TestCase
     }
 
     /**
-     * ⛔ 這個 migration 不得刪掉任何一列訂單商品。
+     * ⛔ 這個 migration 不得動到任何一列訂單資料。
      *
      * SQLite 沒有真正的 ALTER COLUMN：driver 會整張表重建，而 drop `orders`
-     * 會觸發 order_items 的 ON DELETE CASCADE，把子表整個清空。R1 的 up/down/up
-     * 只數了訂單筆數，所以沒有發現。這個測試直接盯住子表列數。
+     * 會觸發所有子表的 ON DELETE CASCADE——order_items、payment_attempts 與
+     * order_events 都會被清空。R1 只數了 orders，R2 只數了 order_items，兩輪
+     * 都因此漏掉。這裡改用四張表的逐列 checksum，⛔ 不只數筆數。
      */
-    public function test_the_pii_migration_does_not_delete_order_items(): void
+    public function test_the_pii_migration_preserves_every_order_table(): void
     {
-        $ids = $this->seedPlaintextOrder();
+        $this->seedPlaintextOrder();
+
+        $before = $this->orderTablesChecksum();
 
         $migration = $this->piiMigration();
         $migration->up();
 
-        $this->assertSame(1, DB::table('order_items')->count(), 'up() 刪掉了訂單商品');
-        $this->assertSame(1, DB::table('orders')->count());
+        // 加密會改變 orders／order_items 的內容，但子表完全不該被碰到。
+        $afterUp = $this->orderTablesChecksum();
+        $this->assertSame($before['payment_attempts'], $afterUp['payment_attempts'], 'up() 動到了付款嘗試');
+        $this->assertSame($before['order_events'], $afterUp['order_events'], 'up() 動到了訂單事件');
+        $this->assertStringStartsWith('1:', $afterUp['orders']);
+        $this->assertStringStartsWith('1:', $afterUp['order_items']);
 
         $migration->down();
 
-        $this->assertSame(1, DB::table('order_items')->count(), 'down() 刪掉了訂單商品');
-        $this->assertSame($ids['item_id'], (int) DB::table('order_items')->value('id'));
+        // 回到原點後，四張表必須逐列完全相同。
+        $this->assertSame($before, $this->orderTablesChecksum(), 'up/down 之後訂單資料漂移');
+    }
+
+    /**
+     * 同樣的保證，這次包在外層 transaction 裡。
+     *
+     * GPT 的探針正是在這個情境下抓到子表被清空：SQLite 在 transaction 內會
+     * 忽略 `PRAGMA foreign_keys`，所以任何依賴該 pragma 的防禦都會失效。
+     */
+    public function test_the_pii_migration_preserves_every_order_table_inside_a_transaction(): void
+    {
+        $this->seedPlaintextOrder();
+
+        $before = $this->orderTablesChecksum();
+
+        DB::transaction(function () {
+            $migration = $this->piiMigration();
+            $migration->up();
+            $migration->down();
+        });
+
+        $this->assertSame($before, $this->orderTablesChecksum(), 'transaction 內 migration 造成資料漂移');
+    }
+
+    public function test_the_pii_migration_encrypts_inside_a_transaction_too(): void
+    {
+        $this->seedPlaintextOrder();
+
+        DB::transaction(fn () => $this->piiMigration()->up());
+
+        $raw = json_encode([
+            DB::table('orders')->get(),
+            DB::table('order_items')->get(),
+        ], JSON_UNESCAPED_UNICODE);
+
+        $this->assertStringNotContainsString('legacy@example.com', $raw);
+        $this->assertStringNotContainsString('legacy_account', $raw);
+
+        // 子表仍在。
+        $this->assertSame(1, DB::table('payment_attempts')->count());
+        $this->assertSame(1, DB::table('order_events')->count());
     }
 
     public function test_the_pii_rollback_restores_the_exact_plaintext(): void
@@ -715,5 +805,190 @@ class OrderTransactionIntegrityTest extends TestCase
             5900,
             (int) DB::table('order_items')->where('id', $ids['item_id'])->value('unit_price_mills')
         );
+    }
+
+    // ==================================== R3-2 合法數量必須從真正買得到的量算起
+
+    /** An unsaved variant carrying exactly the price and quantity rules given. */
+    private function probeVariant(string $rate, int $min, int $max, int $step): ServiceVariant
+    {
+        $variant = new ServiceVariant;
+
+        $variant->setRawAttributes([
+            'unit_price' => $rate,
+            'min_quantity' => $min,
+            'max_quantity' => $max,
+            'step_quantity' => $step,
+        ], true);
+
+        return $variant;
+    }
+
+    /**
+     * 購買規則是 `quantity % step === 0`，所以 min 不是 step 倍數時，
+     * min 本身根本買不到。⛔ 驗證必須從第一個真正買得到的數量開始。
+     */
+    public function test_validation_starts_at_the_first_purchasable_quantity(): void
+    {
+        // min 101、step 100 → 101 買不到，200 才是第一個合法數量。
+        $variant = $this->probeVariant('0.5000', 101, 200, 100);
+
+        $this->assertSame(200, $variant->firstPurchasableQuantity());
+        // ⛔ 不得回報 101：那是客人買不到的數量。
+        $this->assertNull($variant->firstNonIntegerQuantity());
+        $this->assertTrue($variant->quantityIsValid(200));
+        $this->assertSame(100, $variant->amountFor(200));
+    }
+
+    public function test_a_range_containing_no_purchasable_quantity_is_refused(): void
+    {
+        // 101 到 199 之間沒有任何 100 的倍數：客人買不到任何數量。
+        $variant = $this->probeVariant('0.5000', 101, 199, 100);
+
+        $this->assertNull($variant->firstPurchasableQuantity());
+
+        $saved = $this->variant();
+        $this->expectException(ValidationException::class);
+
+        $saved->forceFill([
+            'min_quantity' => 101, 'max_quantity' => 199,
+            'step_quantity' => 100, 'default_quantity' => 101,
+        ])->save();
+    }
+
+    public function test_the_offending_quantity_reported_is_one_a_customer_could_pick(): void
+    {
+        // rate 0.59、min 150、step 100 → 第一個合法量是 200，不是 150。
+        $variant = $this->probeVariant('0.5900', 150, 1000, 100);
+
+        $offending = $variant->firstNonIntegerQuantity();
+
+        // 回報的數量必須真的買得到（是 step 的倍數且在範圍內）。
+        if ($offending !== null) {
+            $this->assertSame(0, $offending % 100, "回報了買不到的數量 {$offending}");
+            $this->assertGreaterThanOrEqual(150, $offending);
+        }
+
+        $this->assertSame(200, $variant->firstPurchasableQuantity());
+    }
+
+    // ==================================== R3-3 負數／零／overflow 不得繞過
+
+    public function test_a_negative_unit_price_cannot_produce_an_amount(): void
+    {
+        $variant = $this->probeVariant('-1.0000', 1, 10, 1);
+
+        // ⛔ probe 曾經算出 -1；現在必須直接拒絕。
+        $this->assertFalse($variant->quantityIsValid(1));
+
+        $this->expectException(UnsellablePriceException::class);
+        $variant->amountFor(1);
+    }
+
+    public function test_a_zero_unit_price_cannot_produce_an_amount(): void
+    {
+        $variant = $this->probeVariant('0.0000', 1, 10, 1);
+
+        $this->assertFalse($variant->quantityIsValid(1));
+
+        $this->expectException(UnsellablePriceException::class);
+        $variant->amountFor(1);
+    }
+
+    public function test_a_negative_or_zero_price_cannot_be_saved(): void
+    {
+        $variant = $this->variant();
+
+        $this->expectException(ValidationException::class);
+        $variant->forceFill(['unit_price' => '-1.0000'])->save();
+    }
+
+    public function test_a_zero_price_cannot_be_saved(): void
+    {
+        $variant = $this->variant();
+
+        $this->expectException(ValidationException::class);
+        $variant->forceFill(['unit_price' => '0.0000'])->save();
+    }
+
+    public function test_an_overflowing_amount_is_refused_not_silently_floated(): void
+    {
+        // ⛔ PHP 會把整數溢位悄悄變成 float，那樣所有精確性保證都失效。
+        $this->expectException(UnsellablePriceException::class);
+
+        Money::total(PHP_INT_MAX, 999);
+    }
+
+    public function test_a_non_positive_quantity_is_refused(): void
+    {
+        $this->expectException(UnsellablePriceException::class);
+
+        Money::total(5900, 0);
+    }
+
+    /**
+     * 即使有人繞過後台直接改 DB，建單前仍必須 fail closed。
+     *
+     * ⛔ 這是最後一道防線：不建 order、item 或 attempt。
+     */
+    public function test_dirty_database_data_cannot_create_an_order(): void
+    {
+        $variant = $this->variant();
+
+        // 直接寫入負單價，繞過 observer 與表單驗證。
+        DB::table('service_variants')->where('id', $variant->id)
+            ->update(['unit_price' => '-1.0000']);
+
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1000])
+            ->assertRedirect();
+
+        $this->assertSame(0, Order::count());
+        $this->assertSame(0, OrderItem::count());
+        $this->assertSame(0, PaymentAttempt::count());
+    }
+
+    public function test_a_zero_priced_variant_cannot_create_an_order(): void
+    {
+        $variant = $this->variant();
+
+        DB::table('service_variants')->where('id', $variant->id)
+            ->update(['unit_price' => '0.0000']);
+
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1000])
+            ->assertRedirect();
+
+        $this->assertSame(0, Order::count());
+        $this->assertSame(0, PaymentAttempt::count());
+    }
+
+    public function test_the_normal_case_still_creates_an_integer_order(): void
+    {
+        // ⛔ 以上所有守門都不得誤傷正常訂單。
+        $this->post('/checkout/start', ['variant' => $this->variant()->id, 'quantity' => 1000]);
+        $this->post('/checkout/mock', [
+            'target' => 'example_account', 'payment' => 'line-pay',
+            'customer_email' => 'buyer@example.com',
+            'invoice_kind' => 'personal', 'personal_invoice_mode' => 'email',
+        ])->assertOk();
+
+        $order = Order::latest('id')->firstOrFail();
+
+        $this->assertSame(590, $order->total_amount);
+        $this->assertSame(590, (int) $order->items()->value('amount'));
+        $this->assertSame(590, (int) $order->paymentAttempts()->value('amount'));
+    }
+
+    public function test_error_messages_carry_no_personal_data(): void
+    {
+        $variant = $this->probeVariant('-1.0000', 1, 10, 1);
+
+        try {
+            $variant->amountFor(1);
+            $this->fail('負單價應該被拒絕。');
+        } catch (UnsellablePriceException $e) {
+            // ⛔ 錯誤訊息只談價格與數量，不得帶出個資或金鑰。
+            $this->assertStringNotContainsString('@', $e->getMessage());
+            $this->assertStringNotContainsString(config('app.key'), $e->getMessage());
+        }
     }
 }
