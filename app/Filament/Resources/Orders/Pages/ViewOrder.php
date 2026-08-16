@@ -6,6 +6,7 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Models\Order;
+use App\Support\Money;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\Section;
@@ -49,8 +50,9 @@ class ViewOrder extends ViewRecord
                     TextEntry::make('items.sku')->label('商品編號')->placeholder('—'),
                     TextEntry::make('items.quantity')->label('數量')
                         ->formatStateUsing(fn ($state) => number_format((int) $state)),
-                    TextEntry::make('items.unit_price_cents')->label('單價')
-                        ->formatStateUsing(fn ($state) => 'NT$'.number_format($state / 100, 2)),
+                    // 完整四位小數快照，⛔ 不四捨五入成兩位顯示。
+                    TextEntry::make('items.unit_price_mills')->label('單價')
+                        ->formatStateUsing(fn ($state) => 'NT$'.Money::format((int) $state)),
                     TextEntry::make('items.target_value')->label('交付對象'),
                 ])->columns(3),
 

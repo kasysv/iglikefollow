@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -19,6 +20,14 @@ class OrderItem extends Model
 
     protected $guarded = [];
 
+    /*
+     * 交付對象是客人的 IG 帳號或貼文網址，屬個資，⛔ 不以明文保存。
+     * 商品名稱、SKU 與金額不加密：後台需要能搜尋與對帳。
+     */
+    protected $casts = [
+        'target_value' => 'encrypted',
+    ];
+
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
@@ -29,9 +38,14 @@ class OrderItem extends Model
         return $this->belongsTo(ServiceVariant::class);
     }
 
-    /** 顯示用單價，由下單當下的「分」還原。 */
-    public function unitPrice(): float
+    /**
+     * 顯示用單價字串，例如 "0.1234"。
+     *
+     * ⛔ 回傳字串而非 float：這是要顯示給人看與對帳的金額，
+     * 轉成 float 只會再次引入精度問題。
+     */
+    public function unitPrice(): string
     {
-        return $this->unit_price_cents / 100;
+        return Money::format((int) $this->unit_price_mills);
     }
 }

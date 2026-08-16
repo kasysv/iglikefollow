@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -38,9 +39,24 @@ class ServiceVariant extends Model
             && $quantity % $this->step_quantity === 0;
     }
 
-    /** 依單價重算金額；⛔ 前端送來的任何價格欄位一律忽略。 */
+    /**
+     * The unit price in mills (ten-thousandths of NT$), exactly as stored.
+     *
+     * Read from the raw column rather than the decimal cast, so a price like
+     * 0.1234 survives without a float ever being involved.
+     */
+    public function unitPriceMills(): int
+    {
+        return Money::toMills((string) $this->getRawOriginal('unit_price'));
+    }
+
+    /**
+     * 依單價重算應付金額（整數台幣）。
+     *
+     * ⛔ 前端送來的任何價格欄位一律忽略；⛔ 全程整數運算，不使用 binary float。
+     */
     public function amountFor(int $quantity): int
     {
-        return (int) round($quantity * (float) $this->unit_price);
+        return Money::total($this->unitPriceMills(), $quantity);
     }
 }

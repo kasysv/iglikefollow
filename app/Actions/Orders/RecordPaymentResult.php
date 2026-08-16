@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\OrderEvent;
 use App\Models\PaymentAttempt;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 
 /**
  * Apply a payment outcome to an attempt, and promote the order if it succeeded.
@@ -20,6 +21,9 @@ use Illuminate\Support\Facades\DB;
  */
 class RecordPaymentResult
 {
+    /**
+     * @throws InvalidArgumentException when given a status that is not an outcome
+     */
     public function handle(
         PaymentAttempt $attempt,
         PaymentStatus $status,
@@ -27,6 +31,19 @@ class RecordPaymentResult
         ?string $failureCode = null,
         ?string $failureMessage = null,
     ): PaymentAttempt {
+        /*
+         * ⛔ 只接受終止狀態。
+         *
+         * 傳入 Initiated／Pending 會把「還在付款中」寫成「已完成」——填上
+         * completed_at 並建立一筆付款失敗事件。這種誤記比沒有紀錄更糟，
+         * 因此在任何寫入之前就拒絕。要標記付款中請用 MarkPaymentPending。
+         */
+        if (! $status->isTerminal()) {
+            throw new InvalidArgumentException(
+                "付款結果只能是終止狀態，收到「{$status->value}」。付款中請改用 MarkPaymentPending。"
+            );
+        }
+
         return DB::transaction(function () use ($attempt, $status, $providerReference, $failureCode, $failureMessage) {
             // 鎖住這筆嘗試；⛔ 並行的重複通知必須排隊而不是同時進來。
             $locked = PaymentAttempt::query()

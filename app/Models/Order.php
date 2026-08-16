@@ -15,10 +15,25 @@ class Order extends Model
 
     protected $guarded = [];
 
+    /*
+     * 個資一律 encrypted at rest。
+     *
+     * 這些欄位是收款、開票與履約所必需，⛔ 不能刪除，但也不該在資料庫裡以明文
+     * 存放——備份外流或 DB 被直接查詢時就是一次個資外洩。加密後 raw SQL 查不到
+     * 明文，模型讀取則照常，遮罩與未來的 provider adapter 都不受影響。
+     *
+     * ⛔ 狀態、金額、商品名稱與 reference 不加密：那些要能篩選與對帳。
+     */
     protected $casts = [
         'order_status' => OrderStatus::class,
         'payment_status' => PaymentStatus::class,
         'paid_at' => 'datetime',
+        'customer_email' => 'encrypted',
+        'customer_phone' => 'encrypted',
+        'carrier_number' => 'encrypted',
+        'love_code' => 'encrypted',
+        'buyer_tax_id' => 'encrypted',
+        'buyer_name' => 'encrypted',
     ];
 
     public function items(): HasMany

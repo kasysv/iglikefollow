@@ -30,9 +30,12 @@ return new class extends Migration
             $table->string('sku')->nullable();
             $table->string('external_sku')->nullable();
 
+            // 單價原以「分」保存；⛔ 已由 2026_08_16_110000 改為「毫」以保留
+            // decimal(12,4) 的完整精度，見該 corrective migration。
             $table->unsignedInteger('unit_price_cents');
             $table->unsignedInteger('quantity');
             $table->string('quantity_unit', 16);
+            // 小計，單位為「整數台幣元」。
             $table->unsignedInteger('amount');
 
             // 履約目標：帳號還是網址，以及客人填的值。

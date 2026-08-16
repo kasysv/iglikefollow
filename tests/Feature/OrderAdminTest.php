@@ -48,7 +48,7 @@ class OrderAdminTest extends TestCase
             'service_name' => 'Instagram 粉絲',
             'variant_label' => '一般粉絲',
             'sku' => 'ig-followers-standard',
-            'unit_price_cents' => 59,
+            'unit_price_mills' => 5900,
             'quantity' => 1000,
             'quantity_unit' => '個',
             'amount' => 590,

@@ -28,7 +28,8 @@ return new class extends Migration
             $table->string('order_status')->index();
             $table->string('payment_status')->index();
 
-            // 金額以「分」為單位的整數保存，⛔ 不用 float，避免累加誤差。
+            // 應付總額，單位為「整數台幣元」（590 表示 NT$590，不是 590 分）。
+            // ⛔ 不用 float；四位小數的單價運算集中在 App\Support\Money。
             $table->unsignedInteger('total_amount');
             $table->string('currency', 3)->default('TWD');
 

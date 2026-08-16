@@ -46,6 +46,18 @@ enum PaymentStatus: string
         return in_array($this, [self::Initiated, self::Pending], true);
     }
 
+    /**
+     * A final outcome: the provider has told us how this attempt ended.
+     *
+     * Only these may be recorded as a result. "Initiated" and "Pending" mean
+     * the attempt is still running, so writing a completion time or a failure
+     * event for them would misreport an in-flight payment as finished.
+     */
+    public function isTerminal(): bool
+    {
+        return ! $this->isOpen();
+    }
+
     /** @return array<string, string> */
     public static function options(): array
     {

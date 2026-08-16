@@ -64,7 +64,8 @@ class CreatePendingOrder
                 'variant_label' => $variant->label,
                 'sku' => $variant->sku,
                 'external_sku' => $variant->external_sku,
-                'unit_price_cents' => (int) round((float) $variant->unit_price * 100),
+                // ⛔ 保存完整四位小數精度；分為單位會把 0.1234 截成 0.12。
+                'unit_price_mills' => $variant->unitPriceMills(),
                 'quantity' => $quantity,
                 'quantity_unit' => $variant->quantity_unit,
                 'amount' => $amount,

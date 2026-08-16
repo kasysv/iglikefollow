@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Actions\Orders\CreatePendingOrder;
+use App\Actions\Orders\MarkPaymentPending;
 use App\Actions\Orders\RecordPaymentResult;
 use App\Enums\PaymentStatus;
 use App\Models\Order;
@@ -24,6 +25,7 @@ class MockCheckoutController extends Controller
         private readonly CheckoutSession $checkout,
         private readonly CreatePendingOrder $createOrder,
         private readonly RecordPaymentResult $recordPayment,
+        private readonly MarkPaymentPending $markPending,
     ) {}
 
     public function store(Request $request): View|RedirectResponse
@@ -107,6 +109,18 @@ class MockCheckoutController extends Controller
 
         $outcome = PaymentStatus::tryFrom((string) $request->input('fake_payment_result'))
             ?? PaymentStatus::Succeeded;
+
+        /*
+         * 「付款中」是一個獨立的轉換，不是一種結果。
+         *
+         * ⛔ 不可交給 RecordPaymentResult：那會寫入 completed_at 並建立一筆
+         * 付款失敗事件，把還在進行中的付款誤記成已失敗。
+         */
+        if (! $outcome->isTerminal()) {
+            $this->markPending->handle($attempt, 'FAKE-'.$attempt->reference);
+
+            return;
+        }
 
         $this->recordPayment->handle(
             $attempt,

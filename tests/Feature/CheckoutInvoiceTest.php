@@ -462,7 +462,14 @@ class CheckoutInvoiceTest extends TestCase
         ])->assertOk();
     }
 
-    public function test_the_mock_writes_nothing_to_the_database(): void
+    /**
+     * 結帳「會」建立訂單（M3A 起），但個資不得流進稽核紀錄。
+     *
+     * ⛔ 舊名稱 test_the_mock_writes_nothing_to_the_database 已不成立：
+     * 現在結帳確實會新增 orders／order_items／payment_attempts。這個測試
+     * 真正保障的是「後台稽核紀錄不得收錄客人個資」。
+     */
+    public function test_checkout_never_writes_personal_data_into_the_audit_log(): void
     {
         // 基準是 seeder 建立目錄後的狀態（那些寫入是 audit observer 的正常行為）。
         $before = DB::table('admin_audit_logs')->count();
@@ -474,7 +481,7 @@ class CheckoutInvoiceTest extends TestCase
             'carrier_number' => '/ABC1234',
         ])->assertOk();
 
-        // 結帳本身不得新增任何資料列，⛔ 也不得把個資寫進既有資料表。
+        // 訂單相關的表不受 AuditObserver 監看，⛔ 稽核紀錄不應因結帳而增加。
         $this->assertSame($before, DB::table('admin_audit_logs')->count());
 
         foreach (DB::table('admin_audit_logs')->pluck('after') as $payload) {
