@@ -33,7 +33,12 @@
 
     <div class="mt-6 grid items-start gap-8 lg:mt-8 lg:grid-cols-[1fr_360px] lg:gap-12">
 
-        <form action="{{ route('checkout.mock') }}" method="post" class="space-y-8">
+        {{-- Sandbox 付款開啟時才送往真正的付款流程；⛔ 預設仍走 local mock。
+             這只決定表單 POST 到哪裡：兩條路徑背後的驗證與建單完全相同。 --}}
+        @php($paymentsEnabled = config('integrations.payments.sandbox_enabled'))
+
+        <form action="{{ $paymentsEnabled ? route('payments.start') : route('checkout.mock') }}"
+              method="post" class="space-y-8">
             @csrf
 
             {{-- 1. 履約資料 --}}

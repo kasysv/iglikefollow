@@ -382,23 +382,50 @@ class IntegrationSettingsTest extends TestCase
         }
     }
 
-    public function test_endpoints_are_not_invented(): void
+    /**
+     * ⛔ 只有已核對過的 sandbox 端點可以存在。
+     *
+     * M3B-B1 批准了綠界 stage 與 LINE Pay sandbox，所以這兩個不再是空的；
+     * 其餘一律留空——⛔ 端點不得「先填好等人誤用」，尤其是 production。
+     */
+    public function test_only_approved_sandbox_endpoints_exist(): void
     {
-        // 本輪禁止外部呼叫，端點必須是空的，⛔ 不得先填好等人誤用。
-        foreach (config('integrations.endpoints') as $environments) {
-            foreach ($environments as $endpoint) {
-                $this->assertSame('', $endpoint);
-            }
+        $endpoints = config('integrations.endpoints');
+
+        // 已批准：綠界 stage 與 LINE Pay sandbox。
+        $this->assertStringStartsWith('https://payment-stage.ecpay.com.tw/', $endpoints['ecpay_payment']['sandbox']);
+        $this->assertSame('https://sandbox-api-pay.line.me', $endpoints['line_pay']['sandbox']);
+
+        // ⛔ 所有 production 端點仍為空。
+        foreach ($endpoints as $provider => $environments) {
+            $this->assertSame('', $environments['production'] ?? '', "{$provider} 的 production 端點不得填入");
         }
+
+        // ⛔ 發票 sandbox 留給 B2，TheMostPanel 完全未證實。
+        $this->assertSame('', $endpoints['ecpay_invoice']['sandbox']);
     }
 
-    public function test_nothing_is_enablable_this_round(): void
+    public function test_only_sandbox_payments_are_enablable(): void
     {
-        foreach (config('integrations.enablable') as $environments) {
-            foreach ($environments as $allowed) {
-                $this->assertFalse($allowed);
-            }
+        $enablable = config('integrations.enablable');
+
+        // 已批准的 sandbox 付款測試。
+        $this->assertTrue($enablable['ecpay_payment']['sandbox']);
+        $this->assertTrue($enablable['line_pay']['sandbox']);
+
+        // ⛔ 任何 production 都不得被啟用。
+        foreach ($enablable as $provider => $environments) {
+            $this->assertFalse($environments['production'] ?? false, "{$provider} production 不得可啟用");
         }
+
+        // ⛔ 發票與 TheMostPanel 本輪都不開放。
+        $this->assertFalse($enablable['ecpay_invoice']['sandbox']);
+    }
+
+    public function test_sandbox_payments_are_off_by_default(): void
+    {
+        // ⛔ 總開關預設關閉：填了 credential 也不等於開始送出請求。
+        $this->assertFalse(config('integrations.payments.sandbox_enabled'));
     }
 
     public function test_a_raw_response_cannot_be_stored_as_a_test_message(): void

@@ -25,12 +25,15 @@ return [
      | 空字串代表「尚未確認」，adapter 必須 fail closed，不得猜測。
      */
     'endpoints' => [
+        // 綠界 AioCheckOut V5 stage（2026-08-16 核對官方文件）。
+        // ⛔ production 仍留空：啟用正式收款需要另一次明確批准。
         'ecpay_payment' => [
-            'sandbox' => '',
+            'sandbox' => 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5',
             'production' => '',
         ],
+        // LINE Pay Online API v4 sandbox base（2026-08-16 核對官方文件）。
         'line_pay' => [
-            'sandbox' => '',
+            'sandbox' => 'https://sandbox-api-pay.line.me',
             'production' => '',
         ],
         'ecpay_invoice' => [
@@ -49,12 +52,14 @@ return [
      | 按一個開關；把它放在程式碼裡，才不會被偽造的 Livewire payload 打開。
      */
     'enablable' => [
+        // sandbox 付款測試已獲批准，Owner 可在後台啟用這兩組設定。
+        // ⛔ production 仍為 false：正式收款需要另一次明確批准。
         'ecpay_payment' => [
-            'sandbox' => false,
+            'sandbox' => true,
             'production' => false,
         ],
         'line_pay' => [
-            'sandbox' => false,
+            'sandbox' => true,
             'production' => false,
         ],
         'ecpay_invoice' => [
@@ -72,6 +77,20 @@ return [
      */
     'invoice' => [
         'gateway' => env('INVOICE_GATEWAY', 'fake'),
+    ],
+
+    /*
+     | Sandbox 付款流程總開關。
+     |
+     | ⛔ 預設關閉。關閉時 checkout 仍走 local mock，付款 adapter 一律 fail
+     | closed——不會退回 Fake，也不會連到任何 endpoint。要實際測試 sandbox
+     | 需要在環境中明確打開，並且已在後台填入 sandbox credential。
+     |
+     | ⛔ production 永遠不受這個開關影響：PaymentGatewayRegistry 另外硬性
+     | 拒絕 production 環境。
+     */
+    'payments' => [
+        'sandbox_enabled' => env('PAYMENTS_SANDBOX_ENABLED', false),
     ],
 
 ];

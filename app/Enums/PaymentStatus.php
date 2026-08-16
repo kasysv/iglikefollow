@@ -17,6 +17,8 @@ enum PaymentStatus: string
     case Failed = 'failed';
     case Canceled = 'canceled';
     case Expired = 'expired';
+    /** 結果不明，需人工對帳；⛔ 既不是成功也不是失敗。 */
+    case ReconciliationRequired = 'reconciliation_required';
 
     public function label(): string
     {
@@ -27,6 +29,7 @@ enum PaymentStatus: string
             self::Failed => '付款失敗',
             self::Canceled => '已取消',
             self::Expired => '已逾期',
+            self::ReconciliationRequired => '需人工對帳',
         };
     }
 
@@ -35,7 +38,7 @@ enum PaymentStatus: string
         return match ($this) {
             self::Succeeded => 'success',
             self::Initiated, self::Pending => 'warning',
-            self::Failed => 'danger',
+            self::Failed, self::ReconciliationRequired => 'danger',
             self::Canceled, self::Expired => 'gray',
         };
     }
@@ -52,10 +55,32 @@ enum PaymentStatus: string
      * Only these may be recorded as a result. "Initiated" and "Pending" mean
      * the attempt is still running, so writing a completion time or a failure
      * event for them would misreport an in-flight payment as finished.
+     *
+     * ⛔ ReconciliationRequired is deliberately excluded. It is not an outcome
+     * — it is the absence of one — so it must not be reachable through
+     * RecordPaymentResult, which exists to apply results.
      */
     public function isTerminal(): bool
     {
-        return ! $this->isOpen();
+        return in_array($this, [
+            self::Succeeded,
+            self::Failed,
+            self::Canceled,
+            self::Expired,
+        ], true);
+    }
+
+    /**
+     * The provider's answer never arrived, or could not be trusted.
+     *
+     * ⛔ Not a failure. The money may well have been taken: a timeout says
+     * nothing about what happened on their side. Recording it as failed would
+     * tell a charged customer their payment did not go through, and retrying
+     * could charge them twice. A person has to look.
+     */
+    public function needsReconciliation(): bool
+    {
+        return $this === self::ReconciliationRequired;
     }
 
     /** @return array<string, string> */
