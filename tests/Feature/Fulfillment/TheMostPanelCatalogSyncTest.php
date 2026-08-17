@@ -871,6 +871,49 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $this->assertSame(0, DB::table('cache_locks')->count());
     }
 
+    /**
+     * ⛔ R2：assoc decode 會把純數字 property name 轉成 integer array key，
+     * 讓 Unicode-escaped 的**純數字** API Key 逃過 `is_string($name)`。
+     * 這個 regression 用固定純數字 fake key `9876543210`，以逐字元 `\uXXXX`
+     * 藏在合法 services body 的額外 object property name 裡。
+     */
+    public function test_a_unicode_escaped_numeric_key_as_property_name_is_still_refused(): void
+    {
+        $numericKey = '9876543210';
+
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::TheMostPanel, IntegrationEnvironment::Production)
+            ->create();
+        $setting->credentials = ['ApiKey' => $numericKey];
+        $setting->save();
+
+        $escapedKey = implode('', array_map(
+            fn (string $char) => sprintf('\\u%04x', ord($char)),
+            str_split($numericKey)
+        ));
+
+        // raw scan 看不到（escape 序列不含連續十位數字），只有 decode 路徑能抓。
+        $rawBody = '[{"service":9101,"name":"合法虛構名稱","type":"Default","category":"c",'
+            .'"rate":"0.90","min":"10","max":"10000","refill":false,"cancel":false,'
+            .'"'.$escapedKey.'":"x"}]';
+
+        $this->assertStringNotContainsString($numericKey, $rawBody, '前提：raw body 不含明文 key');
+
+        Http::fake([self::ENDPOINT => Http::response($rawBody, 200, ['Content-Type' => 'application/json'])]);
+
+        $result = $this->sync();
+
+        $this->assertSame('credential_echo_refused', $result->outcome);
+        $this->assertFalse($result->applied);
+        Http::assertSentCount(1);
+        $this->assertSame(0, ProviderService::query()->count());
+        $this->assertStringNotContainsString(
+            $numericKey,
+            json_encode($result->toArray()).print_r($result, true)
+        );
+        $this->assertSame(0, DB::table('cache_locks')->count());
+    }
+
     public function test_a_clean_fictional_catalog_is_not_caught_by_the_echo_guard(): void
     {
         Http::fake([self::ENDPOINT => Http::response(self::fictionalServices())]);

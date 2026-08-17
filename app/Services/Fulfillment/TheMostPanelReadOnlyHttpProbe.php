@@ -11,6 +11,7 @@ use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
 use Illuminate\Support\Facades\Http;
+use stdClass;
 use Throwable;
 
 /**
@@ -265,22 +266,40 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
             return true;
         }
 
-        return $this->structureContains(json_decode($body, true), $key);
+        /*
+         * ⛔ 不用 assoc decode。assoc 模式會把純數字 object property name
+         * canonical 化成 integer array key——一把 Unicode-escaped 的純數字
+         * API Key 就這樣逃過了字串檢查（GPT R1 反例）。stdClass 的 property
+         * name 永遠是字串，foreach 也原樣保留，型別差異不會被抹掉。
+         */
+        return $this->structureContains(json_decode($body), $key);
     }
 
-    /** 遞迴檢查 decode 後的每個 object key 與 string value。 */
+    /** 遞迴檢查 decode 後的每個 object property name 與 string value。 */
     private function structureContains(mixed $value, string $key): bool
     {
         if (is_string($value)) {
             return str_contains($value, $key);
         }
 
-        if (is_array($value)) {
+        if ($value instanceof stdClass) {
             foreach ($value as $name => $item) {
-                if (is_string($name) && str_contains($name, $key)) {
+                // ⛔ (string) 是雙保險：object property name 本來就是字串。
+                if (str_contains((string) $name, $key)) {
                     return true;
                 }
 
+                if ($this->structureContains($item, $key)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (is_array($value)) {
+            // JSON list：index 不可能載 key，只遞迴 value。
+            foreach ($value as $item) {
                 if ($this->structureContains($item, $key)) {
                     return true;
                 }
