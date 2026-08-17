@@ -2,13 +2,24 @@
 
 namespace App\Data\Fulfillment;
 
+use App\Exceptions\TheMostPanelCatalogParseException;
+
 /**
  * What one catalog sync attempt did — in terms safe to print anywhere.
  *
- * ⛔ Outcome, applied flag, HTTP status and elapsed time. Nothing else can be
- * put in here: no service id, name, category or rate, no raw body, no
- * exception text, no credential. The console prints this verbatim, so this
- * class is the allowlist.
+ * ⛔ Outcome, applied flag, HTTP status, elapsed time — and, for a parser
+ * rejection only, the parser's own allowlisted local reason and documented
+ * field name. Nothing else can be put in here: no service id, name, category
+ * or rate, no raw body, no exception text, no credential. The console prints
+ * this verbatim, so this class is the allowlist.
+ *
+ * ⛔ The parser diagnostics have exactly one entrance: a typed factory that
+ * accepts the parse exception itself. B3 taught why the fields must exist —
+ * the orchestrator threw the safe reason away, and afterwards nobody could
+ * say whether the response was a non-list, a missing field or a wrong type.
+ * They still enter only through the exception, whose own constructor already
+ * enforces both allowlists; this class re-validates anyway and drops rather
+ * than prints anything unknown.
  */
 final class ProviderServiceCatalogSyncResult
 {
@@ -39,11 +50,40 @@ final class ProviderServiceCatalogSyncResult
         public readonly bool $applied,
         public readonly ?int $httpStatus = null,
         public readonly ?int $elapsedMs = null,
+        /** parser 的本地 allowlisted reason；只可經 rejectedByParser() 進入。 */
+        public readonly ?string $parserReason = null,
+        /** 文件九欄位之一；⛔ 永遠不是 provider 值。 */
+        public readonly ?string $parserField = null,
     ) {}
 
     public static function applied(?int $httpStatus, ?int $elapsedMs): self
     {
         return new self(self::APPLIED, true, $httpStatus, $elapsedMs);
+    }
+
+    /**
+     * A parser rejection, with the parser's own safe diagnosis attached.
+     *
+     * ⛔ Only this factory can set the diagnostic fields, and it accepts only
+     * the typed exception — an arbitrary string has no way in. The values are
+     * re-checked against the exception's own allowlists; anything unknown is
+     * dropped, not printed.
+     */
+    public static function rejectedByParser(
+        TheMostPanelCatalogParseException $exception,
+        ?int $httpStatus = null,
+        ?int $elapsedMs = null,
+    ): self {
+        $reason = TheMostPanelCatalogParseException::isAllowlistedReason($exception->reason)
+            ? $exception->reason
+            : null;
+
+        $field = $exception->field !== null
+            && TheMostPanelCatalogParseException::isDocumentedField($exception->field)
+            ? $exception->field
+            : null;
+
+        return new self('catalog_rejected_by_parser', false, $httpStatus, $elapsedMs, $reason, $field);
     }
 
     /**
@@ -71,6 +111,8 @@ final class ProviderServiceCatalogSyncResult
             'catalog_applied' => $this->applied,
             'http_status' => $this->httpStatus,
             'elapsed_ms' => $this->elapsedMs,
+            'parser_reason' => $this->parserReason,
+            'parser_field' => $this->parserField,
         ], fn ($value) => $value !== null);
     }
 }

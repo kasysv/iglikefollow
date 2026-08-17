@@ -113,10 +113,15 @@ class SyncTheMostPanelServiceCatalog
 
         try {
             ($this->applySnapshot)($fetch->consumeBody(), $observedAt);
-        } catch (TheMostPanelCatalogParseException) {
-            // ⛔ parser 的 reason 不轉印：sync 層只需要「整份被拒」這個事實。
-            return ProviderServiceCatalogSyncResult::refused(
-                'catalog_rejected_by_parser',
+        } catch (TheMostPanelCatalogParseException $e) {
+            /*
+             * ⛔ 帶出 parser 自己的本地 allowlisted reason 與文件欄位名——
+             * 且只帶這兩樣。B3 把它丟掉之後,沒有人能說出回應是「不是清單」、
+             * 「缺欄位」還是「型別錯誤」;typed factory 是唯一入口,
+             * provider 原文沒有路可走。
+             */
+            return ProviderServiceCatalogSyncResult::rejectedByParser(
+                $e,
                 $fetch->httpStatus,
                 $fetch->elapsedMs,
             );

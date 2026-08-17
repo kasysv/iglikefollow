@@ -8,6 +8,7 @@ use App\Data\Fulfillment\ProviderServiceCatalogSyncResult;
 use App\Data\Fulfillment\TheMostPanelCatalogFetchResult;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
+use App\Exceptions\TheMostPanelCatalogParseException;
 use App\Models\FulfillmentMapping;
 use App\Models\IntegrationSetting;
 use App\Models\ProviderService;
@@ -924,5 +925,124 @@ class TheMostPanelCatalogSyncTest extends TestCase
 
         $this->assertTrue($result->applied);
         $this->assertSame(2, ProviderService::query()->count());
+    }
+
+    // ==================================== 12. B4-A：parser 安全診斷
+
+    /** @return array<string, array{0: mixed, 1: string, 2: ?string}> */
+    public static function parserDiagnosticProvider(): array
+    {
+        $item = self::fictionalServices()[0];
+
+        $wrongRateType = $item;
+        $wrongRateType['rate'] = 0.9;
+
+        $missingCancel = $item;
+        unset($missingCancel['cancel']);
+
+        $invertedBounds = $item;
+        $invertedBounds['min'] = '999';
+        $invertedBounds['max'] = '1';
+
+        $badServiceId = $item;
+        $badServiceId['service'] = '9101';
+
+        return [
+            'malformed json' => ['[{"service": 1,', 'catalog_malformed_json', null],
+            'top-level object' => ['{"error":"fictional"}', 'catalog_top_level_not_list', null],
+            'empty list' => ['[]', 'catalog_empty_list', null],
+            'wrong rate type' => [[$wrongRateType], 'catalog_wrong_type', 'rate'],
+            'missing cancel' => [[$missingCancel], 'catalog_missing_field', 'cancel'],
+            'inverted bounds' => [[$invertedBounds], 'catalog_quantity_bounds_inverted', 'max'],
+            'service id as string' => [[$badServiceId], 'catalog_invalid_service_id', 'service'],
+        ];
+    }
+
+    /**
+     * ⛔ B3 之後的修正：parser 拒絕不再只剩一個籠統代碼。result 帶出 parser
+     * 自己的本地 allowlisted reason 與文件欄位名——而且只有這兩樣。
+     */
+    #[DataProvider('parserDiagnosticProvider')]
+    public function test_a_parser_rejection_carries_the_safe_reason_and_field(
+        mixed $body,
+        string $expectedReason,
+        ?string $expectedField,
+    ): void {
+        Http::fake([self::ENDPOINT => Http::response($body)]);
+        $this->withCredential();
+
+        $result = $this->sync();
+
+        $this->assertSame('catalog_rejected_by_parser', $result->outcome);
+        $this->assertFalse($result->applied);
+        $this->assertSame($expectedReason, $result->parserReason);
+        $this->assertSame($expectedField, $result->parserField);
+
+        $encoded = json_encode($result->toArray(), JSON_UNESCAPED_UNICODE);
+
+        // toArray 帶 reason；field 只在有值時出現。
+        $this->assertSame($expectedReason, $result->toArray()['parser_reason']);
+        // ⛔ provider 值與 key 不出現。
+        $this->assertStringNotContainsString(self::KEY_MARKER, $encoded);
+        $this->assertStringNotContainsString('虛構', $encoded);
+
+        $this->assertSame(0, ProviderService::query()->count());
+    }
+
+    /** 非 parser 的 refusal 不得帶 parser 欄位。 */
+    public function test_non_parser_refusals_carry_no_parser_fields(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response('oops', 500)]);
+        $this->withCredential();
+
+        $result = $this->sync();
+
+        $this->assertSame('server_error', $result->outcome);
+        $this->assertNull($result->parserReason);
+        $this->assertNull($result->parserField);
+        $this->assertArrayNotHasKey('parser_reason', $result->toArray());
+        $this->assertArrayNotHasKey('parser_field', $result->toArray());
+    }
+
+    /**
+     * ⛔ 診斷欄位的唯一入口是 typed factory。exception 的建構已被雙 allowlist
+     * 鎖死(不合法 reason／field 根本建構不出來),所以任意 provider 字串
+     * 沒有任何路徑可進 parser_reason／parser_field。
+     */
+    public function test_the_diagnostic_entrance_is_typed_and_allowlisted(): void
+    {
+        $exception = TheMostPanelCatalogParseException::because(
+            TheMostPanelCatalogParseException::WRONG_TYPE,
+            'rate'
+        );
+
+        $result = ProviderServiceCatalogSyncResult::rejectedByParser($exception, 200, 12);
+
+        $this->assertSame('catalog_wrong_type', $result->parserReason);
+        $this->assertSame('rate', $result->parserField);
+
+        // allowlist 之外的 reason／field 在 exception 層就 fail closed。
+        $this->expectException(\InvalidArgumentException::class);
+        TheMostPanelCatalogParseException::because('Invalid API key '.self::KEY_MARKER);
+    }
+
+    /** stale 拒絕維持原 code,也不帶 parser 欄位。 */
+    public function test_a_stale_refusal_still_has_no_parser_fields(): void
+    {
+        $this->withCredential();
+        Date::setTestNow('2026-08-17 12:00:00');
+
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(self::fictionalServices())
+            ->push(self::fictionalServices());
+
+        $this->sync();
+        $result = $this->sync();
+
+        $this->assertSame('catalog_stale_refused', $result->outcome);
+        $this->assertNull($result->parserReason);
+        $this->assertArrayNotHasKey('parser_reason', $result->toArray());
+
+        Date::setTestNow();
     }
 }

@@ -94,16 +94,31 @@ final class TheMostPanelCatalogParseException extends Exception
 
     public static function because(string $reason, ?string $field = null): self
     {
-        if (! in_array($reason, self::REASONS, true)) {
+        if (! self::isAllowlistedReason($reason)) {
             // ⛔ Programmer error, failed closed: an unlisted reason could be
             // anything, including a value someone thought was safe to pass.
             throw new InvalidArgumentException('⛔ 不在 allowlist 中的 catalog parse reason。');
         }
 
-        if ($field !== null && ! in_array($field, self::FIELDS, true)) {
+        if ($field !== null && ! self::isDocumentedField($field)) {
             throw new InvalidArgumentException('⛔ 不在 allowlist 中的 catalog 欄位名。');
         }
 
         return new self($reason, $field);
+    }
+
+    /**
+     * ⛔ Typed safe accessors, so a downstream consumer can re-validate what
+     * it is about to print without duplicating either allowlist. These expose
+     * only *our* vocabulary — never a value from any response.
+     */
+    public static function isAllowlistedReason(string $reason): bool
+    {
+        return in_array($reason, self::REASONS, true);
+    }
+
+    public static function isDocumentedField(string $field): bool
+    {
+        return in_array($field, self::FIELDS, true);
     }
 }
