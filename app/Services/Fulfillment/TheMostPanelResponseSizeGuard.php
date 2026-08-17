@@ -112,16 +112,25 @@ class TheMostPanelResponseSizeGuard
     /**
      * Was this our own size abort, anywhere in the chain?
      *
-     * ⛔ Must walk `getPrevious()`. Guzzle catches whatever `on_headers` throws
-     * and re-throws its own "An error was encountered during the on_headers
-     * event", which Laravel then wraps again as a `ConnectionException`. Our
-     * reason survives only as the innermost cause — checking just the outer
-     * message would report a size abort as a generic transport failure, and the
-     * two mean different things to whoever reads the result.
+     * ⛔ Must walk `getPrevious()`. Guzzle catches whatever a stream or an
+     * `on_headers` callback throws and re-throws its own message, which Laravel
+     * then wraps again as a `ConnectionException`. Ours survives only as the
+     * innermost cause — checking just the outer exception would report a size
+     * abort as a generic transport failure, and the two mean different things
+     * to whoever reads the result.
+     *
+     * ⛔ Type first, message second. `TheMostPanelResponseTooLarge` is matched
+     * by class so a reworded wrapper cannot break detection; the string check
+     * remains only for the header-stage abort, which throws before any typed
+     * exception is available.
      */
     public static function isSizeAbort(\Throwable $e): bool
     {
         for ($current = $e; $current !== null; $current = $current->getPrevious()) {
+            if ($current instanceof TheMostPanelResponseTooLarge) {
+                return true;
+            }
+
             if (str_contains($current->getMessage(), self::REASON)) {
                 return true;
             }

@@ -99,6 +99,14 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
 
         $startedAt = microtime(true);
 
+        /*
+         * ⛔ 每次 request 都要一個全新的 sink。
+         *
+         * 共用 stream 或 byte counter 會讓前一次的小回應吃掉下一次的額度，
+         * 兩個探針同時執行時也會互相污染。
+         */
+        $sink = new TheMostPanelBoundedResponseStream(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES);
+
         try {
             $response = Http::asForm()
                 ->connectTimeout(self::CONNECT_TIMEOUT)
@@ -108,11 +116,23 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
                 ->withOptions([
                     // ⛔ TLS 驗證維持開啟；verify=false 永久禁止。
                     'verify' => true,
-                    // ⛔ 標頭一到就檢查宣告長度，過大直接中止，body 不進記憶體。
+                    /*
+                     * ⛔ 真正的硬上限就在這裡。
+                     *
+                     * cURL 每收到一段資料就呼叫 sink 的 write()，所以在那裡拒絕
+                     * 才會在該段被存下來之前停住傳輸。先前用 progress callback
+                     * 做不到——它在傳輸邊界才觸發，對永不結束的 chunked 回應
+                     * 根本沒來得及開口。
+                     */
+                    'sink' => $sink,
+                    // 已宣告長度就超限時，連第一個 byte 都不用收。
                     'on_headers' => function ($response) {
                         TheMostPanelResponseSizeGuard::assertContentLength($response->getHeaders());
                     },
-                    // ⛔ chunked／未宣告長度時，改在下載過程中止。
+                    /*
+                     * 額外一層，⛔ 但不再被當成 hard cap：它何時觸發由 handler
+                     * 決定，不由我們決定。
+                     */
                     'progress' => function ($downloadTotal, $downloaded) {
                         TheMostPanelResponseSizeGuard::assertProgress((int) $downloaded);
                     },

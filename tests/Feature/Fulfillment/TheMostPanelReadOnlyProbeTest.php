@@ -8,8 +8,10 @@ use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
+use App\Services\Fulfillment\TheMostPanelBoundedResponseStream;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Fulfillment\TheMostPanelResponseSizeGuard;
+use App\Services\Fulfillment\TheMostPanelResponseTooLarge;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -577,6 +579,138 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         ));
     }
 
+    // ==================================== 11. R2：bounded sink 才是真正的硬上限
+
+    private function sink(?int $limit = null): TheMostPanelBoundedResponseStream
+    {
+        return new TheMostPanelBoundedResponseStream(
+            $limit ?? TheMostPanelResponseSizeGuard::MAX_BODY_BYTES
+        );
+    }
+
+    public function test_the_sink_accepts_exactly_the_cap(): void
+    {
+        $sink = $this->sink(1024);
+
+        $sink->write(str_repeat('a', 1024));
+
+        // 剛好等於上限不算超過。
+        $this->assertSame(1024, $sink->bytesWritten());
+    }
+
+    /**
+     * ⛔ 檢查發生在寫入之前。
+     *
+     * 先寫進去再發現太大，代表那些 bytes 已經被留下來了——而那正是這道上限
+     * 要防止的事。
+     */
+    public function test_the_sink_refuses_one_byte_over_the_cap(): void
+    {
+        $sink = $this->sink(1024);
+
+        try {
+            $sink->write(str_repeat('a', 1025));
+            $this->fail('超過上限必須中止');
+        } catch (TheMostPanelResponseTooLarge $e) {
+            $this->assertSame(1024, $e->limitBytes);
+            // ⛔ 超限的那一段一個 byte 都沒有被寫進去。
+            $this->assertSame(0, $sink->bytesWritten());
+        }
+    }
+
+    public function test_the_sink_accumulates_across_chunks(): void
+    {
+        $sink = $this->sink(1024);
+
+        $sink->write(str_repeat('a', 600));
+        $sink->write(str_repeat('b', 400));
+
+        $this->assertSame(1000, $sink->bytesWritten());
+
+        // ⛔ 分多段送達一樣要累加：逐段都不超限不代表總量不超限。
+        $this->expectException(TheMostPanelResponseTooLarge::class);
+
+        $sink->write(str_repeat('c', 25));
+    }
+
+    public function test_each_sink_has_its_own_counter(): void
+    {
+        $first = $this->sink(1024);
+        $first->write(str_repeat('a', 1000));
+
+        $second = $this->sink(1024);
+
+        /*
+         * ⛔ counter 絕不跨 request 共用。
+         *
+         * 共用的話，前一次的小回應會吃掉下一次的額度，而兩個探針同時執行時
+         * 會互相污染。
+         */
+        $this->assertSame(0, $second->bytesWritten());
+        $second->write(str_repeat('b', 1000));
+        $this->assertSame(1000, $second->bytesWritten());
+    }
+
+    public function test_the_sink_exception_carries_no_response_content(): void
+    {
+        $sink = $this->sink(16);
+
+        try {
+            $sink->write('SECRET-RESPONSE-CONTENT-THAT-IS-TOO-LONG');
+            $this->fail('應該要中止');
+        } catch (TheMostPanelResponseTooLarge $e) {
+            // ⛔ 觸發它的那些 bytes，正是我們拒絕保留的 bytes。
+            $this->assertStringNotContainsString('SECRET-RESPONSE-CONTENT', $e->getMessage());
+        }
+    }
+
+    /**
+     * ⛔ 型別優先於訊息比對。
+     *
+     * Guzzle 與 Laravel 各包一層，原始例外會被埋在好幾層底下。用類別比對就
+     * 不怕外層訊息改寫；只比對字串的話，一次改寫就會讓「太大」被誤判成一般
+     * 連線失敗。
+     */
+    public function test_a_wrapped_sink_exception_is_still_a_size_abort(): void
+    {
+        $inner = new TheMostPanelResponseTooLarge(2_097_152);
+        $middle = new \RuntimeException('An error was encountered during the write', 0, $inner);
+        $outer = new ConnectionException('cURL error 23: Failed writing body', 0, $middle);
+
+        $this->assertTrue(TheMostPanelResponseSizeGuard::isSizeAbort($outer));
+    }
+
+    public function test_a_sink_abort_is_reported_as_body_too_large(): void
+    {
+        Http::fake([
+            self::ENDPOINT => fn () => throw new ConnectionException(
+                'cURL error 23',
+                0,
+                new TheMostPanelResponseTooLarge(2_097_152)
+            ),
+        ]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame('body_too_large', $observation->outcome);
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+        $this->assertStringNotContainsString('cURL', (string) $encoded);
+    }
+
+    public function test_a_normal_response_still_passes_through_the_sink(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->hypotheticalServices())]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        // ⛔ 上限不得讓正常回應也讀不到：那樣這個工具就沒有用了。
+        $this->assertTrue($observation->isObserved());
+        $this->assertSame(2, $observation->itemCount);
+    }
+
     public function test_a_size_abort_keeps_no_exception_text(): void
     {
         Http::fake([
@@ -864,29 +998,69 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
     // ==================================== 9. R1：credential 只讀一次
 
     /**
-     * ⛔ 兩次讀取之間，設定可能已經被刪除或輪替。
+     * ⛔ 真正的競態：設定在**第一次讀取之後**才消失。
      *
-     * 初版先讀一次判斷「有沒有 key」，通過後又讀一次組 payload。GPT 在中間刪掉
-     * setting，於是 request 帶著 `key=null` 送了出去——閘門說有，送出的沒有。
+     * R1 的版本在呼叫 probe 之前就刪掉 setting，然後允許 `blocked_no_credential`
+     * 直接 return——那只驗證了「缺憑證不送出」，完全沒有重現競態窗。這一版用
+     * DB query listener 在第一次 retrieval **完成當下**才 raw-delete，確保 probe
+     * 已經拿到 snapshot 之後設定才消失。
      */
-    public function test_the_credential_is_read_once_and_that_value_is_sent(): void
+    public function test_the_credential_is_read_once_and_that_snapshot_is_sent(): void
     {
         Http::fake([self::ENDPOINT => Http::response(['ok' => true])]);
         $setting = $this->withCredential();
 
-        // 第一次讀取之後，設定就消失了。
-        IntegrationSetting::query()->whereKey($setting->id)->delete();
+        $reads = [];
+        $deleted = false;
+        // ⛔ 只計算 probe 執行期間的查詢；斷言自己的 count(*) 不算。
+        $watching = true;
+
+        DB::listen(function ($query) use ($setting, &$reads, &$deleted, &$watching) {
+            if (! $watching) {
+                return;
+            }
+
+            if (! str_contains($query->sql, 'integration_settings') || ! str_starts_with(trim($query->sql), 'select')) {
+                return;
+            }
+
+            $reads[] = $query->sql;
+
+            // ⛔ 第一次讀取完成的當下就把設定拿掉，模擬刪除／輪替。
+            if (! $deleted) {
+                $deleted = true;
+                DB::table('integration_settings')->where('id', $setting->id)->delete();
+            }
+        });
 
         $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
 
-        // 這一輪已經通過閘門，所以請求會送出——但必須帶著驗證過的那把 key。
-        if ($observation->outcome === 'blocked_no_credential') {
-            Http::assertNothingSent();
+        $watching = false;
 
-            return;
-        }
+        // ⛔ 設定在中途消失了，但這一次仍必須用已驗證的 snapshot 完成。
+        $this->assertSame('observed', $observation->outcome);
+        $this->assertSame(0, IntegrationSetting::query()->count(), '設定確實已在中途被刪除');
 
+        // ⛔ 只讀一次：讀第二次就會拿到 null，而閘門已經說過「有 key」。
+        $this->assertCount(1, $reads, 'credential 只能讀取一次，實際：'.json_encode($reads));
+
+        Http::assertSentCount(1);
         Http::assertSent(fn ($request) => ($request->data()['key'] ?? null) === self::KEY_MARKER);
+    }
+
+    public function test_a_request_never_carries_a_null_or_blank_key(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['ok' => true])]);
+        $this->withCredential();
+
+        $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        Http::assertSent(function ($request) {
+            $key = $request->data()['key'] ?? null;
+
+            // ⛔ `key=null` 曾經真的被送出去過；這裡把它釘死。
+            return is_string($key) && trim($key) !== '';
+        });
     }
 
     public function test_a_request_is_never_sent_with_a_null_key(): void
