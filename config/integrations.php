@@ -47,6 +47,16 @@ return [
             'sandbox' => 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue',
             'production' => '',
         ],
+        /*
+         | ⛔ 仍為空，而且是刻意的。
+         |
+         | 這一組 `endpoints` 代表「可用來執行交易的端點」。TheMostPanel 的
+         | 派單（`add`）尚未獲准，所以這裡不得有值——既有的安全測試也以
+         | 「所有 production 端點皆為空」作為不變式。
+         |
+         | 唯讀探針用的位址另放在下方 `themostpanel_read_only.endpoint`，
+         | 與交易端點分開，避免有人把「可以查詢」誤讀成「可以下單」。
+         */
         'themostpanel' => [
             'production' => '',
         ],
@@ -73,9 +83,36 @@ return [
             'sandbox' => false,
             'production' => false,
         ],
+        // ⛔ 仍為 false：這控制的是「自動派單」，與下方的唯讀探針無關。
         'themostpanel' => [
             'production' => false,
         ],
+    ],
+
+    /*
+     | TheMostPanel 唯讀探針（M4B-RO）。
+     |
+     | ⛔ 與 `enablable.themostpanel` 是完全不同的兩件事，刻意分開：
+     | 這個開關只允許「查詢」`services`／`balance`／單筆 `status`，永遠不會
+     | 讓 `add` 或自動派單變成可能。把兩者合成一個開關，就是讓「我想看看回應
+     | 長什麼樣」與「開始花錢下單」共用同一個決定。
+     |
+     | ⛔ 預設關閉，且只從 env 讀取——沒有任何後台介面可以打開它。
+     */
+    'themostpanel_read_only' => [
+        'enabled' => env('THEMOSTPANEL_READ_ONLY_ENABLED', false),
+
+        /*
+         | ⛔ 固定在版本控制中，後台與 CLI 都不可輸入或覆寫。
+         |
+         | 一個可由管理介面編輯的 URL 就是一個 SSRF 缺口——而這個請求會帶著
+         | 我們的 API key。探針另外以完全相同的字串再比對一次，設定被竄改時
+         | 在送出任何東西之前就停下來。
+         |
+         | ⛔ 放在這裡而不是 `endpoints`：那一組代表可執行交易的端點，且既有
+         | 安全測試要求其 production 一律為空。查詢與下單必須看得出來是兩件事。
+         */
+        'endpoint' => 'https://themostpanel.com/api/v2',
     ],
 
     /*

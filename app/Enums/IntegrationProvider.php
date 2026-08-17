@@ -94,7 +94,14 @@ enum IntegrationProvider: string
     public function restrictionNote(): ?string
     {
         return match ($this) {
-            self::TheMostPanel => '尚未證明有 sandbox 或安全診斷端點，M4A 前不啟用。',
+            /*
+             * ⛔ 沒有 sandbox：這裡輸入的就是正式帳戶的 key。
+             *
+             * 目前它只會被唯讀探針使用（services／balance／單筆 status），
+             * 而且探針另有預設關閉的開關。⛔ 儲存 key 不會讓自動派單變成可能。
+             */
+            self::TheMostPanel => '沒有測試環境，這裡輸入的是正式帳戶金鑰；'
+                .'目前僅供唯讀查詢使用，不會啟用自動派單。',
             default => null,
         };
     }

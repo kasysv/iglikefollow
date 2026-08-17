@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Contracts\FulfillmentGateway;
 use App\Contracts\InvoiceGateway;
+use App\Contracts\TheMostPanelReadOnlyProbe;
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
 use App\Models\FulfillmentEvent;
@@ -41,6 +42,7 @@ use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
 use App\Services\Fulfillment\DisabledFulfillmentGateway;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
+use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
 use App\Services\Invoices\InvoiceSandboxGuard;
@@ -108,6 +110,15 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->bindInvoiceGateway();
         $this->bindFulfillmentGateway();
+
+        /*
+         * ⛔ 唯讀探針與 FulfillmentGateway 是兩個完全獨立的綁定。
+         *
+         * 這個 contract 只有 services／balance／status，沒有 submit()。分開綁
+         * 定，是為了讓「查詢供應商回應格式」永遠不可能順手變成「可以下單」。
+         * 它自己的所有閘門都在 probe 內部，且預設全部關閉。
+         */
+        $this->app->singleton(TheMostPanelReadOnlyProbe::class, TheMostPanelReadOnlyHttpProbe::class);
     }
 
     /**
