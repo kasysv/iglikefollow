@@ -2,9 +2,12 @@
 
 namespace App\Providers;
 
+use App\Contracts\FulfillmentGateway;
 use App\Contracts\InvoiceGateway;
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
+use App\Models\FulfillmentMapping;
+use App\Models\FulfillmentOrder;
 use App\Models\IntegrationSetting;
 use App\Models\Invoice;
 use App\Models\Order;
@@ -22,6 +25,8 @@ use App\Observers\PublishObserver;
 use App\Observers\VariantIntegrityObserver;
 use App\Policies\AdminAuditLogPolicy;
 use App\Policies\FaqPolicy;
+use App\Policies\FulfillmentMappingPolicy;
+use App\Policies\FulfillmentOrderPolicy;
 use App\Policies\IntegrationSettingPolicy;
 use App\Policies\InvoicePolicy;
 use App\Policies\OrderPolicy;
@@ -30,6 +35,8 @@ use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
 use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Fulfillment\DisabledFulfillmentGateway;
+use App\Services\Fulfillment\FakeFulfillmentGateway;
 use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
 use App\Services\Invoices\InvoiceSandboxGuard;
@@ -55,6 +62,10 @@ class AppServiceProvider extends ServiceProvider
         // 發票唯讀且僅限 Owner；⛔ 沒有重送或作廢入口。
         Invoice::class => InvoicePolicy::class,
         IntegrationSetting::class => IntegrationSettingPolicy::class,
+        // 履約對應僅限 Owner；⛔ 不可刪除，只能停用。
+        FulfillmentMapping::class => FulfillmentMappingPolicy::class,
+        // 履約紀錄唯讀；⛔ 沒有重送、取消或手動標記完成的入口。
+        FulfillmentOrder::class => FulfillmentOrderPolicy::class,
     ];
 
     /**
@@ -92,6 +103,41 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->bindInvoiceGateway();
+        $this->bindFulfillmentGateway();
+    }
+
+    /**
+     * Decide, in one place, what actually places supplier orders.
+     *
+     * ⛔ Production gets the disabled gateway — bound, not thrown. Fulfilment
+     * runs from a queued job after a real payment; throwing here would turn a
+     * configuration mistake into a failing job on an order the customer has
+     * already paid for. The correct outcome is that nothing is dispatched and
+     * the row waits for a person, which is exactly what the disabled gateway
+     * produces.
+     *
+     * ⛔ There is no `themostpanel` branch, so no config value can produce an
+     * HTTP client — M4A does not contain one. Real dispatch needs verified
+     * service ids, a proven status contract and a reconciliation procedure,
+     * none of which exist yet.
+     */
+    private function bindFulfillmentGateway(): void
+    {
+        $this->app->singleton(FulfillmentGateway::class, function () {
+            if ($this->app->environment('production')) {
+                return new DisabledFulfillmentGateway;
+            }
+
+            if (
+                config('fulfillment.driver') === 'fake'
+                && $this->app->environment('local', 'testing')
+            ) {
+                return new FakeFulfillmentGateway;
+            }
+
+            // ⛔ 預設就是不派單。
+            return new DisabledFulfillmentGateway;
+        });
     }
 
     /**

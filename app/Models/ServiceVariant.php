@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ServiceVariant extends Model
@@ -24,6 +25,12 @@ class ServiceVariant extends Model
     public function service(): BelongsTo
     {
         return $this->belongsTo(Service::class);
+    }
+
+    /** 這個款式的供應商對應；⛔ 每個 provider 最多一筆。 */
+    public function fulfillmentMappings(): HasMany
+    {
+        return $this->hasMany(FulfillmentMapping::class);
     }
 
     public function scopePublished(Builder $query): Builder

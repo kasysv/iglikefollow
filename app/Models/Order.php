@@ -7,6 +7,7 @@ use App\Enums\PaymentStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Support\Str;
 
 class Order extends Model
@@ -49,6 +50,17 @@ class Order extends Model
     public function events(): HasMany
     {
         return $this->hasMany(OrderEvent::class)->orderBy('id');
+    }
+
+    /**
+     * 這張訂單所有商品項目的履約紀錄。
+     *
+     * ⛔ 透過 order_items 取得：履約綁在商品項目上，一張訂單可能有多個項目，
+     * 各自派給不同的供應商服務。
+     */
+    public function fulfillmentOrders(): HasManyThrough
+    {
+        return $this->hasManyThrough(FulfillmentOrder::class, OrderItem::class);
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * What was bought, frozen at the moment of purchase.
@@ -36,6 +37,12 @@ class OrderItem extends Model
     public function serviceVariant(): BelongsTo
     {
         return $this->belongsTo(ServiceVariant::class);
+    }
+
+    /** 這個商品項目的履約紀錄；⛔ 最多一筆，由 unique index 保證。 */
+    public function fulfillmentOrder(): HasOne
+    {
+        return $this->hasOne(FulfillmentOrder::class);
     }
 
     /**
