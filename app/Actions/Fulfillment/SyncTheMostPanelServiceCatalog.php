@@ -83,7 +83,18 @@ class SyncTheMostPanelServiceCatalog
 
     private function fetchAndApply(): ProviderServiceCatalogSyncResult
     {
-        $fetch = $this->source->fetchServices();
+        /*
+         * ⛔ source contract 是 never throws——但 orchestrator 不能把 contract
+         * 當保證。壞掉或被替換的實作丟出的例外會帶著 class 與 message 一路
+         * 上抛到 CLI；這裡收斂成固定碼，lock 照常在 finally 釋放。
+         */
+        try {
+            $fetch = $this->source->fetchServices();
+        } catch (Throwable) {
+            return ProviderServiceCatalogSyncResult::refused(
+                ProviderServiceCatalogSyncResult::SOURCE_FAILED
+            );
+        }
 
         if (! $fetch->wasFetched()) {
             // source 的 blocked／failed code 原樣轉出：它們本來就是本地 allowlist。

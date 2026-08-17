@@ -27,6 +27,45 @@ final class TheMostPanelCatalogFetchResult
 {
     public const FETCHED = 'fetched';
 
+    /** ⛔ 未知 outcome 的固定降級碼：不 throw、不回顯原值。 */
+    public const UNCLASSIFIED = 'catalog_fetch_unclassified';
+
+    /**
+     * ⛔ The complete closed set of refusal codes this object will store.
+     *
+     * The first version trusted its callers and kept whatever string it was
+     * handed — the reviewer pushed `PROVIDER-RAW-SECRET-MARKER` straight
+     * through `toArray()` to the console. An outcome field that reaches
+     * terminals must be an allowlist *in the object itself*, not a promise
+     * about callers.
+     *
+     * @var list<string>
+     */
+    public const REFUSAL_CODES = [
+        // 送出前的閘門。
+        'blocked_production',
+        'blocked_not_cli',
+        'blocked_disabled',
+        'blocked_endpoint',
+        'blocked_unsupported_transport_cap',
+        'blocked_no_app_key',
+        'blocked_no_credential',
+        'blocked_credential_enabled',
+        'blocked_credential_unreadable',
+        // 送出後的失敗。
+        'body_too_large',
+        'unsupported_encoding',
+        'transport_failed',
+        'redirect_refused',
+        'rate_limited',
+        'server_error',
+        'client_error',
+        'empty_body',
+        'invalid_encoding',
+        'credential_echo_refused',
+        self::UNCLASSIFIED,
+    ];
+
     /** ⛔ 一次性持有 raw body 的封套；取用後立即歸 null。 */
     private ?Closure $body;
 
@@ -47,13 +86,19 @@ final class TheMostPanelCatalogFetchResult
     /** 在送出任何東西之前就被閘門擋下；⛔ 沒有留下任何可疑問的狀態。 */
     public static function blocked(string $reason): self
     {
-        return new self($reason);
+        return new self(self::classified($reason));
     }
 
-    /** 已送出但不可用；`$reason` 一律是本地 allowlisted code。 */
+    /** 已送出但不可用；`$reason` 必須在 allowlist 內，否則降級。 */
     public static function failed(string $reason, ?int $httpStatus = null, ?int $elapsedMs = null): self
     {
-        return new self($reason, null, $httpStatus, $elapsedMs);
+        return new self(self::classified($reason), null, $httpStatus, $elapsedMs);
+    }
+
+    /** ⛔ allowlist 之外的字串一律換成固定碼；原值不保存、不回顯、不 throw。 */
+    private static function classified(string $reason): string
+    {
+        return in_array($reason, self::REFUSAL_CODES, true) ? $reason : self::UNCLASSIFIED;
     }
 
     public function wasFetched(): bool

@@ -167,19 +167,41 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
         }
 
         /*
-         * ⛔ catalog 路徑讀整列 setting，一次。key 必須存在，且 `is_enabled`
-         * 必須為 false：這個開關武裝的是自動派單，被異常打開時 catalog sync
-         * 反而拒絕——「可以讀清單」絕不能與「已武裝派單」出現在同一個狀態裡。
+         * ⛔ catalog 路徑讀整列 setting，一次。查詢本身也可能丟例外（壞資料、
+         * cast 失敗）；catalog source 的 contract 是 never throws，所以整段
+         * 收斂成固定安全碼——不 log exception、ciphertext、SQL bindings 或 key。
          */
-        $setting = $this->setting();
-        $key = $setting?->secret('ApiKey');
+        try {
+            $setting = $this->setting();
+        } catch (Throwable) {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_credential_unreadable');
+        }
 
-        if (! is_string($key) || trim($key) === '') {
+        if ($setting === null) {
             return TheMostPanelCatalogFetchResult::blocked('blocked_no_credential');
         }
 
+        /*
+         * ⛔ 先用**未解密**的 `is_enabled` 拒絕異常啟用的 row，再碰密文。
+         * 這個開關武裝的是自動派單，被異常打開時 catalog sync 反而拒絕——
+         * 「可以讀清單」絕不能與「已武裝派單」出現在同一個狀態裡。
+         */
         if ($setting->is_enabled) {
             return TheMostPanelCatalogFetchResult::blocked('blocked_credential_enabled');
+        }
+
+        /*
+         * ⛔ 解密失敗（無效 ciphertext、換過 APP_KEY）不得外洩成例外：
+         * DecryptException 一路上拋，最後會落在誰的 log 裡沒人能保證。
+         */
+        try {
+            $key = $setting->secret('ApiKey');
+        } catch (Throwable) {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_credential_unreadable');
+        }
+
+        if (! is_string($key) || trim($key) === '') {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_no_credential');
         }
 
         $payload = ['key' => $key, 'action' => TheMostPanelReadOnlyAction::Services->value];
@@ -214,7 +236,58 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
             return TheMostPanelCatalogFetchResult::failed($bodyFailure, $status, $elapsed);
         }
 
+        /*
+         * ⛔ 拒收 credential echo，在 body 進入 fetch result 之前。
+         *
+         * CATALOG-A parser 對 `name`／`category` 只驗型別、長度與控制字元——
+         * 一個把我們 key 放進合法欄位的回應會被原樣保存進 `provider_services`。
+         * 這裡用**本次實際送出的同一份 key** 檢查；命中就整份拒收，
+         * 不建立 body closure、不套 snapshot、不印任何 provider 內容。
+         */
+        if ($this->bodyEchoesCredential($body, $key)) {
+            return TheMostPanelCatalogFetchResult::failed('credential_echo_refused', $status, $elapsed);
+        }
+
         return TheMostPanelCatalogFetchResult::fetched($body, $status, $elapsed);
+    }
+
+    /**
+     * Does this body carry the key we just sent, in any form?
+     *
+     * ⛔ Two passes on purpose. The raw scan catches the key anywhere at all,
+     * including invalid JSON; but JSON may hide it behind `\uXXXX` escapes
+     * that the raw scan cannot see, so the decoded structure is walked too —
+     * every object key and every string value, recursively.
+     */
+    private function bodyEchoesCredential(string $body, string $key): bool
+    {
+        if (str_contains($body, $key)) {
+            return true;
+        }
+
+        return $this->structureContains(json_decode($body, true), $key);
+    }
+
+    /** 遞迴檢查 decode 後的每個 object key 與 string value。 */
+    private function structureContains(mixed $value, string $key): bool
+    {
+        if (is_string($value)) {
+            return str_contains($value, $key);
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $name => $item) {
+                if (is_string($name) && str_contains($name, $key)) {
+                    return true;
+                }
+
+                if ($this->structureContains($item, $key)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

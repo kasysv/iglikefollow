@@ -3,6 +3,7 @@
 namespace Tests\Feature\Fulfillment;
 
 use App\Contracts\TheMostPanelServiceCatalogSource;
+use App\Data\Fulfillment\TheMostPanelCatalogFetchResult;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
@@ -164,6 +165,34 @@ class TheMostPanelCatalogSyncCommandTest extends TestCase
         foreach (Route::getRoutes() as $route) {
             $this->assertStringNotContainsString('catalog-sync', $route->uri());
         }
+    }
+
+    /** ⛔ 違反 contract 而 throw 的 source：CLI 以固定碼失敗，不以例外中止。 */
+    public function test_a_throwing_source_exits_nonzero_with_the_fixed_code(): void
+    {
+        Http::fake();
+        $this->withCredential();
+
+        $this->app->singleton(
+            TheMostPanelServiceCatalogSource::class,
+            fn () => new class implements TheMostPanelServiceCatalogSource
+            {
+                public function fetchServices(): TheMostPanelCatalogFetchResult
+                {
+                    throw new \RuntimeException('SOURCE-EXCEPTION-MARKER-314159');
+                }
+            },
+        );
+
+        $this->artisan('themostpanel:catalog-sync', ['--approved-once' => true])
+            ->expectsOutputToContain('outcome: catalog_source_failed')
+            // ⛔ exception class／message 不進 terminal。
+            ->doesntExpectOutputToContain('SOURCE-EXCEPTION-MARKER-314159')
+            ->doesntExpectOutputToContain('RuntimeException')
+            ->assertFailed();
+
+        Http::assertNothingSent();
+        $this->assertSame(0, DB::table('cache_locks')->count());
     }
 
     public function test_nothing_schedules_the_sync(): void

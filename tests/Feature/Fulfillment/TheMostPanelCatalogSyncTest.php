@@ -652,4 +652,234 @@ class TheMostPanelCatalogSyncTest extends TestCase
             $row->last_seen_at->format('Y-m-d H:i:s'),
         );
     }
+
+    // ==================================== 9. R1：outcome 封閉 allowlist
+
+    /** @return array<string, array{0: string}> */
+    public static function arbitraryOutcomeProvider(): array
+    {
+        return [
+            'provider text' => ['Invalid API key '.self::KEY_MARKER.' for account 55123'],
+            'key marker' => [self::KEY_MARKER],
+            'newline and ansi' => ["line1\nline2\033[31mred"],
+            'overlong' => [str_repeat('z', 5000).self::KEY_MARKER],
+            'empty' => [''],
+        ];
+    }
+
+    /** ⛔ 兩個 public factory 都不得保存任意字串；未知值降級、不 throw、不回顯。 */
+    #[DataProvider('arbitraryOutcomeProvider')]
+    public function test_the_fetch_result_factories_refuse_arbitrary_strings(string $arbitrary): void
+    {
+        foreach ([
+            TheMostPanelCatalogFetchResult::blocked($arbitrary),
+            TheMostPanelCatalogFetchResult::failed($arbitrary, 200, 12),
+        ] as $result) {
+            $this->assertSame(TheMostPanelCatalogFetchResult::UNCLASSIFIED, $result->outcome);
+
+            ob_start();
+            var_dump($result);
+            $dump = json_encode($result).print_r($result, true).(string) ob_get_clean();
+
+            $this->assertStringNotContainsString(self::KEY_MARKER, $dump);
+            $this->assertStringNotContainsString('55123', $dump);
+        }
+    }
+
+    #[DataProvider('arbitraryOutcomeProvider')]
+    public function test_the_sync_result_refuses_arbitrary_outcomes(string $arbitrary): void
+    {
+        $result = ProviderServiceCatalogSyncResult::refused($arbitrary, 200, 12);
+
+        // ⛔ 最後一道 closed allowlist：未知 outcome 一律固定 catalog_source_failed。
+        $this->assertSame(ProviderServiceCatalogSyncResult::SOURCE_FAILED, $result->outcome);
+
+        $dump = json_encode($result->toArray()).print_r($result, true);
+        $this->assertStringNotContainsString(self::KEY_MARKER, $dump);
+    }
+
+    public function test_every_legitimate_code_still_passes_the_allowlists(): void
+    {
+        foreach (TheMostPanelCatalogFetchResult::REFUSAL_CODES as $code) {
+            $this->assertSame($code, TheMostPanelCatalogFetchResult::failed($code)->outcome);
+            // fetch 的合法 code 轉入 sync result 也必須原樣保留。
+            $this->assertSame($code, ProviderServiceCatalogSyncResult::refused($code)->outcome);
+        }
+
+        $this->assertSame(
+            'catalog_stale_refused',
+            ProviderServiceCatalogSyncResult::refused('catalog_stale_refused')->outcome
+        );
+    }
+
+    /** 壞掉／被替換的 source 回任意 outcome：end-to-end 只看得到固定碼。 */
+    public function test_an_arbitrary_source_outcome_is_degraded_end_to_end(): void
+    {
+        $this->app->singleton(
+            TheMostPanelServiceCatalogSource::class,
+            fn () => new class implements TheMostPanelServiceCatalogSource
+            {
+                public function fetchServices(): TheMostPanelCatalogFetchResult
+                {
+                    // factory 本身就會降級——這正是要證明的第一層。
+                    return TheMostPanelCatalogFetchResult::blocked('PROVIDER-RAW-SECRET-MARKER');
+                }
+            },
+        );
+
+        $result = $this->sync();
+
+        $this->assertSame(TheMostPanelCatalogFetchResult::UNCLASSIFIED, $result->outcome);
+        $this->assertStringNotContainsString(
+            'PROVIDER-RAW-SECRET-MARKER',
+            json_encode($result->toArray()).print_r($result, true)
+        );
+    }
+
+    // ==================================== 10. R1：credential／source 例外 fail closed
+
+    public function test_an_unreadable_ciphertext_fails_closed_before_http(): void
+    {
+        Http::fake();
+
+        $setting = $this->withCredential();
+        // ⛔ raw DB 竄改成無效 ciphertext：decrypt 會丟 DecryptException。
+        DB::table('integration_settings')
+            ->where('id', $setting->id)
+            ->update(['credentials' => 'not-a-valid-ciphertext']);
+
+        $result = $this->sync();
+
+        $this->assertSame('blocked_credential_unreadable', $result->outcome);
+        $this->assertFalse($result->applied);
+        Http::assertNothingSent();
+        $this->assertSame(0, ProviderService::query()->count());
+        // lock 照常 owner-safe release。
+        $this->assertSame(0, DB::table('cache_locks')->count());
+    }
+
+    /**
+     * ⛔ 異常啟用的 row 在**解密之前**就被拒絕。
+     *
+     * 同一列同時是 enabled 又是壞 ciphertext 時，回的必須是
+     * `blocked_credential_enabled`——證明 is_enabled 檢查先於 decrypt。
+     */
+    public function test_an_enabled_row_is_refused_before_any_decrypt(): void
+    {
+        Http::fake();
+
+        $setting = $this->withCredential(enabled: true);
+        DB::table('integration_settings')
+            ->where('id', $setting->id)
+            ->update(['credentials' => 'not-a-valid-ciphertext']);
+
+        $this->assertSame('blocked_credential_enabled', $this->sync()->outcome);
+        Http::assertNothingSent();
+    }
+
+    public function test_a_throwing_source_fails_closed_with_the_lock_released(): void
+    {
+        $this->withCredential();
+
+        $this->app->singleton(
+            TheMostPanelServiceCatalogSource::class,
+            fn () => new class implements TheMostPanelServiceCatalogSource
+            {
+                public function fetchServices(): TheMostPanelCatalogFetchResult
+                {
+                    // ⛔ 違反 never-throws contract 的 source。
+                    throw new \RuntimeException('SOURCE-EXCEPTION-MARKER-314159');
+                }
+            },
+        );
+
+        Http::fake();
+
+        $result = $this->sync();
+
+        $this->assertSame(ProviderServiceCatalogSyncResult::SOURCE_FAILED, $result->outcome);
+        $this->assertFalse($result->applied);
+        // ⛔ exception class／message 不外流。
+        $this->assertStringNotContainsString(
+            'SOURCE-EXCEPTION-MARKER-314159',
+            json_encode($result->toArray()).print_r($result, true)
+        );
+        Http::assertNothingSent();
+        $this->assertSame(0, ProviderService::query()->count());
+        // lock 在 finally 照常釋放。
+        $this->assertSame(0, DB::table('cache_locks')->count());
+    }
+
+    // ==================================== 11. R1：拒收 credential echo
+
+    /** @return array<string, array{0: string}> */
+    public static function credentialEchoProvider(): array
+    {
+        $item = fn (array $overrides = []) => array_merge([
+            'service' => 9101,
+            'name' => '虛構回顯服務',
+            'type' => 'Default',
+            'category' => '虛構分類',
+            'rate' => '0.90',
+            'min' => '10',
+            'max' => '10000',
+            'refill' => false,
+            'cancel' => false,
+        ], $overrides);
+
+        // ⛔ key 逐字元轉成 \uXXXX：raw scan 看不到，decode 後才會現形。
+        $escapedKey = implode('', array_map(
+            fn (string $char) => sprintf('\\u%04x', ord($char)),
+            str_split(self::KEY_MARKER)
+        ));
+
+        return [
+            'key in name' => [json_encode([$item(['name' => 'X '.self::KEY_MARKER])])],
+            'key in category' => [json_encode([$item(['category' => self::KEY_MARKER])])],
+            'key in ignored extra field' => [json_encode([$item(['debug_echo' => self::KEY_MARKER])])],
+            'key as json property name' => [json_encode([$item([self::KEY_MARKER => 'x'])])],
+            'unicode-escaped key in name' => [
+                '[{"service":9101,"name":"'.$escapedKey.'","type":"Default","category":"c",'
+                .'"rate":"0.90","min":"10","max":"10000","refill":false,"cancel":false}]',
+            ],
+        ];
+    }
+
+    /**
+     * ⛔ P0：provider 把我們的 key 放進合法欄位時，整份拒收。
+     *
+     * CATALOG-A parser 對 name／category 只驗型別、長度與控制字元——沒有這
+     * 一層，echo 回來的 key 會被原樣保存進 `provider_services`。
+     */
+    #[DataProvider('credentialEchoProvider')]
+    public function test_a_credential_echo_is_refused_whole(string $rawBody): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($rawBody, 200, ['Content-Type' => 'application/json'])]);
+        $this->withCredential();
+
+        $result = $this->sync();
+
+        $this->assertSame('credential_echo_refused', $result->outcome);
+        $this->assertFalse($result->applied);
+        // ⛔ 最多一個 request、目錄 0 筆、result 無 marker。
+        Http::assertSentCount(1);
+        $this->assertSame(0, ProviderService::query()->count());
+        $this->assertStringNotContainsString(
+            self::KEY_MARKER,
+            json_encode($result->toArray()).print_r($result, true)
+        );
+        $this->assertSame(0, DB::table('cache_locks')->count());
+    }
+
+    public function test_a_clean_fictional_catalog_is_not_caught_by_the_echo_guard(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(self::fictionalServices())]);
+        $this->withCredential();
+
+        // ⛔ 這層只做 secret containment；正常虛構 catalog 必須照常成功。
+        $result = $this->sync();
+
+        $this->assertTrue($result->applied);
+        $this->assertSame(2, ProviderService::query()->count());
+    }
 }
