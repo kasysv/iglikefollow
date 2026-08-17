@@ -29,9 +29,28 @@ final class FulfillmentSubmissionResult
         public readonly ?FulfillmentAttentionReason $reason = null,
     ) {}
 
-    public static function accepted(string $providerOrderId): self
+    /**
+     * The provider took the order and gave us an id for it.
+     *
+     * ⛔ An acceptance without a usable id is not an acceptance. Recording one
+     * would leave a row that claims to be dispatched with nothing to ask the
+     * provider about — permanently unreconcilable. But the call did happen and
+     * the order may well exist there, so the safe answer is `unknown`, never
+     * `rejected` and never a retry.
+     *
+     * ⛔ The id is bounded and must look like an identifier. A provider that
+     * echoes a sentence, or a malformed body read as a string, must not have
+     * that text stored as though it were an order number.
+     */
+    public static function accepted(?string $providerOrderId): self
     {
-        return new self('accepted', $providerOrderId);
+        $id = trim((string) $providerOrderId);
+
+        if ($id === '' || strlen($id) > 64 || ! preg_match('/^[A-Za-z0-9._\-]+$/', $id)) {
+            return self::unknown(FulfillmentAttentionReason::UnreadableResponse);
+        }
+
+        return new self('accepted', $id);
     }
 
     /** 對方明確拒絕，且確定沒有成立。 */

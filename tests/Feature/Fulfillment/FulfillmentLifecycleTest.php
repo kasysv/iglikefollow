@@ -340,15 +340,29 @@ class FulfillmentLifecycleTest extends TestCase
         ];
     }
 
+    /**
+     * ⛔ 終止狀態的列絕不再送出。
+     *
+     * 這裡透過真正的送出流程抵達終止狀態，而不是用 forceFill 硬寫。
+     * R1 加上狀態轉移守衛後，`ready → completed` 這種跳躍會被正確拒絕——
+     * 原本的寫法等於在測一個系統根本不允許存在的狀態組合。
+     */
     #[DataProvider('terminalStatusProvider')]
     public function test_a_terminal_row_is_never_submitted(FulfillmentStatus $status): void
     {
-        $row = $this->readyFulfillment();
-        $row->forceFill(['status' => $status])->save();
+        $row = $this->submit($this->readyFulfillment());
+        $this->assertCount(1, $this->gateway->submissions);
+
+        // submitted 之後才依對方回報走到各終止狀態。
+        if ($status !== FulfillmentStatus::Submitted) {
+            $row->forceFill(['status' => $status])->save();
+        }
 
         $this->submit($row->fresh());
 
-        $this->assertSame([], $this->gateway->submissions);
+        // ⛔ 仍然只有最初那一次呼叫。
+        $this->assertCount(1, $this->gateway->submissions);
+        $this->assertSame($status, $row->fresh()->status);
     }
 
     public function test_a_row_that_already_has_a_provider_id_is_never_submitted(): void

@@ -94,6 +94,118 @@ enum FulfillmentStatus: string
         ], true);
     }
 
+    /**
+     * Has this row already been handed to the provider?
+     *
+     * ⛔ From here on, going back to a pre-submit state would make the row
+     * eligible for submission again — which is how one paid item becomes two
+     * supplier orders.
+     */
+    public function isPostSubmit(): bool
+    {
+        return $this !== self::ConfigurationPending
+            && $this !== self::Ready
+            && $this !== self::Submitting;
+    }
+
+    /**
+     * May this row move from here to there?
+     *
+     * The single rule every path shares — the action layer, the observer and
+     * the database guard all read this, so they cannot drift apart.
+     *
+     * ⛔ Terminal states never move. `completed` walking back to `ready` is not
+     * a display bug: the row becomes submittable again and the customer's item
+     * is ordered a second time.
+     *
+     * Staying put is always allowed, so an idempotent re-sync of the same
+     * status is not an error.
+     */
+    public function canTransitionTo(self $target): bool
+    {
+        if ($this === $target) {
+            return true;
+        }
+
+        if ($this->isTerminal()) {
+            return false;
+        }
+
+        // ⛔ 已交付給對方之後不得回到送出前的任何狀態。
+        if ($this->isPostSubmit() && ! $target->isPostSubmit()) {
+            return false;
+        }
+
+        return match ($this) {
+            // 設定修好就能進 ready，或原地等待。
+            self::ConfigurationPending => $target === self::Ready,
+
+            // 搶到送出權；或送出前發現開關關閉而退回。
+            self::Ready => in_array($target, [self::Submitting, self::ConfigurationPending], true),
+
+            /*
+             * 送出中可以走向任何結果——包含退回 configuration_pending：
+             * 那是「什麼都還沒送出」時才會發生的收斂，安全且必要。
+             */
+            self::Submitting => in_array($target, [
+                self::Submitted,
+                self::Failed,
+                self::SubmissionUnknown,
+                self::ConfigurationPending,
+            ], true),
+
+            /*
+             * 對方接受後，只能依對方回報前進。
+             *
+             * `submission_unknown` 也在其中：已送出的單如果後來連查都查不到、
+             * 或本地回寫失敗，把它標成需要人工對帳是誠實且必要的。⛔ 它同樣
+             * 是終止狀態，不會因此變得可以重送。
+             */
+            self::Submitted, self::Processing => in_array($target, [
+                self::Processing,
+                self::Completed,
+                self::Partial,
+                self::Canceled,
+                self::Failed,
+                self::SubmissionUnknown,
+            ], true) && $target !== $this,
+
+            default => false,
+        };
+    }
+
+    /**
+     * 可以拿來同步的來源狀態；⛔ 其餘一律不查詢也不改寫。
+     *
+     * @return list<self>
+     */
+    public static function syncableSources(): array
+    {
+        return [self::Submitted, self::Processing];
+    }
+
+    /**
+     * A provider may only ever tell us one of these.
+     *
+     * ⛔ `ready`, `submitting`, `configuration_pending` and
+     * `submission_unknown` are *our* words for *our* situation — no provider
+     * can report them. Accepting one would let a malformed response rewind the
+     * row into a submittable state.
+     *
+     * @return list<self>
+     */
+    public static function syncableTargets(): array
+    {
+        return [
+            self::Submitted,
+            self::Processing,
+            self::Completed,
+            self::Partial,
+            self::Canceled,
+            self::Failed,
+        ];
+    }
+
     /** @return list<string> */
     public static function values(): array
     {

@@ -24,12 +24,6 @@ use Throwable;
  */
 class SyncFulfillmentState
 {
-    /** 只有這兩個狀態值得查詢；其餘不是已終止就是還沒送出。 */
-    private const SYNCABLE = [
-        FulfillmentStatus::Submitted,
-        FulfillmentStatus::Processing,
-    ];
-
     public function __construct(private readonly FulfillmentGateway $gateway) {}
 
     public function handle(FulfillmentOrder $fulfillment): FulfillmentOrder
@@ -42,7 +36,7 @@ class SyncFulfillmentState
         }
 
         // ⛔ 終止狀態一律 no-op：已完成的單不得被再次改寫。
-        if (! in_array($fulfillment->status, self::SYNCABLE, true)) {
+        if (! in_array($fulfillment->status, FulfillmentStatus::syncableSources(), true)) {
             return $fulfillment;
         }
 
@@ -53,33 +47,66 @@ class SyncFulfillmentState
             return $this->recordUnrecognised($fulfillment);
         }
 
-        if (! $result->isRecognised()) {
+        /*
+         * ⛔ 對方只可能回報這幾種狀態。
+         *
+         * `ready`、`submitting`、`configuration_pending`、`submission_unknown`
+         * 都是我們描述自己處境的詞，任何供應商都不可能回報它們。接受其中之一
+         * 會讓一個畸形回應把已送出的列倒退回可再次送出的狀態——那就是同一筆
+         * 商品被下第二次單的路徑。
+         */
+        if (
+            ! $result->isRecognised()
+            || ! in_array($result->status, FulfillmentStatus::syncableTargets(), true)
+        ) {
             return $this->recordUnrecognised($fulfillment);
         }
 
         return $this->recordStatus($fulfillment, $result->status);
     }
 
+    /**
+     * Write the new status, re-checking under a lock.
+     *
+     * ⛔ The row is read again inside the transaction. This worker may have been
+     * waiting on a slow provider while another finished the job; without the
+     * re-check its stale answer would overwrite a terminal state that was
+     * decided after it asked.
+     */
     private function recordStatus(FulfillmentOrder $fulfillment, FulfillmentStatus $status): FulfillmentOrder
     {
-        $from = $fulfillment->status;
+        return DB::transaction(function () use ($fulfillment, $status) {
+            $locked = FulfillmentOrder::query()
+                ->whereKey($fulfillment->getKey())
+                ->lockForUpdate()
+                ->first();
 
-        if ($status === $from) {
-            // 狀態沒變：只更新查詢時間，不灌爆時間線。
-            $fulfillment->forceFill(['last_synced_at' => now()])->save();
+            if ($locked === null) {
+                return $fulfillment;
+            }
 
-            return $fulfillment->fresh();
-        }
+            $from = $locked->status;
 
-        return DB::transaction(function () use ($fulfillment, $from, $status) {
-            $fulfillment->forceFill([
+            // 期間狀態已經變了，且新答案不再合法：⛔ 不覆蓋，留下紀錄就好。
+            if (! $from->canTransitionTo($status)) {
+                return $this->recordUnrecognised($locked);
+            }
+
+            if ($from === $status) {
+                // 狀態沒變：只更新查詢時間，不灌爆時間線。
+                $locked->forceFill(['last_synced_at' => now()])->save();
+
+                return $locked->fresh();
+            }
+
+            $locked->forceFill([
                 'status' => $status,
                 'last_synced_at' => now(),
             ])->save();
 
-            $fulfillment->recordEvent(FulfillmentEventCode::StatusSynced, from: $from, to: $status);
+            $locked->recordEvent(FulfillmentEventCode::StatusSynced, from: $from, to: $status);
 
-            return $fulfillment->fresh();
+            return $locked->fresh();
         });
     }
 

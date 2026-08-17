@@ -71,14 +71,91 @@ class SubmitFulfillment
             return $this->recordUnknown($claimed, FulfillmentAttentionReason::Unknown);
         }
 
-        return match (true) {
-            $result->isAccepted() => $this->recordSubmitted($claimed, $result, $submission),
-            $result->isRejected() => $this->recordRejected($claimed, $result),
-            default => $this->recordUnknown(
-                $claimed,
-                $result->reason ?? FulfillmentAttentionReason::Unknown
-            ),
-        };
+        /*
+         * ⛔ 從這裡開始，對方可能已經收下這筆單了。
+         *
+         * 本地回寫失敗不得讓例外直接逃出：那會讓列永遠停在 `submitting`，
+         * 對人看起來像「還在送」，實際上供應商那邊可能已經成立而且要收費。
+         * 收斂成 `submission_unknown` 是誠實的答案——它明確要求人工對帳，
+         * 而且絕不自動重送。
+         */
+        try {
+            return match (true) {
+                $result->isAccepted() => $this->recordSubmitted($claimed, $result, $submission),
+                $result->isRejected() => $this->recordRejected($claimed, $result),
+                default => $this->recordUnknown(
+                    $claimed,
+                    $result->reason ?? FulfillmentAttentionReason::Unknown
+                ),
+            };
+        } catch (Throwable) {
+            return $this->convergeAfterPersistenceFailure($claimed);
+        }
+    }
+
+    /**
+     * Last resort after the provider answered but we could not write it down.
+     *
+     * ⛔ Re-reads the row rather than reusing the in-memory model. The failed
+     * transaction rolled back, so that object carries dirty attributes that
+     * were never committed — saving it would persist a half-applied version of
+     * the write that just failed.
+     *
+     * ⛔ Only converges rows still sitting in `submitting`. If something did
+     * commit, that outcome stands; this must not overwrite it.
+     *
+     * ⛔ Best-effort. If the database is entirely unwritable this cannot help,
+     * and the row stays `submitting` for a human to resolve — recorded in the
+     * result document as an M4B manual reconciliation gate, not as automatic
+     * recovery. `tries = 1` still holds, so nothing retries the provider call.
+     */
+    private function convergeAfterPersistenceFailure(FulfillmentOrder $fulfillment): FulfillmentOrder
+    {
+        try {
+            $fresh = FulfillmentOrder::query()->find($fulfillment->getKey());
+
+            if ($fresh === null) {
+                return $fulfillment;
+            }
+
+            /*
+             * ⛔ 收斂 submitting 與 submitted 兩種情況。
+             *
+             * 依失敗發生在哪一步，列可能停在 submitting（狀態都還沒寫成功），
+             * 也可能已經是 submitted 但時間線缺了那一筆。後者看起來「正常」，
+             * 實際上是一筆沒有完整證據的已派單紀錄——對帳時最難處理的就是這
+             * 種：它不會出現在任何待辦清單裡。
+             *
+             * ⛔ 已經走到終止狀態就不覆蓋：那代表有東西成功寫入了，那個結果
+             * 才是真的。
+             */
+            if (! in_array($fresh->status, [
+                FulfillmentStatus::Submitting,
+                FulfillmentStatus::Submitted,
+            ], true)) {
+                return $fresh;
+            }
+
+            try {
+                return $this->recordUnknown($fresh, FulfillmentAttentionReason::Unknown);
+            } catch (Throwable) {
+                /*
+                 * 連事件都寫不進去，就至少把狀態改掉。
+                 *
+                 * ⛔ 少一筆時間線紀錄不好，但比一筆「看起來已派單、其實沒人
+                 * 知道結果」的列好得多——後者不會出現在任何待辦清單裡。
+                 */
+                $fresh->forceFill([
+                    'status' => FulfillmentStatus::SubmissionUnknown,
+                    'attention_code' => FulfillmentAttentionReason::Unknown,
+                ])->saveQuietly();
+
+                return $fresh->fresh() ?? $fresh;
+            }
+        } catch (Throwable) {
+            // ⛔ 資料庫完全不可寫：留在原狀交人工，不再嘗試、不重送。
+            return $fulfillment;
+        }
     }
 
     /**

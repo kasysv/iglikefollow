@@ -6,6 +6,7 @@ use App\Contracts\FulfillmentGateway;
 use App\Contracts\InvoiceGateway;
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
+use App\Models\FulfillmentEvent;
 use App\Models\FulfillmentMapping;
 use App\Models\FulfillmentOrder;
 use App\Models\IntegrationSetting;
@@ -18,6 +19,9 @@ use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\FulfillmentEventIntegrityObserver;
+use App\Observers\FulfillmentMappingAuditObserver;
+use App\Observers\FulfillmentOrderIntegrityObserver;
 use App\Observers\IntegrationSettingObserver;
 use App\Observers\InvoiceIntegrityObserver;
 use App\Observers\LastOwnerObserver;
@@ -187,6 +191,19 @@ class AppServiceProvider extends ServiceProvider
         foreach (self::POLICIES as $model => $policy) {
             Gate::policy($model, $policy);
         }
+
+        /*
+         * ⛔ 履約 model 不加進 self::AUDITED。
+         *
+         * 通用 AuditObserver 會把每個變更欄位原值寫進稽核 JSON，包含
+         * provider_service_id——那正是最不該擴散的值。這裡改用只記錄
+         * allowlist 欄位、並把服務代碼固定成 [redacted] 的專用 observer。
+         */
+        FulfillmentMapping::observe(FulfillmentMappingAuditObserver::class);
+
+        // ⛔ 不可逆狀態與 append-only 的 model 層防線；DB 層另有 trigger。
+        FulfillmentOrder::observe(FulfillmentOrderIntegrityObserver::class);
+        FulfillmentEvent::observe(FulfillmentEventIntegrityObserver::class);
 
         foreach (self::AUDITED as $model) {
             $model::observe(AuditObserver::class);
