@@ -15,6 +15,34 @@ class SiteSetting extends Model
 
     protected $guarded = [];
 
+    /**
+     * The homepage's three selling points, in display order.
+     *
+     * ⛔ A pair only appears when both halves are filled in. A title with no
+     * body (or the reverse) renders as a stray fragment on the homepage, and a
+     * half-typed save should not be able to put that in front of customers.
+     *
+     * Returns an empty array when nothing is configured, which the template
+     * reads as "use the built-in defaults" — so the strip never renders blank.
+     *
+     * @return list<array{title: string, body: string}>
+     */
+    public function homeHighlights(): array
+    {
+        $highlights = [];
+
+        foreach ([1, 2, 3] as $i) {
+            $title = trim((string) $this->{"home_highlight_{$i}_title"});
+            $body = trim((string) $this->{"home_highlight_{$i}_body"});
+
+            if ($title !== '' && $body !== '') {
+                $highlights[] = ['title' => $title, 'body' => $body];
+            }
+        }
+
+        return $highlights;
+    }
+
     /** 單例：永遠只有一筆。 */
     public static function current(): ?self
     {

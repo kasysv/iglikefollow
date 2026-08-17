@@ -27,10 +27,26 @@
                     了解購買流程
                 </a>
             </div>
-            <div class="mt-10 grid max-w-3xl gap-3 border-y border-black/10 py-5 text-sm sm:grid-cols-3">
-                <div><strong class="block text-base">免會員結帳</strong><span class="text-black/55">不需註冊即可下單</span></div>
-                <div><strong class="block text-base">後端重新驗價</strong><span class="text-black/55">不信任前端送出的價格</span></div>
-                <div><strong class="block text-base">服務分類清楚</strong><span class="text-black/55">依平台與服務類型選擇</span></div>
+            @php
+                // 後台沒填就用這組預設，⛔ 讓這條列永遠不會整條空白。
+                $highlights = $settings?->homeHighlights() ?: [
+                    ['title' => '免會員結帳', 'body' => '不需註冊即可下單'],
+                    ['title' => '後端重新驗價', 'body' => '不信任前端送出的價格'],
+                    ['title' => '服務分類清楚', 'body' => '依平台與服務類型選擇'],
+                ];
+            @endphp
+            {{-- 欄數跟著實際筆數走；⛔ 固定 3 欄會在只填 2 筆時留下一個空格。 --}}
+            <div data-home-highlights @class([
+                'mt-10 grid max-w-3xl gap-3 border-y border-black/10 py-5 text-sm',
+                'sm:grid-cols-2' => count($highlights) === 2,
+                'sm:grid-cols-3' => count($highlights) >= 3,
+            ])>
+                @foreach ($highlights as $highlight)
+                    <div>
+                        <strong class="block text-base">{{ $highlight['title'] }}</strong>
+                        <span class="text-black/55">{{ $highlight['body'] }}</span>
+                    </div>
+                @endforeach
             </div>
 
             @if ($settings?->company_image_path)

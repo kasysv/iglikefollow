@@ -85,6 +85,36 @@ class ManageSiteSettings extends Page
                         ImageField::alt('company_image_alt', 'company_image_path')->label('圖片說明文字（alt）'),
                     ])->columns(2),
 
+                Section::make('首頁三個特色')
+                    ->description('大標題下方那條橫列，用來講三個購買理由。⚠️ 標題與說明兩格都要填，只填一格該項不會顯示。三項全部留空則使用預設文字。')
+                    ->schema([
+                        TextInput::make('home_highlight_1_title')
+                            ->label('第 1 項 標題')
+                            ->helperText('例如：免會員結帳。')
+                            ->maxLength(255),
+
+                        TextInput::make('home_highlight_1_body')
+                            ->label('第 1 項 說明')
+                            ->helperText('例如：不需註冊即可下單。')
+                            ->maxLength(255),
+
+                        TextInput::make('home_highlight_2_title')
+                            ->label('第 2 項 標題')
+                            ->maxLength(255),
+
+                        TextInput::make('home_highlight_2_body')
+                            ->label('第 2 項 說明')
+                            ->maxLength(255),
+
+                        TextInput::make('home_highlight_3_title')
+                            ->label('第 3 項 標題')
+                            ->maxLength(255),
+
+                        TextInput::make('home_highlight_3_body')
+                            ->label('第 3 項 說明')
+                            ->maxLength(255),
+                    ])->columns(2),
+
                 Section::make('首頁主要按鈕')
                     ->description('首頁大標題下方那顆黑色按鈕。⚠️ 只能連到本站頁面，不能填外部網址。')
                     ->schema([
