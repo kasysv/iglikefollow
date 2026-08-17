@@ -1,5 +1,6 @@
 <?php
 
+use App\Support\HomeHighlightsRollbackGuard;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -34,23 +35,21 @@ return new class extends Migration
     }
 
     /**
-     * ⛔ Drops editor-written copy.
+     * ⛔ Fails closed when the columns hold editor-written copy.
      *
-     * The homepage falls back to the hardcoded defaults, so the page keeps
-     * rendering — but any wording entered in the admin is gone and cannot be
-     * recovered from the schema. Take a database backup first.
+     * Dropping them destroys that text permanently — there is no other copy,
+     * and re-running `up()` restores the columns but not their contents. An
+     * earlier version only warned about this in a comment, which protects
+     * nobody: a comment is read by whoever already thought to check.
+     *
+     * When the columns are genuinely empty the rollback proceeds normally.
      */
     public function down(): void
     {
+        HomeHighlightsRollbackGuard::assertNoHighlightContent();
+
         Schema::table('site_settings', function (Blueprint $table) {
-            $table->dropColumn([
-                'home_highlight_1_title',
-                'home_highlight_1_body',
-                'home_highlight_2_title',
-                'home_highlight_2_body',
-                'home_highlight_3_title',
-                'home_highlight_3_body',
-            ]);
+            $table->dropColumn(HomeHighlightsRollbackGuard::COLUMNS);
         });
     }
 };
