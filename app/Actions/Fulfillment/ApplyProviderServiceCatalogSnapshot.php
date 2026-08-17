@@ -6,6 +6,8 @@ use App\Enums\IntegrationProvider;
 use App\Models\ProviderService;
 use App\Services\Fulfillment\TheMostPanelServiceCatalogParser;
 use DateTimeImmutable;
+use DateTimeZone;
+use Exception;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -27,6 +29,17 @@ use RuntimeException;
  * capabilities and leave `first_seen_at` after `last_seen_at` — the reviewer
  * demonstrated exactly that. The same rule lives in DB triggers as a second
  * layer.
+ *
+ * ⛔ Time has exactly one representation here: the app timezone, at second
+ * precision. A `DateTimeImmutable` can carry microseconds and any offset, but
+ * the database column is a naive second-level timestamp — comparing one
+ * representation while storing another let the reviewer replay the same
+ * instant from another timezone and slide backwards inside a second. So the
+ * caller's value is canonicalized once, before any comparison or write, and
+ * that single canonical value is used for the stale gate, `first_seen_at` and
+ * `last_seen_at` alike. Conservative on ties: a second snapshot in the same
+ * storage second is `equal` and refused, even if its microseconds were later
+ * — precision the storage cannot keep is precision the gate must not trust.
  *
  * ⛔ CATALOG-A still gives this action **no caller**: no Artisan command, no
  * HTTP route, no Filament button, no scheduler. Tests invoke it directly with
@@ -54,12 +67,22 @@ class ApplyProviderServiceCatalogSnapshot
     public const STALE_SNAPSHOT_MESSAGE =
         '⛔ 拒絕 stale snapshot：觀察時間未晚於既有 catalog 的最後成功觀察。';
 
+    /** ⛔ 同樣固定：不含 snapshot body、caller 時間值或 timezone 設定內容。 */
+    public const INVALID_TIMEZONE_MESSAGE =
+        '⛔ app timezone 未設定或無效，無法正規化 snapshot 觀察時間。';
+
     public function __construct(
         private readonly TheMostPanelServiceCatalogParser $parser,
     ) {}
 
     public function __invoke(string $rawResponseBody, DateTimeImmutable $observedAt): void
     {
+        /*
+         * ⛔ 先正規化時間，再 parse，才進 transaction。gate 比較與 DB 寫入
+         * 從此只見同一個 storage-time 表示，沒有第二種。
+         */
+        $observedAt = $this->canonicalStorageTime($observedAt);
+
         // ⛔ 唯一驗證入口：parse 失敗在任何 DB 動作之前就丟出，資料庫必然不變。
         $definitions = $this->parser->parse($rawResponseBody);
 
@@ -138,5 +161,40 @@ class ApplyProviderServiceCatalogSnapshot
                 ->whereNotIn('provider_service_id', $ids)
                 ->update(['is_available' => false]);
         });
+    }
+
+    /**
+     * The one storage-time representation: app timezone, second precision.
+     *
+     * ⛔ Truncation, not rounding — microseconds are dropped so that nothing
+     * can order two snapshots by precision the column will not keep.
+     *
+     * ⛔ Fails closed on a missing or invalid app timezone: guessing a zone
+     * here would let the same instant compare differently on two machines,
+     * which is the exact bug this method exists to end. The error is a fixed
+     * local message with no snapshot content, caller time or config value.
+     */
+    private function canonicalStorageTime(DateTimeImmutable $observedAt): DateTimeImmutable
+    {
+        $timezone = config('app.timezone');
+
+        if (! is_string($timezone) || trim($timezone) === '') {
+            throw new RuntimeException(self::INVALID_TIMEZONE_MESSAGE);
+        }
+
+        try {
+            $storageZone = new DateTimeZone($timezone);
+        } catch (Exception) {
+            throw new RuntimeException(self::INVALID_TIMEZONE_MESSAGE);
+        }
+
+        $inStorageZone = $observedAt->setTimezone($storageZone);
+
+        // setTime 未給微秒參數即歸零：同一 storage second 的第二份一律 equal。
+        return $inStorageZone->setTime(
+            (int) $inStorageZone->format('H'),
+            (int) $inStorageZone->format('i'),
+            (int) $inStorageZone->format('s'),
+        );
     }
 }

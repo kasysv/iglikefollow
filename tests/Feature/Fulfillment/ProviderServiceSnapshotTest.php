@@ -203,6 +203,163 @@ class ProviderServiceSnapshotTest extends TestCase
         $this->assertSame($before, $this->allAttributes());
     }
 
+    /**
+     * ⛔ Storage keeps seconds, so the gate must not order by microseconds.
+     * A later apply carrying an *earlier* microsecond in the same stored
+     * second must be refused, byte-level unchanged.
+     */
+    public function test_a_microsecond_earlier_replay_in_the_same_second_is_refused(): void
+    {
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'newer-micro'])]),
+            '2026-08-18 12:00:00.900000'
+        );
+
+        $row = ProviderService::query()->sole();
+        $this->assertSame('2026-08-18 12:00:00', $row->last_seen_at->format('Y-m-d H:i:s'));
+
+        $before = $this->allAttributes();
+
+        try {
+            $this->apply(
+                json_encode([self::item(9101, ['name' => 'older-microsecond'])]),
+                '2026-08-18 12:00:00.100000'
+            );
+            $this->fail('同一 storage second 的重放必須被拒絕');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ApplyProviderServiceCatalogSnapshot::STALE_SNAPSHOT_MESSAGE, $e->getMessage());
+        }
+
+        $this->assertSame($before, $this->allAttributes());
+    }
+
+    /**
+     * ⛔ Conservative on ties: even a *later* microsecond in the same stored
+     * second is `equal`, because the column cannot keep the difference.
+     */
+    public function test_a_microsecond_later_snapshot_in_the_same_second_is_still_refused(): void
+    {
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'first-micro'])]),
+            '2026-08-18 12:00:00.100000'
+        );
+        $before = $this->allAttributes();
+
+        try {
+            $this->apply(
+                json_encode([self::item(9101, ['name' => 'later-microsecond'])]),
+                '2026-08-18 12:00:00.900000'
+            );
+            $this->fail('同一 storage second 必須保守視為 equal 並拒絕');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ApplyProviderServiceCatalogSnapshot::STALE_SNAPSHOT_MESSAGE, $e->getMessage());
+        }
+
+        $this->assertSame($before, $this->allAttributes());
+    }
+
+    /**
+     * ⛔ The reviewer's replay: `04:00:00+00:00` and `12:00:00+08:00` are the
+     * same instant. The first apply must already be stored as the app-timezone
+     * wall clock, and the second must be refused as equal.
+     */
+    public function test_the_same_instant_cannot_be_replayed_from_another_timezone(): void
+    {
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'utc-body'])]),
+            '2026-08-18T04:00:00+00:00'
+        );
+
+        $row = ProviderService::query()->sole();
+        // ⛔ 保存的是 app timezone（Asia/Taipei）的正確秒級值，不是 04:00:00。
+        $this->assertSame('2026-08-18 12:00:00', $row->last_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-08-18 12:00:00', $row->first_seen_at->format('Y-m-d H:i:s'));
+
+        $before = $this->allAttributes();
+
+        try {
+            $this->apply(
+                json_encode([self::item(9101, ['name' => 'taipei-body', 'rate' => '2.00'])]),
+                '2026-08-18T12:00:00+08:00'
+            );
+            $this->fail('同一瞬間換時區重放必須被拒絕');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ApplyProviderServiceCatalogSnapshot::STALE_SNAPSHOT_MESSAGE, $e->getMessage());
+        }
+
+        $this->assertSame($before, $this->allAttributes());
+    }
+
+    /**
+     * ⛔ Instants, not wall clocks: `23:30:00+10:00` *reads* later than
+     * `23:00:00+08:00` but is actually 90 minutes earlier. It must be refused.
+     */
+    public function test_an_older_instant_with_a_later_wall_clock_is_refused(): void
+    {
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'actually-newer'])]),
+            '2026-08-18T23:00:00+08:00'
+        );
+        $before = $this->allAttributes();
+
+        try {
+            $this->apply(
+                json_encode([self::item(9101, ['name' => 'looks-later-is-older'])]),
+                '2026-08-18T23:30:00+10:00'
+            );
+            $this->fail('實際較舊的 instant 必須被拒絕，不論 wall clock 看起來多晚');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ApplyProviderServiceCatalogSnapshot::STALE_SNAPSHOT_MESSAGE, $e->getMessage());
+        }
+
+        $this->assertSame($before, $this->allAttributes());
+    }
+
+    /** 跨時區、實際較新的下一秒可接受，且以 app timezone 秒級值保存。 */
+    public function test_an_actually_newer_cross_timezone_second_is_accepted(): void
+    {
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'first-second'])]),
+            '2026-08-18T04:00:00+00:00'
+        );
+
+        $this->apply(
+            json_encode([self::item(9101, ['name' => 'next-second'])]),
+            '2026-08-18T04:00:01+00:00'
+        );
+
+        $row = ProviderService::query()->sole();
+
+        $this->assertSame('next-second', $row->name);
+        $this->assertSame('2026-08-18 12:00:00', $row->first_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-08-18 12:00:01', $row->last_seen_at->format('Y-m-d H:i:s'));
+    }
+
+    /**
+     * ⛔ No app timezone, no snapshot. Guessing a zone would let the same
+     * instant compare differently on two machines — the exact bug the
+     * canonicalization exists to end.
+     */
+    public function test_a_missing_or_invalid_app_timezone_fails_closed(): void
+    {
+        foreach ([null, '', '   ', 'Not/A_Zone'] as $broken) {
+            config(['app.timezone' => $broken]);
+
+            try {
+                $this->apply(json_encode([self::item(9101)]));
+                $this->fail('app timezone 無效時必須 fail closed');
+            } catch (RuntimeException $e) {
+                // ⛔ 固定訊息：不含 body、caller 時間值或 timezone 設定內容。
+                $this->assertSame(
+                    ApplyProviderServiceCatalogSnapshot::INVALID_TIMEZONE_MESSAGE,
+                    $e->getMessage()
+                );
+            }
+        }
+
+        $this->assertSame(0, ProviderService::query()->count());
+    }
+
     /** 既有 row 兩個 seen timestamps 皆 null 時，首次合法觀察要一起補上。 */
     public function test_a_never_observed_row_gets_both_timestamps_on_first_snapshot(): void
     {

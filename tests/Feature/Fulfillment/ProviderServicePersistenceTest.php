@@ -196,17 +196,33 @@ class ProviderServicePersistenceTest extends TestCase
      *
      * temporal guard 的 down 只移除守衛、獲准通過；接著輪到 `400000` 時被
      * 拒絕，表與資料原封不動。之後重跑 migrate 把 temporal guard 補回來。
+     *
+     * ⛔ try 區塊裡沒有 `$this->fail()`：改用旗標，例外只可能來自 migration
+     * 本身，refusal 與「不外洩資料」的斷言都作用在真正的 refusal 上——
+     * 前一版把不外洩斷言放在會 catch 到自己 fail() 的測試裡，等於沒測。
      */
     public function test_a_populated_table_refuses_to_roll_back(): void
     {
-        ProviderService::factory()->create();
+        ProviderService::factory()->create([
+            'provider_service_id' => '424242',
+            'name' => '不可外流的虛構名稱',
+        ]);
+
+        $refusal = null;
 
         try {
             Artisan::call('migrate:rollback', ['--step' => 2]);
-            $this->fail('有資料時 rollback 必須失敗');
         } catch (\Throwable $e) {
-            $this->assertStringContainsString('無法回滾 provider_services', $e->getMessage());
+            $refusal = $e;
         }
+
+        $this->assertNotNull($refusal, '有資料時 rollback 必須失敗');
+        // 確定就是 migration 的 refusal，再對訊息做進一步斷言。
+        $this->assertStringContainsString('無法回滾 provider_services', $refusal->getMessage());
+        // ⛔ 拒絕訊息只能有筆數，不得含 service ID 或名稱。
+        $this->assertStringContainsString('1 筆', $refusal->getMessage());
+        $this->assertStringNotContainsString('424242', $refusal->getMessage());
+        $this->assertStringNotContainsString('不可外流的虛構名稱', $refusal->getMessage());
 
         // 表和資料都還在。
         $this->assertTrue(Schema::hasTable('provider_services'));
@@ -256,15 +272,20 @@ class ProviderServicePersistenceTest extends TestCase
             'last_seen_at' => '2026-08-17 12:00:00',
         ]));
 
+        // ⛔ 同樣用旗標而非 try 內 fail()：例外只可能來自 migration 本身。
+        $refusal = null;
+
         try {
             Artisan::call('migrate');
-            $this->fail('有違規資料時 temporal migration 必須拒絕');
         } catch (\Throwable $e) {
-            $this->assertStringContainsString('1 筆時間狀態不一致', $e->getMessage());
-            // ⛔ 訊息只有筆數，沒有任何資料內容。
-            $this->assertStringNotContainsString('9101', $e->getMessage());
-            $this->assertStringNotContainsString('2026-08-18', $e->getMessage());
+            $refusal = $e;
         }
+
+        $this->assertNotNull($refusal, '有違規資料時 temporal migration 必須拒絕');
+        $this->assertStringContainsString('1 筆時間狀態不一致', $refusal->getMessage());
+        // ⛔ 訊息只有筆數，沒有任何資料內容。
+        $this->assertStringNotContainsString('9101', $refusal->getMessage());
+        $this->assertStringNotContainsString('2026-08-18', $refusal->getMessage());
 
         // ⛔ 資料未被改寫或刪除。
         $this->assertSame(1, DB::table('provider_services')->count());
@@ -275,25 +296,13 @@ class ProviderServicePersistenceTest extends TestCase
         $this->test_both_sqlite_guard_triggers_exist();
     }
 
-    /**
-     * ⛔ The refusal message may say how many rows exist — never what any of
-     * them contains.
+    /*
+     * ⛔ test_the_rollback_refusal_names_no_service_data 已移除：它 catch 到
+     * 自己的 `$this->fail()`，在沒有任何 refusal 時也會假通過（`--step=1`
+     * 只回滾 temporal guard，本來就不會拒絕）。「拒絕訊息不外洩服務資料」
+     * 的斷言已併入上方 test_a_populated_table_refuses_to_roll_back——那裡
+     * 的例外確定來自 `400000` 的 populated-table refusal。
      */
-    public function test_the_rollback_refusal_names_no_service_data(): void
-    {
-        ProviderService::factory()->create([
-            'provider_service_id' => '424242',
-            'name' => '不可外流的虛構名稱',
-        ]);
-
-        try {
-            Artisan::call('migrate:rollback', ['--step' => 1]);
-            $this->fail('必須拒絕');
-        } catch (\Throwable $e) {
-            $this->assertStringNotContainsString('424242', $e->getMessage());
-            $this->assertStringNotContainsString('不可外流的虛構名稱', $e->getMessage());
-        }
-    }
 
     /** M4A 三表的 rollback 守衛不因新表而改變行為。 */
     public function test_m4a_tables_are_untouched_by_the_new_migration(): void
