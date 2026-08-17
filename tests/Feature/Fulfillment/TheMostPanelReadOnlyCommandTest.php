@@ -2,9 +2,12 @@
 
 namespace Tests\Feature\Fulfillment;
 
+use App\Contracts\TheMostPanelReadOnlyProbe;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
+use App\Services\Fulfillment\TheMostPanelCurlCapability;
+use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
@@ -32,6 +35,16 @@ class TheMostPanelReadOnlyCommandTest extends TestCase
 
         Http::preventStrayRequests();
         config()->set('integrations.themostpanel_read_only.enabled', true);
+
+        /*
+         * ⛔ 本機 libcurl 7.85.0 低於 8.4.0，真實 runtime 下探針會一律拒絕。
+         * 這裡注入一個明確「支援」的 runtime 描述，才能測到其餘行為——⛔ 而不是
+         * 為了讓測試通過就放寬那道閘。
+         */
+        $this->app->bind(
+            TheMostPanelReadOnlyProbe::class,
+            fn () => new TheMostPanelReadOnlyHttpProbe(TheMostPanelCurlCapability::supported()),
+        );
     }
 
     private function withCredential(): void

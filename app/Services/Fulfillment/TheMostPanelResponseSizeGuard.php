@@ -36,6 +36,53 @@ class TheMostPanelResponseSizeGuard
     /** ⛔ 這個訊息不會外流到觀察結果；只是讓中止的原因在程式內可辨識。 */
     public const REASON = 'themostpanel_body_too_large';
 
+    public const ENCODING_REASON = 'themostpanel_unsupported_encoding';
+
+    /**
+     * Refuse a compressed response before reading it.
+     *
+     * ⛔ Every size limit here counts bytes on the wire. A gzip body that
+     * expands to gigabytes passes all of them: cURL sees a small transfer, and
+     * the huge version only exists after decoding — which is the thing that
+     * would then be parsed. We ask for `identity` and refuse anything else
+     * rather than trusting a declared ratio.
+     *
+     * An absent header means identity, which is the normal case.
+     *
+     * @param  array<string, array<int, string>>  $headers
+     */
+    public static function assertIdentityEncoding(array $headers): void
+    {
+        foreach ($headers as $name => $values) {
+            if (strtolower((string) $name) !== 'content-encoding') {
+                continue;
+            }
+
+            foreach ((is_array($values) ? $values : [$values]) as $value) {
+                $value = strtolower(trim((string) $value));
+
+                // 空字串或 identity 都代表沒有壓縮。
+                if ($value === '' || $value === 'identity') {
+                    continue;
+                }
+
+                throw new RuntimeException(self::ENCODING_REASON);
+            }
+        }
+    }
+
+    /** 這個例外是不是我們因為壓縮編碼而拒絕的？ */
+    public static function isEncodingRefusal(\Throwable $e): bool
+    {
+        for ($current = $e; $current !== null; $current = $current->getPrevious()) {
+            if (str_contains($current->getMessage(), self::ENCODING_REASON)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Header-time check: refuse before a single body byte is read.
      *

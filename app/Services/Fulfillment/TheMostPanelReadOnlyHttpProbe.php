@@ -48,6 +48,14 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
      */
     private const SAFE_FIELD_NAME = '/^[A-Za-z_][A-Za-z0-9_.\-]{0,39}$/';
 
+    public function __construct(private ?TheMostPanelCurlCapability $capability = null) {}
+
+    /** ⛔ production path 讀真實 runtime；測試可注入。 */
+    private function capability(): TheMostPanelCurlCapability
+    {
+        return $this->capability ??= TheMostPanelCurlCapability::fromRuntime();
+    }
+
     public function probe(
         TheMostPanelReadOnlyAction $action,
         ?string $orderId = null,
@@ -107,31 +115,50 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
          */
         $sink = new TheMostPanelBoundedResponseStream(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES);
 
+        // ⛔ 每次 request 一份，用來記下 cURL 的 errno，不記任何訊息。
+        $transfer = new TheMostPanelTransferState;
+
         try {
             $response = Http::asForm()
                 ->connectTimeout(self::CONNECT_TIMEOUT)
                 ->timeout(self::TOTAL_TIMEOUT)
                 // ⛔ 不自動重試：rate limit 未知。
                 ->withoutRedirecting()
+                /*
+                 * ⛔ 明確要求不壓縮，並關閉自動解壓。
+                 *
+                 * 否則「線路上 2 KB、解壓後 2 GB」就能繞過整套大小限制：cURL
+                 * 的上限看的是 wire bytes，而我們解析的是解壓後的內容。
+                 */
+                ->withHeaders(['Accept-Encoding' => 'identity'])
                 ->withOptions([
                     // ⛔ TLS 驗證維持開啟；verify=false 永久禁止。
                     'verify' => true,
+                    'decode_content' => false,
                     /*
-                     * ⛔ 真正的硬上限就在這裡。
+                     * ⛔ 真正的傳輸上限：由 libcurl 本身執行。
                      *
-                     * cURL 每收到一段資料就呼叫 sink 的 write()，所以在那裡拒絕
-                     * 才會在該段被存下來之前停住傳輸。先前用 progress callback
-                     * 做不到——它在傳輸邊界才觸發，對永不結束的 chunked 回應
-                     * 根本沒來得及開口。
+                     * bounded sink 只能限制我們「存下」多少；連線仍會繼續，
+                     * 對方要送多少就送多少。8.4.0 起的 max-filesize 才會在
+                     * 傳輸途中直接中止——這也是上面那道版本閘存在的理由。
                      */
+                    'curl' => [
+                        CURLOPT_MAXFILESIZE_LARGE => TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,
+                    ],
+                    // handler 無關的第二層：限制實際保存的位元組數。
                     'sink' => $sink,
-                    // 已宣告長度就超限時，連第一個 byte 都不用收。
+                    // 已宣告長度就超限、或宣告了壓縮編碼時，連第一個 byte 都不收。
                     'on_headers' => function ($response) {
                         TheMostPanelResponseSizeGuard::assertContentLength($response->getHeaders());
+                        TheMostPanelResponseSizeGuard::assertIdentityEncoding($response->getHeaders());
+                    },
+                    // ⛔ 只取 errno，不取任何訊息。
+                    'on_stats' => function ($stats) use ($transfer) {
+                        $transfer->record($stats->getHandlerErrorData());
                     },
                     /*
-                     * 額外一層，⛔ 但不再被當成 hard cap：它何時觸發由 handler
-                     * 決定，不由我們決定。
+                     * 額外一層，⛔ 但不是 hard cap：它何時觸發由 handler 決定，
+                     * 不由我們決定。
                      */
                     'progress' => function ($downloadTotal, $downloaded) {
                         TheMostPanelResponseSizeGuard::assertProgress((int) $downloaded);
@@ -141,9 +168,23 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
         } catch (Throwable $e) {
             $elapsed = $this->elapsed($startedAt);
 
-            // 是我們自己因為過大而中止的，回報成過大而不是連線失敗。
+            /*
+             * ⛔ 先看 cURL 自己的 errno。
+             *
+             * 原生 max-filesize 中止時回 `CURLE_FILESIZE_EXCEEDED`(63)，那是
+             * 傳輸層明確的事實；比解析任何例外訊息可靠得多。
+             */
+            if ($transfer->exceededMaxFileSize()) {
+                return TheMostPanelProbeObservation::failed($action, 'body_too_large', elapsedMs: $elapsed);
+            }
+
+            // 其次才看是不是我們自己的 sink／header 中止。
             if (TheMostPanelResponseSizeGuard::isSizeAbort($e)) {
                 return TheMostPanelProbeObservation::failed($action, 'body_too_large', elapsedMs: $elapsed);
+            }
+
+            if (TheMostPanelResponseSizeGuard::isEncodingRefusal($e)) {
+                return TheMostPanelProbeObservation::failed($action, 'unsupported_encoding', elapsedMs: $elapsed);
             }
 
             // ⛔ 連線失敗、逾時、TLS 失敗：不保存 provider 或例外原文。
@@ -192,6 +233,18 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
         } elseif ($orderId !== null) {
             // ⛔ 不需要訂單編號的 action 不得夾帶一個。
             return 'blocked_unexpected_order_id';
+        }
+
+        /*
+         * ⛔ 這個 runtime 有沒有能力真的中止超大傳輸？
+         *
+         * 沒有就停在這裡——在讀 credential、建立 request 之前。R2 已經證明
+         * 「bounded sink ＋ 15 秒 timeout」不是傳輸上限：連線期間對方要送多少
+         * 就送多少，我們只是不存下來。libcurl 8.4.0 之前
+         * `CURLOPT_MAXFILESIZE_LARGE` 不會套用到進行中的傳輸。
+         */
+        if (! $this->capability()->supportsOngoingTransferCap()) {
+            return 'blocked_unsupported_transport_cap';
         }
 
         return null;

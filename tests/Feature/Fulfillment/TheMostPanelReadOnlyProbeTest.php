@@ -9,9 +9,11 @@ use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
 use App\Services\Fulfillment\TheMostPanelBoundedResponseStream;
+use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Fulfillment\TheMostPanelResponseSizeGuard;
 use App\Services\Fulfillment\TheMostPanelResponseTooLarge;
+use App\Services\Fulfillment\TheMostPanelTransferState;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -48,6 +50,23 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
 
         // ⛔ 探針只能由 CLI 執行；測試本身就跑在 console。
         config()->set('integrations.themostpanel_read_only.enabled', true);
+
+        /*
+         * ⛔ 明確描述一個支援的 runtime，而不是修改這台機器的 PHP。
+         *
+         * 本機 libcurl 是 7.85.0（低於 8.4.0），真實 runtime 下探針會正確地
+         * 一律拒絕。要測其餘所有行為，必須把「runtime 支援與否」變成可注入的
+         * 條件——而不是為了讓測試通過就放寬那道閘。
+         */
+        $this->useCapability(TheMostPanelCurlCapability::supported());
+    }
+
+    private function useCapability(TheMostPanelCurlCapability $capability): void
+    {
+        $this->app->bind(
+            TheMostPanelReadOnlyProbe::class,
+            fn () => new TheMostPanelReadOnlyHttpProbe($capability),
+        );
     }
 
     private function withCredential(): IntegrationSetting
@@ -709,6 +728,256 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         // ⛔ 上限不得讓正常回應也讀不到：那樣這個工具就沒有用了。
         $this->assertTrue($observation->isObserved());
         $this->assertSame(2, $observation->itemCount);
+    }
+
+    // ==================================== 12. R3：runtime 能力閘
+
+    /**
+     * @return array<string, array{0: TheMostPanelCurlCapability}>
+     */
+    public static function unsupportedRuntimeProvider(): array
+    {
+        return [
+            'no curl extension' => [TheMostPanelCurlCapability::unsupported(
+                versionString: 'unavailable', versionNumber: 0, extensionLoaded: false,
+            )],
+            'no max filesize option' => [TheMostPanelCurlCapability::unsupported(
+                versionString: '8.5.0', versionNumber: 0x080500, optionExists: false,
+            )],
+            'libcurl 7.85.0' => [TheMostPanelCurlCapability::unsupported('7.85.0', 0x075500)],
+            'libcurl 8.3.0' => [TheMostPanelCurlCapability::unsupported('8.3.0', 0x080300)],
+            'libcurl 8.3.9' => [TheMostPanelCurlCapability::unsupported('8.3.9', 0x080309)],
+        ];
+    }
+
+    /**
+     * ⛔ 不支援的 runtime 必須在讀 credential 之前就停下來。
+     *
+     * R2 已經證明「bounded sink ＋ 15 秒 timeout」不是傳輸上限——連線期間對方
+     * 想送多少就送多少，我們只是不存。所以這裡不能降級成「差不多也行」。
+     */
+    #[DataProvider('unsupportedRuntimeProvider')]
+    public function test_an_unsupported_runtime_blocks_before_any_credential_read(
+        TheMostPanelCurlCapability $capability,
+    ): void {
+        Http::fake();
+        $this->withCredential();
+        $this->useCapability($capability);
+
+        $reads = 0;
+        DB::listen(function ($query) use (&$reads) {
+            if (str_contains($query->sql, 'integration_settings') && str_starts_with(trim($query->sql), 'select')) {
+                $reads++;
+            }
+        });
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame('blocked_unsupported_transport_cap', $observation->outcome);
+        Http::assertNothingSent();
+        // ⛔ credential 一次都沒查：連問都不該問。
+        $this->assertSame(0, $reads, 'credential 不得在不支援的 runtime 上被讀取');
+    }
+
+    public function test_a_supported_runtime_is_allowed(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->hypotheticalServices())]);
+        $this->withCredential();
+        $this->useCapability(TheMostPanelCurlCapability::supported('8.4.0'));
+
+        $this->assertTrue($this->probe()->probe(TheMostPanelReadOnlyAction::Services)->isObserved());
+    }
+
+    public function test_the_capability_threshold_is_libcurl_8_4_0(): void
+    {
+        // 官方文件：8.4.0 之前 max-filesize 不套用到進行中的傳輸。
+        $this->assertFalse(TheMostPanelCurlCapability::unsupported('8.3.9', 0x080309)->supportsOngoingTransferCap());
+        $this->assertTrue(TheMostPanelCurlCapability::supported('8.4.0')->supportsOngoingTransferCap());
+    }
+
+    /**
+     * ⛔ 常數存在不等於它會生效。
+     *
+     * 7.85.0 也定義了 `CURLOPT_MAXFILESIZE_LARGE`，只是不會套用到進行中的
+     * 傳輸——所以版本必須另外檢查，不能只看常數。
+     */
+    public function test_the_constant_existing_is_not_enough(): void
+    {
+        $this->assertFalse(
+            TheMostPanelCurlCapability::unsupported('7.85.0', 0x075500, optionExists: true)
+                ->supportsOngoingTransferCap()
+        );
+    }
+
+    public function test_this_machine_is_honestly_reported(): void
+    {
+        $runtime = TheMostPanelCurlCapability::fromRuntime();
+
+        /*
+         * ⛔ 這個測試不斷言支援與否，只確認我們讀的是真實 runtime。
+         *
+         * 本機是 7.85.0，所以正式路徑上探針會拒絕——結果文件必須據實記錄
+         * `native ongoing cap NOT VERIFIED`，不得用注入的測試結果冒充。
+         */
+        $this->assertNotSame('', $runtime->versionString());
+    }
+
+    // ==================================== 13. R3：原生上限與壓縮繞道
+
+    /**
+     * ⛔ 原生上限必須真的出現在送出的 request options 裡。
+     *
+     * 用 middleware 攔下 Guzzle 實際收到的 options——`Http::fake()` 的
+     * assertion 看不到這一層，而「有沒有設定這個選項」正是 R3 的重點。
+     */
+    public function test_the_request_carries_the_native_max_filesize(): void
+    {
+        $captured = [];
+
+        Http::fake([self::ENDPOINT => Http::response($this->hypotheticalServices())]);
+        Http::globalMiddleware(function ($handler) use (&$captured) {
+            return function ($request, array $options) use ($handler, &$captured) {
+                $captured = $options;
+
+                return $handler($request, $options);
+            };
+        });
+
+        $this->withCredential();
+        $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame(
+            TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,
+            $captured['curl'][CURLOPT_MAXFILESIZE_LARGE] ?? null,
+            '原生 max-filesize 必須等於 2 MiB',
+        );
+
+        // ⛔ 同時關閉自動解壓：否則解壓後的大小不受任何限制。
+        $this->assertFalse($captured['decode_content'] ?? null);
+    }
+
+    /**
+     * ⛔ 壓縮會讓所有以 wire bytes 計算的上限失效。
+     *
+     * 「線路上 2 KB、解壓後 2 GB」可以通過每一道大小檢查——cURL 看到的是小
+     * 傳輸，而巨大的版本只在解碼後存在，那正是接下來要被解析的東西。
+     */
+    public static function compressedEncodingProvider(): array
+    {
+        return [
+            'gzip' => ['gzip'],
+            'br' => ['br'],
+            'deflate' => ['deflate'],
+            'mixed case' => ['GZIP'],
+            'multiple' => ['gzip, br'],
+        ];
+    }
+
+    #[DataProvider('compressedEncodingProvider')]
+    public function test_a_compressed_response_is_refused_at_the_header_stage(string $encoding): void
+    {
+        $this->expectException(\RuntimeException::class);
+
+        TheMostPanelResponseSizeGuard::assertIdentityEncoding(['Content-Encoding' => [$encoding]]);
+    }
+
+    public static function acceptableEncodingProvider(): array
+    {
+        return [
+            'identity' => [['Content-Encoding' => ['identity']]],
+            'empty' => [['Content-Encoding' => ['']]],
+            'absent' => [[]],
+            'case insensitive header' => [['content-encoding' => ['identity']]],
+        ];
+    }
+
+    /** @param array<string, array<int, string>> $headers */
+    #[DataProvider('acceptableEncodingProvider')]
+    public function test_an_uncompressed_response_is_allowed(array $headers): void
+    {
+        TheMostPanelResponseSizeGuard::assertIdentityEncoding($headers);
+
+        $this->assertTrue(true, 'identity／未宣告不得被擋下');
+    }
+
+    public function test_an_encoding_refusal_is_reported_without_provider_text(): void
+    {
+        Http::fake([
+            self::ENDPOINT => fn () => throw new ConnectionException(
+                'transfer failed',
+                0,
+                new \RuntimeException(TheMostPanelResponseSizeGuard::ENCODING_REASON)
+            ),
+        ]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame('unsupported_encoding', $observation->outcome);
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+        $this->assertStringNotContainsString('transfer failed', (string) $encoded);
+    }
+
+    // ==================================== 14. R3：以 errno 分類，不解析訊息
+
+    public function test_only_error_63_means_the_size_limit_was_hit(): void
+    {
+        $state = new TheMostPanelTransferState;
+
+        $this->assertFalse($state->exceededMaxFileSize(), '尚未記錄任何錯誤');
+
+        $state->record(TheMostPanelTransferState::FILESIZE_EXCEEDED);
+        $this->assertTrue($state->exceededMaxFileSize());
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function otherTransferErrorProvider(): array
+    {
+        return [
+            'timeout 28' => [28],
+            'write error 23' => [23],
+            'abort by callback 42' => [42],
+            'ssl 60' => [60],
+            'zero' => [0],
+        ];
+    }
+
+    /** ⛔ 只有 63 算「太大」；其餘一律維持一般傳輸失敗。 */
+    #[DataProvider('otherTransferErrorProvider')]
+    public function test_another_transfer_error_is_not_a_size_failure(mixed $code): void
+    {
+        $state = new TheMostPanelTransferState;
+        $state->record($code);
+
+        $this->assertFalse($state->exceededMaxFileSize());
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function nonIntegerErrorProvider(): array
+    {
+        return [
+            'string 63' => ['63'],
+            'null' => [null],
+            'array' => [[63]],
+            'bool' => [true],
+            'float' => [63.0],
+        ];
+    }
+
+    /** ⛔ 不做寬鬆轉型：被轉型的值可能讓任意字串變成有意義的代碼。 */
+    #[DataProvider('nonIntegerErrorProvider')]
+    public function test_a_non_integer_error_code_is_discarded(mixed $code): void
+    {
+        $state = new TheMostPanelTransferState;
+        $state->record($code);
+
+        $this->assertNull($state->errorCode());
+        $this->assertFalse($state->exceededMaxFileSize());
     }
 
     public function test_a_size_abort_keeps_no_exception_text(): void
