@@ -14,6 +14,7 @@ use App\Models\IntegrationSetting;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Platform;
+use App\Models\ProviderService;
 use App\Models\Service;
 use App\Models\ServiceContentSection;
 use App\Models\ServiceVariant;
@@ -36,6 +37,7 @@ use App\Policies\IntegrationSettingPolicy;
 use App\Policies\InvoicePolicy;
 use App\Policies\OrderPolicy;
 use App\Policies\PlatformPolicy;
+use App\Policies\ProviderServicePolicy;
 use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
 use App\Policies\ServiceVariantPolicy;
@@ -72,6 +74,8 @@ class AppServiceProvider extends ServiceProvider
         FulfillmentMapping::class => FulfillmentMappingPolicy::class,
         // 履約紀錄唯讀；⛔ 沒有重送、取消或手動標記完成的入口。
         FulfillmentOrder::class => FulfillmentOrderPolicy::class,
+        // 供應商服務目錄僅限 Owner 唯讀；⛔ 後台沒有任何寫入或同步入口。
+        ProviderService::class => ProviderServicePolicy::class,
     ];
 
     /**
