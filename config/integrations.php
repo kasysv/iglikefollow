@@ -116,6 +116,20 @@ return [
     ],
 
     /*
+     | TheMostPanel 服務目錄同步（M4B-CATALOG-B1）。
+     |
+     | ⛔ 第二道獨立開關，與上面的唯讀探針總閘缺一不可：transport 總閘管
+     | 「可不可以連」，這個管「可不可以把 services 回應寫成本地 catalog」。
+     | 合成一個開關，就是讓「看一眼回應」與「改寫本地目錄」共用同一個決定。
+     |
+     | ⛔ 預設關閉、只從 env 讀取、沒有後台介面；CLI 另需 --approved-once。
+     | 打開它也不會解鎖 add／自動派單——那由完全不同的設定與 gateway 綁定管。
+     */
+    'themostpanel_catalog_sync' => [
+        'enabled' => env('THEMOSTPANEL_CATALOG_SYNC_ENABLED', false),
+    ],
+
+    /*
      | 發票 gateway 綁定。local／testing 一律使用 Fake，
      | ⛔ 其他環境沒有明確 adapter 就 fail closed，不得默默降級成 Fake。
      */

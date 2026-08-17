@@ -3,6 +3,8 @@
 namespace App\Services\Fulfillment;
 
 use App\Contracts\TheMostPanelReadOnlyProbe;
+use App\Contracts\TheMostPanelServiceCatalogSource;
+use App\Data\Fulfillment\TheMostPanelCatalogFetchResult;
 use App\Data\Fulfillment\TheMostPanelProbeObservation;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
@@ -22,8 +24,16 @@ use Throwable;
  * ⛔ No retries, anywhere. The provider's rate limit is unknown, and "it was
  * only a read" is not a defence against being throttled or blocked. One
  * command, at most one request.
+ *
+ * ⛔ Two read paths, one transport. The shape probe (RO-A) and the catalog
+ * source (CATALOG-B1) share the same gates, the same credential discipline
+ * and the same `postExactlyOnce()` request chain — a second copied HTTP chain
+ * would inevitably drift from this one, and the drifted copy would be the one
+ * carrying the API key. They differ only in what they keep: the probe keeps
+ * shape and discards the body; the catalog source keeps the body privately,
+ * one-shot, for the CATALOG-A parser and nothing else.
  */
-class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
+class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMostPanelServiceCatalogSource
 {
     private const CONNECT_TIMEOUT = 5;
 
@@ -119,79 +129,218 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
         $transfer = new TheMostPanelTransferState;
 
         try {
-            $response = Http::asForm()
-                ->connectTimeout(self::CONNECT_TIMEOUT)
-                ->timeout(self::TOTAL_TIMEOUT)
-                // ⛔ 不自動重試：rate limit 未知。
-                ->withoutRedirecting()
-                /*
-                 * ⛔ 明確要求不壓縮，並關閉自動解壓。
-                 *
-                 * 否則「線路上 2 KB、解壓後 2 GB」就能繞過整套大小限制：cURL
-                 * 的上限看的是 wire bytes，而我們解析的是解壓後的內容。
-                 */
-                ->withHeaders(['Accept-Encoding' => 'identity'])
-                ->withOptions([
-                    // ⛔ TLS 驗證維持開啟；verify=false 永久禁止。
-                    'verify' => true,
-                    'decode_content' => false,
-                    /*
-                     * ⛔ 真正的傳輸上限：由 libcurl 本身執行。
-                     *
-                     * bounded sink 只能限制我們「存下」多少；連線仍會繼續，
-                     * 對方要送多少就送多少。8.4.0 起的 max-filesize 才會在
-                     * 傳輸途中直接中止——這也是上面那道版本閘存在的理由。
-                     */
-                    'curl' => [
-                        CURLOPT_MAXFILESIZE_LARGE => TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,
-                    ],
-                    // handler 無關的第二層：限制實際保存的位元組數。
-                    'sink' => $sink,
-                    // 已宣告長度就超限、或宣告了壓縮編碼時，連第一個 byte 都不收。
-                    'on_headers' => function ($response) {
-                        TheMostPanelResponseSizeGuard::assertContentLength($response->getHeaders());
-                        TheMostPanelResponseSizeGuard::assertIdentityEncoding($response->getHeaders());
-                    },
-                    // ⛔ 只取 errno，不取任何訊息。
-                    'on_stats' => function ($stats) use ($transfer) {
-                        $transfer->record($stats->getHandlerErrorData());
-                    },
-                    /*
-                     * 額外一層，⛔ 但不是 hard cap：它何時觸發由 handler 決定，
-                     * 不由我們決定。
-                     */
-                    'progress' => function ($downloadTotal, $downloaded) {
-                        TheMostPanelResponseSizeGuard::assertProgress((int) $downloaded);
-                    },
-                ])
-                ->post($this->endpoint(), $payload);
+            $response = $this->postExactlyOnce($payload, $sink, $transfer);
         } catch (Throwable $e) {
-            $elapsed = $this->elapsed($startedAt);
-
-            /*
-             * ⛔ 先看 cURL 自己的 errno。
-             *
-             * 原生 max-filesize 中止時回 `CURLE_FILESIZE_EXCEEDED`(63)，那是
-             * 傳輸層明確的事實；比解析任何例外訊息可靠得多。
-             */
-            if ($transfer->exceededMaxFileSize()) {
-                return TheMostPanelProbeObservation::failed($action, 'body_too_large', elapsedMs: $elapsed);
-            }
-
-            // 其次才看是不是我們自己的 sink／header 中止。
-            if (TheMostPanelResponseSizeGuard::isSizeAbort($e)) {
-                return TheMostPanelProbeObservation::failed($action, 'body_too_large', elapsedMs: $elapsed);
-            }
-
-            if (TheMostPanelResponseSizeGuard::isEncodingRefusal($e)) {
-                return TheMostPanelProbeObservation::failed($action, 'unsupported_encoding', elapsedMs: $elapsed);
-            }
-
             // ⛔ 連線失敗、逾時、TLS 失敗：不保存 provider 或例外原文。
-            return TheMostPanelProbeObservation::failed($action, 'transport_failed', elapsedMs: $elapsed);
+            return TheMostPanelProbeObservation::failed(
+                $action,
+                $this->transportFailureCode($e, $transfer),
+                elapsedMs: $this->elapsed($startedAt),
+            );
         }
 
         return $this->read($action, $response, $startedAt, $markers);
+    }
+
+    /**
+     * Fetch the `services` list, keeping the raw body for the parser.
+     *
+     * ⛔ Same gates, same credential discipline, same transport as the probe —
+     * this method adds no capability, only a different destination for a
+     * successful body. It never parses: strict validation belongs to the
+     * CATALOG-A parser, and a second lenient copy here would drift.
+     */
+    public function fetchServices(): TheMostPanelCatalogFetchResult
+    {
+        $blocked = $this->blockingReasonBeforeCredential(TheMostPanelReadOnlyAction::Services, null);
+
+        if ($blocked !== null) {
+            return TheMostPanelCatalogFetchResult::blocked($blocked);
+        }
+
+        /*
+         * ⛔ 沒有 app key 連加密的 credential 都解不開——在讀取之前就停，
+         * 而不是讓解密在半路丟例外。
+         */
+        if ($this->fingerprintKey() === null) {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_no_app_key');
+        }
+
+        /*
+         * ⛔ catalog 路徑讀整列 setting，一次。key 必須存在，且 `is_enabled`
+         * 必須為 false：這個開關武裝的是自動派單，被異常打開時 catalog sync
+         * 反而拒絕——「可以讀清單」絕不能與「已武裝派單」出現在同一個狀態裡。
+         */
+        $setting = $this->setting();
+        $key = $setting?->secret('ApiKey');
+
+        if (! is_string($key) || trim($key) === '') {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_no_credential');
+        }
+
+        if ($setting->is_enabled) {
+            return TheMostPanelCatalogFetchResult::blocked('blocked_credential_enabled');
+        }
+
+        $payload = ['key' => $key, 'action' => TheMostPanelReadOnlyAction::Services->value];
+
+        $startedAt = microtime(true);
+        $sink = new TheMostPanelBoundedResponseStream(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES);
+        $transfer = new TheMostPanelTransferState;
+
+        try {
+            $response = $this->postExactlyOnce($payload, $sink, $transfer);
+        } catch (Throwable $e) {
+            return TheMostPanelCatalogFetchResult::failed(
+                $this->transportFailureCode($e, $transfer),
+                elapsedMs: $this->elapsed($startedAt),
+            );
+        }
+
+        $elapsed = $this->elapsed($startedAt);
+        $status = $response->status();
+
+        $statusFailure = $this->statusFailureCode($status);
+
+        if ($statusFailure !== null) {
+            return TheMostPanelCatalogFetchResult::failed($statusFailure, $status, $elapsed);
+        }
+
+        $body = (string) $response->body();
+
+        $bodyFailure = $this->bodyFailureCode($body);
+
+        if ($bodyFailure !== null) {
+            return TheMostPanelCatalogFetchResult::failed($bodyFailure, $status, $elapsed);
+        }
+
+        return TheMostPanelCatalogFetchResult::fetched($body, $status, $elapsed);
+    }
+
+    /**
+     * The one request chain both read paths share.
+     *
+     * ⛔ Exactly one POST, no retry, no redirect, TLS verified, identity
+     * encoding, native 2 MiB transport cap plus bounded sink. Copying this
+     * chain is forbidden — two copies of these options will drift, and the
+     * drifted one still carries the API key.
+     */
+    private function postExactlyOnce(
+        array $payload,
+        TheMostPanelBoundedResponseStream $sink,
+        TheMostPanelTransferState $transfer,
+    ) {
+        return Http::asForm()
+            ->connectTimeout(self::CONNECT_TIMEOUT)
+            ->timeout(self::TOTAL_TIMEOUT)
+            // ⛔ 不自動重試：rate limit 未知。
+            ->withoutRedirecting()
+            /*
+             * ⛔ 明確要求不壓縮，並關閉自動解壓。
+             *
+             * 否則「線路上 2 KB、解壓後 2 GB」就能繞過整套大小限制：cURL
+             * 的上限看的是 wire bytes，而我們解析的是解壓後的內容。
+             */
+            ->withHeaders(['Accept-Encoding' => 'identity'])
+            ->withOptions([
+                // ⛔ TLS 驗證維持開啟；verify=false 永久禁止。
+                'verify' => true,
+                'decode_content' => false,
+                /*
+                 * ⛔ 真正的傳輸上限：由 libcurl 本身執行。
+                 *
+                 * bounded sink 只能限制我們「存下」多少；連線仍會繼續，
+                 * 對方要送多少就送多少。8.4.0 起的 max-filesize 才會在
+                 * 傳輸途中直接中止——這也是 runtime 能力閘存在的理由。
+                 */
+                'curl' => [
+                    CURLOPT_MAXFILESIZE_LARGE => TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,
+                ],
+                // handler 無關的第二層：限制實際保存的位元組數。
+                'sink' => $sink,
+                // 已宣告長度就超限、或宣告了壓縮編碼時，連第一個 byte 都不收。
+                'on_headers' => function ($response) {
+                    TheMostPanelResponseSizeGuard::assertContentLength($response->getHeaders());
+                    TheMostPanelResponseSizeGuard::assertIdentityEncoding($response->getHeaders());
+                },
+                // ⛔ 只取 errno，不取任何訊息。
+                'on_stats' => function ($stats) use ($transfer) {
+                    $transfer->record($stats->getHandlerErrorData());
+                },
+                /*
+                 * 額外一層，⛔ 但不是 hard cap：它何時觸發由 handler 決定，
+                 * 不由我們決定。
+                 */
+                'progress' => function ($downloadTotal, $downloaded) {
+                    TheMostPanelResponseSizeGuard::assertProgress((int) $downloaded);
+                },
+            ])
+            ->post($this->endpoint(), $payload);
+    }
+
+    /**
+     * ⛔ Classify a transport failure by errno first, exception chain second,
+     * message never. `CURLE_FILESIZE_EXCEEDED` (63) is a transport-layer fact;
+     * parsing exception text is guessing.
+     */
+    private function transportFailureCode(Throwable $e, TheMostPanelTransferState $transfer): string
+    {
+        if ($transfer->exceededMaxFileSize()) {
+            return 'body_too_large';
+        }
+
+        // 其次才看是不是我們自己的 sink／header 中止。
+        if (TheMostPanelResponseSizeGuard::isSizeAbort($e)) {
+            return 'body_too_large';
+        }
+
+        if (TheMostPanelResponseSizeGuard::isEncodingRefusal($e)) {
+            return 'unsupported_encoding';
+        }
+
+        return 'transport_failed';
+    }
+
+    /** ⛔ 3xx 不跟隨、429 明確標示；null 代表 2xx 可續讀。 */
+    private function statusFailureCode(int $status): ?string
+    {
+        if ($status >= 300 && $status < 400) {
+            return 'redirect_refused';
+        }
+
+        if ($status === 429) {
+            return 'rate_limited';
+        }
+
+        if ($status >= 500) {
+            return 'server_error';
+        }
+
+        // 4xx——以及理論上的 1xx——都當作 client 端不可用。
+        if ($status >= 400 || $status < 200) {
+            return 'client_error';
+        }
+
+        return null;
+    }
+
+    /** 成功 status 之下，body 仍不可用的情況；null 代表可續讀。 */
+    private function bodyFailureCode(string $body): ?string
+    {
+        if ($body === '') {
+            return 'empty_body';
+        }
+
+        // ⛔ 第二層：transport 中止若因故沒有生效，這裡仍然擋下。
+        if (strlen($body) > TheMostPanelResponseSizeGuard::MAX_BODY_BYTES) {
+            return 'body_too_large';
+        }
+
+        if (! mb_check_encoding($body, 'UTF-8')) {
+            return 'invalid_encoding';
+        }
+
+        return null;
     }
 
     /**
@@ -275,14 +424,18 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
      */
     private function apiKey(): ?string
     {
-        $setting = IntegrationSetting::query()
+        $key = $this->setting()?->secret('ApiKey');
+
+        return is_string($key) && trim($key) !== '' ? $key : null;
+    }
+
+    /** 單一一次的 setting 查詢；⛔ 兩條路徑共用同一個讀取紀律。 */
+    private function setting(): ?IntegrationSetting
+    {
+        return IntegrationSetting::query()
             ->where('provider', IntegrationProvider::TheMostPanel)
             ->where('environment', IntegrationEnvironment::Production)
             ->first();
-
-        $key = $setting?->secret('ApiKey');
-
-        return is_string($key) && trim($key) !== '' ? $key : null;
     }
 
     /** 指紋用的金鑰；⛔ 空白時整個探針停止，不降級。 */
@@ -309,37 +462,19 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe
         $elapsed = $this->elapsed($startedAt);
         $status = $response->status();
 
-        // ⛔ 3xx 不跟隨：重導可能指向完全不同的主機。
-        if ($status >= 300 && $status < 400) {
-            return TheMostPanelProbeObservation::failed($action, 'redirect_refused', $status, $elapsed);
-        }
+        // ⛔ 與 catalog 路徑共用同一套 status／body 分類，不得各留一份。
+        $statusFailure = $this->statusFailureCode($status);
 
-        if ($status === 429) {
-            return TheMostPanelProbeObservation::failed($action, 'rate_limited', $status, $elapsed);
-        }
-
-        if (! $response->successful()) {
-            return TheMostPanelProbeObservation::failed(
-                $action,
-                $status >= 500 ? 'server_error' : 'client_error',
-                $status,
-                $elapsed,
-            );
+        if ($statusFailure !== null) {
+            return TheMostPanelProbeObservation::failed($action, $statusFailure, $status, $elapsed);
         }
 
         $body = (string) $response->body();
 
-        if ($body === '') {
-            return TheMostPanelProbeObservation::failed($action, 'empty_body', $status, $elapsed);
-        }
+        $bodyFailure = $this->bodyFailureCode($body);
 
-        // ⛔ 第二層：transport 中止若因故沒有生效，這裡仍然擋下。
-        if (strlen($body) > TheMostPanelResponseSizeGuard::MAX_BODY_BYTES) {
-            return TheMostPanelProbeObservation::failed($action, 'body_too_large', $status, $elapsed);
-        }
-
-        if (! mb_check_encoding($body, 'UTF-8')) {
-            return TheMostPanelProbeObservation::failed($action, 'invalid_encoding', $status, $elapsed);
+        if ($bodyFailure !== null) {
+            return TheMostPanelProbeObservation::failed($action, $bodyFailure, $status, $elapsed);
         }
 
         $decoded = json_decode($body, true);

@@ -40,6 +40,14 @@ class ProviderServiceFactory extends Factory
 
     public function available(): static
     {
-        return $this->state(fn () => ['is_available' => true]);
+        /*
+         * ⛔ available 是「成功觀察過」的宣稱：DB temporal guard 要求兩個
+         * seen timestamps 同時存在且一致，缺一即被資料庫拒絕。
+         */
+        return $this->state(fn () => [
+            'is_available' => true,
+            'first_seen_at' => '2026-08-17 12:00:00',
+            'last_seen_at' => '2026-08-17 12:00:00',
+        ]);
     }
 }

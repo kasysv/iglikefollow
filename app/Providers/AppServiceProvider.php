@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Contracts\FulfillmentGateway;
 use App\Contracts\InvoiceGateway;
 use App\Contracts\TheMostPanelReadOnlyProbe;
+use App\Contracts\TheMostPanelServiceCatalogSource;
 use App\Models\AdminAuditLog;
 use App\Models\Faq;
 use App\Models\FulfillmentEvent;
@@ -123,6 +124,13 @@ class AppServiceProvider extends ServiceProvider
          * 它自己的所有閘門都在 probe 內部，且預設全部關閉。
          */
         $this->app->singleton(TheMostPanelReadOnlyProbe::class, TheMostPanelReadOnlyHttpProbe::class);
+
+        /*
+         * ⛔ catalog source 綁到同一個 hardened transport 類別，不是第二套
+         * HTTP client。contract 只有無參數的 fetchServices()——沒有任意
+         * action、沒有交易 method；它與 FulfillmentGateway 也毫無關係。
+         */
+        $this->app->singleton(TheMostPanelServiceCatalogSource::class, TheMostPanelReadOnlyHttpProbe::class);
     }
 
     /**
