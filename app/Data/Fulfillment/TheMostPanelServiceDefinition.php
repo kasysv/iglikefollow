@@ -3,13 +3,18 @@
 namespace App\Data\Fulfillment;
 
 /**
- * One validated entry from a `services` response.
+ * One entry from a `services` response, as the parser validated it.
  *
- * ⛔ Only the parser constructs these, and only from input that survived every
- * check — so holding one is proof the values are typed, bounded and free of
- * control characters. Nothing here is interpreted: the rate and quantity
- * bounds stay verbatim strings, because their currency and billing unit are
- * unverified and float math on money is forbidden.
+ * ⛔ Holding one is NOT proof of validation. PHP cannot stop other code from
+ * constructing this class by hand — a reviewer did exactly that and walked
+ * unvalidated values past an `instanceof` check. It is a carrier between the
+ * parser and the snapshot action, nothing more; the snapshot seam therefore
+ * accepts only a raw JSON body and runs the parser itself, so a hand-built
+ * definition has no door to walk through.
+ *
+ * Nothing here is interpreted: the rate and quantity bounds stay verbatim
+ * strings, because their currency and billing unit are unverified and float
+ * math on money is forbidden.
  */
 final class TheMostPanelServiceDefinition
 {

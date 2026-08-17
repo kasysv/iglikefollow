@@ -89,7 +89,52 @@ class ProviderServicePersistenceTest extends TestCase
             'boolean out of range' => [['supports_refill' => 2]],
             'textual boolean' => [['supports_cancel' => 'yes']],
             'available out of range' => [['is_available' => 5]],
+            // ⛔ temporal guard：seen timestamps 不得單邊、不得倒置。
+            'only first_seen set' => [['first_seen_at' => '2026-08-17 12:00:00']],
+            'only last_seen set' => [['last_seen_at' => '2026-08-17 12:00:00']],
+            'inverted seen timestamps' => [[
+                'first_seen_at' => '2026-08-18 12:00:00',
+                'last_seen_at' => '2026-08-17 12:00:00',
+            ]],
+            // ⛔ available 是「成功觀察過」的宣稱：沒有觀察時間就不能成立。
+            'available without observation' => [['is_available' => 1]],
         ];
+    }
+
+    public function test_coherent_seen_timestamps_are_accepted(): void
+    {
+        DB::table('provider_services')->insert(self::validRow([
+            'is_available' => 1,
+            'first_seen_at' => '2026-08-17 12:00:00',
+            'last_seen_at' => '2026-08-17 12:00:00',
+        ]));
+
+        $row = ProviderService::query()->sole();
+
+        $this->assertTrue($row->is_available);
+        $this->assertSame('2026-08-17 12:00:00', $row->first_seen_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_an_update_cannot_invert_the_timeline_either(): void
+    {
+        DB::table('provider_services')->insert(self::validRow([
+            'first_seen_at' => '2026-08-17 12:00:00',
+            'last_seen_at' => '2026-08-18 12:00:00',
+        ]));
+
+        $this->expectException(QueryException::class);
+
+        // ⛔ UPDATE 也要被 temporal guard 擋：把 last_seen 拉回 first_seen 之前。
+        DB::table('provider_services')->update(['last_seen_at' => '2026-08-16 12:00:00']);
+    }
+
+    public function test_an_update_cannot_mark_an_unobserved_row_available(): void
+    {
+        DB::table('provider_services')->insert(self::validRow());
+
+        $this->expectException(QueryException::class);
+
+        DB::table('provider_services')->update(['is_available' => 1]);
     }
 
     public function test_the_update_path_is_guarded_too(): void
@@ -121,17 +166,19 @@ class ProviderServicePersistenceTest extends TestCase
         foreach ([
             'provider_services_values_check_insert',
             'provider_services_values_check_update',
+            'provider_services_temporal_guard_insert',
+            'provider_services_temporal_guard_update',
         ] as $trigger) {
             $this->assertContains($trigger, $present, $trigger);
         }
     }
 
-    /** forward → empty rollback → re-forward 必須可以來回。 */
+    /** forward → empty rollback → re-forward 必須可以來回（兩個 migration 一起）。 */
     public function test_the_empty_table_rolls_back_and_re_migrates(): void
     {
         $this->assertSame(0, DB::table('provider_services')->count());
 
-        Artisan::call('migrate:rollback', ['--step' => 1]);
+        Artisan::call('migrate:rollback', ['--step' => 2]);
 
         $this->assertFalse(Schema::hasTable('provider_services'));
 
@@ -140,17 +187,22 @@ class ProviderServicePersistenceTest extends TestCase
         $this->assertTrue(Schema::hasTable('provider_services'));
         $this->assertSame(0, DB::table('provider_services')->count());
 
-        // ⛔ 重跑後兩個 trigger 也必須回來，不能只有表回來。
+        // ⛔ 重跑後四個 trigger 也必須回來，不能只有表回來。
         $this->test_both_sqlite_guard_triggers_exist();
     }
 
-    /** ⛔ 有資料時 down 必須 fail closed：不 drop、不 truncate。 */
+    /**
+     * ⛔ 有資料時 create-table migration 的 down 必須 fail closed。
+     *
+     * temporal guard 的 down 只移除守衛、獲准通過；接著輪到 `400000` 時被
+     * 拒絕，表與資料原封不動。之後重跑 migrate 把 temporal guard 補回來。
+     */
     public function test_a_populated_table_refuses_to_roll_back(): void
     {
         ProviderService::factory()->create();
 
         try {
-            Artisan::call('migrate:rollback', ['--step' => 1]);
+            Artisan::call('migrate:rollback', ['--step' => 2]);
             $this->fail('有資料時 rollback 必須失敗');
         } catch (\Throwable $e) {
             $this->assertStringContainsString('無法回滾 provider_services', $e->getMessage());
@@ -159,6 +211,68 @@ class ProviderServicePersistenceTest extends TestCase
         // 表和資料都還在。
         $this->assertTrue(Schema::hasTable('provider_services'));
         $this->assertSame(1, DB::table('provider_services')->count());
+
+        // 把只被移除守衛的 temporal migration 重新跑回來，恢復完整狀態。
+        Artisan::call('migrate');
+        $this->test_both_sqlite_guard_triggers_exist();
+    }
+
+    /**
+     * temporal migration 自己的 down：只移除守衛，⛔ 表與 rows 一根汗毛不動；
+     * re-forward 後守衛回來。
+     */
+    public function test_the_temporal_guard_rolls_back_without_touching_data(): void
+    {
+        ProviderService::factory()->create();
+
+        Artisan::call('migrate:rollback', ['--step' => 1]);
+
+        $this->assertTrue(Schema::hasTable('provider_services'));
+        $this->assertSame(1, DB::table('provider_services')->count());
+
+        $triggers = DB::table('sqlite_master')->where('type', 'trigger')->pluck('name')->all();
+        $this->assertNotContains('provider_services_temporal_guard_insert', $triggers);
+        $this->assertNotContains('provider_services_temporal_guard_update', $triggers);
+        // 400000 的值約束仍在。
+        $this->assertContains('provider_services_values_check_insert', $triggers);
+
+        Artisan::call('migrate');
+
+        $this->assertSame(1, DB::table('provider_services')->count());
+        $this->test_both_sqlite_guard_triggers_exist();
+    }
+
+    /**
+     * ⛔ temporal guard 的 up 遇到既有違規資料必須 fail closed 並回報筆數，
+     * 不得自動改寫或刪除。
+     */
+    public function test_the_temporal_migration_refuses_to_install_over_incoherent_rows(): void
+    {
+        // 先移除 temporal guard，才能製造出它要拒絕的狀態。
+        Artisan::call('migrate:rollback', ['--step' => 1]);
+
+        DB::table('provider_services')->insert(self::validRow([
+            'first_seen_at' => '2026-08-18 12:00:00',
+            'last_seen_at' => '2026-08-17 12:00:00',
+        ]));
+
+        try {
+            Artisan::call('migrate');
+            $this->fail('有違規資料時 temporal migration 必須拒絕');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('1 筆時間狀態不一致', $e->getMessage());
+            // ⛔ 訊息只有筆數，沒有任何資料內容。
+            $this->assertStringNotContainsString('9101', $e->getMessage());
+            $this->assertStringNotContainsString('2026-08-18', $e->getMessage());
+        }
+
+        // ⛔ 資料未被改寫或刪除。
+        $this->assertSame(1, DB::table('provider_services')->count());
+
+        // 清掉違規資料後 migration 才能繼續。
+        DB::table('provider_services')->delete();
+        Artisan::call('migrate');
+        $this->test_both_sqlite_guard_triggers_exist();
     }
 
     /**
