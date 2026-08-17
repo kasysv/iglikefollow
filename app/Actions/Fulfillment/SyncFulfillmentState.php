@@ -89,7 +89,8 @@ class SyncFulfillmentState
 
             // 期間狀態已經變了，且新答案不再合法：⛔ 不覆蓋，留下紀錄就好。
             if (! $from->canTransitionTo($status)) {
-                return $this->recordUnrecognised($locked);
+                // ⛔ 已經持有 lock，直接用鎖定後的現況寫，不再鎖一次。
+                return $this->writeUnrecognised($locked);
             }
 
             if ($from === $status) {
@@ -110,19 +111,61 @@ class SyncFulfillmentState
         });
     }
 
+    /**
+     * Record that we could not read the answer — against the current row.
+     *
+     * ⛔ Re-reads under a lock, exactly like `recordStatus()`. This worker may
+     * have spent the provider call waiting while another worker moved the row
+     * on. Writing `from`/`to` from the model it was holding would append an
+     * event saying `submitted → submitted` to a row that is already
+     * `completed` — and the timeline is append-only, so that wrong entry can
+     * never be corrected.
+     *
+     * The status itself was never at risk here; the damage is to the evidence.
+     * A person reconciling a `submission_unknown` row reads this timeline to
+     * decide what actually happened, so an entry describing a state the row was
+     * not in is worse than no entry at all.
+     */
     private function recordUnrecognised(FulfillmentOrder $fulfillment): FulfillmentOrder
     {
         return DB::transaction(function () use ($fulfillment) {
-            $fulfillment->forceFill(['last_synced_at' => now()])->save();
+            $locked = FulfillmentOrder::query()
+                ->whereKey($fulfillment->getKey())
+                ->lockForUpdate()
+                ->first();
 
-            // ⛔ 狀態維持不變，只留下「讀不懂」這件事本身。
-            $fulfillment->recordEvent(
-                FulfillmentEventCode::StatusUnrecognised,
-                from: $fulfillment->status,
-                to: $fulfillment->status,
-            );
+            // 列已經不存在：⛔ 安全 no-op，不寫任何事件。
+            if ($locked === null) {
+                return $fulfillment;
+            }
 
-            return $fulfillment->fresh();
+            return $this->writeUnrecognised($locked);
         });
+    }
+
+    /**
+     * The write itself, for a row whose lock the caller already holds.
+     *
+     * ⛔ Takes the locked row, never a stale one. Split out so that
+     * `recordStatus()` — which is already inside the transaction — can reuse it
+     * without taking a second lock or duplicating the rule.
+     */
+    private function writeUnrecognised(FulfillmentOrder $locked): FulfillmentOrder
+    {
+        $locked->forceFill(['last_synced_at' => now()])->save();
+
+        /*
+         * ⛔ 狀態維持不變，from 與 to 都用 lock 之後的現況。
+         *
+         * 終止狀態不會被改寫；這筆事件只記錄「這一次我們讀不懂對方的回應」，
+         * 而不是宣稱這一列當時在哪個狀態。
+         */
+        $locked->recordEvent(
+            FulfillmentEventCode::StatusUnrecognised,
+            from: $locked->status,
+            to: $locked->status,
+        );
+
+        return $locked->fresh();
     }
 }

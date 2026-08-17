@@ -5,7 +5,10 @@ namespace Tests\Feature\Fulfillment;
 use App\Actions\Fulfillment\PrepareFulfillmentForOrder;
 use App\Actions\Fulfillment\SubmitFulfillment;
 use App\Actions\Fulfillment\SyncFulfillmentState;
+use App\Contracts\FulfillmentGateway;
+use App\Data\Fulfillment\FulfillmentSubmission;
 use App\Data\Fulfillment\FulfillmentSubmissionResult;
+use App\Data\Fulfillment\FulfillmentSyncResult;
 use App\Enums\FulfillmentEventCode;
 use App\Enums\FulfillmentStatus;
 use App\Enums\OrderStatus;
@@ -192,6 +195,121 @@ class FulfillmentIntegrityClosureTest extends TestCase
         $this->assertSame(FulfillmentStatus::Submitted, $synced->status);
         $this->assertSame($before, $synced->events()->count());
         $this->assertNotNull($synced->last_synced_at);
+    }
+
+    /**
+     * A provider call that lets another worker finish the job mid-flight.
+     *
+     * ⛔ The interleaving has to happen *inside* `sync()`. Advancing the row
+     * before calling the action would be caught by the `fresh()` at the top of
+     * `handle()`, and the test would pass without ever entering the race
+     * window it claims to cover.
+     */
+    private function gatewayThatAdvancesMidFlight(
+        FulfillmentOrder $row,
+        FulfillmentStatus $advanceTo,
+        ?FulfillmentStatus $outerResult,
+    ): FulfillmentGateway {
+        return new class($row, $advanceTo, $outerResult) implements FulfillmentGateway
+        {
+            public function __construct(
+                private FulfillmentOrder $row,
+                private FulfillmentStatus $advanceTo,
+                private ?FulfillmentStatus $outerResult,
+            ) {}
+
+            public function submit(FulfillmentSubmission $submission): FulfillmentSubmissionResult
+            {
+                return FulfillmentSubmissionResult::unknown();
+            }
+
+            public function sync(string $providerOrderId): FulfillmentSyncResult
+            {
+                // 另一個 worker 在我們等待期間完成了這一列。
+                (new SyncFulfillmentState((new FakeFulfillmentGateway)->willSync($this->advanceTo)))
+                    ->handle($this->row->fresh());
+
+                return $this->outerResult === null
+                    ? FulfillmentSyncResult::unrecognised()
+                    : FulfillmentSyncResult::status($this->outerResult);
+            }
+        };
+    }
+
+    /**
+     * ⛔ 慢 worker 不得寫下一筆描述舊狀態的事件。
+     *
+     * 狀態本身沒有倒退的風險，受損的是「證據」：時間線是 append-only，
+     * 一筆 `submitted → submitted` 落在一個其實已經 `completed` 的列上，
+     * 永遠無法更正，而人工對帳正是靠它判斷實際發生了什麼。
+     */
+    public function test_an_in_flight_unrecognised_result_uses_the_current_state(): void
+    {
+        $row = $this->submitted();
+
+        $gateway = $this->gatewayThatAdvancesMidFlight($row, FulfillmentStatus::Completed, null);
+
+        (new SyncFulfillmentState($gateway))->handle($row);
+
+        $fresh = $row->fresh();
+        $this->assertSame(FulfillmentStatus::Completed, $fresh->status);
+
+        $last = $fresh->events()->get()->last();
+
+        $this->assertSame(FulfillmentEventCode::StatusUnrecognised, $last->event_code);
+        // ⛔ 必須是 lock 後的現況，不是呼叫 provider 前的 submitted。
+        $this->assertSame(FulfillmentStatus::Completed, $last->from_status);
+        $this->assertSame(FulfillmentStatus::Completed, $last->to_status);
+    }
+
+    /**
+     * 同樣的競態，但外層拿回的是「看得懂卻已過期」的答案。
+     */
+    public function test_an_in_flight_stale_recognised_result_cannot_overwrite_terminal(): void
+    {
+        $row = $this->submitted();
+
+        $gateway = $this->gatewayThatAdvancesMidFlight(
+            $row,
+            FulfillmentStatus::Completed,
+            FulfillmentStatus::Processing,
+        );
+
+        (new SyncFulfillmentState($gateway))->handle($row);
+
+        $fresh = $row->fresh();
+        // ⛔ 終止狀態不得被過期答案覆蓋。
+        $this->assertSame(FulfillmentStatus::Completed, $fresh->status);
+
+        $last = $fresh->events()->get()->last();
+
+        $this->assertSame(FulfillmentEventCode::StatusUnrecognised, $last->event_code);
+        $this->assertSame(FulfillmentStatus::Completed, $last->from_status);
+        $this->assertSame(FulfillmentStatus::Completed, $last->to_status);
+    }
+
+    public function test_the_timeline_never_records_a_state_the_row_was_not_in(): void
+    {
+        $row = $this->submitted();
+
+        (new SyncFulfillmentState(
+            $this->gatewayThatAdvancesMidFlight($row, FulfillmentStatus::Completed, null)
+        ))->handle($row);
+
+        $events = $row->fresh()->events()->get();
+
+        // 真實的那一筆前進仍然在。
+        $this->assertTrue($events->contains(
+            fn ($e) => $e->event_code === FulfillmentEventCode::StatusSynced
+                && $e->from_status === FulfillmentStatus::Submitted
+                && $e->to_status === FulfillmentStatus::Completed
+        ));
+
+        // ⛔ 沒有任何一筆 unrecognised 宣稱這一列當時是 submitted。
+        $this->assertFalse($events->contains(
+            fn ($e) => $e->event_code === FulfillmentEventCode::StatusUnrecognised
+                && $e->from_status === FulfillmentStatus::Submitted
+        ));
     }
 
     /**
