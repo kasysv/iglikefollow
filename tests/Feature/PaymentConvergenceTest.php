@@ -18,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -240,9 +241,7 @@ class PaymentConvergenceTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider uncertainOutcomeProvider
-     */
+    #[DataProvider('uncertainOutcomeProvider')]
     public function test_an_uncertain_outcome_stays_in_reconciliation(string $kind): void
     {
         $this->configureLine();

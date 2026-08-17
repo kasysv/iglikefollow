@@ -45,13 +45,46 @@ final class LinePayResponse
         [$total, $valid] = self::sumPayInfo($info['payInfo'] ?? null);
 
         return new self(
-            returnCode: (string) ($json['returnCode'] ?? ''),
-            transactionId: isset($info['transactionId']) ? (string) $info['transactionId'] : null,
-            paymentUrl: isset($payment['web']) ? (string) $payment['web'] : null,
-            orderId: isset($info['orderId']) ? (string) $info['orderId'] : null,
+            returnCode: is_scalar($json['returnCode'] ?? null) ? (string) $json['returnCode'] : '',
+            // ⛔ 交易編號在 JSON 中可能是字串或數字，其他型別都代表回應
+            // 不是我們認得的形狀。
+            transactionId: self::identifier($info['transactionId'] ?? null),
+            paymentUrl: self::text($payment['web'] ?? null),
+            orderId: self::text($info['orderId'] ?? null),
             payInfoTotal: $total,
             payInfoIsValid: $valid,
         );
+    }
+
+    /**
+     * An identifier from the response: a non-empty string, or an integer.
+     *
+     * ⛔ Anything else becomes null rather than being coerced. PHP turns an
+     * array into the string "Array", which would sail through a `!== null`
+     * check, be stored as the provider reference, and send the customer off to
+     * pay — after which the confirm call quotes a transaction id that never
+     * existed, and the payment can never be settled. The value looked present
+     * at every step.
+     */
+    private static function identifier(mixed $value): ?string
+    {
+        if (is_int($value)) {
+            return (string) $value;
+        }
+
+        return self::text($value);
+    }
+
+    /** A non-empty string, or null. ⛔ No coercion from other types. */
+    private static function text(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
 
     /**
@@ -166,6 +199,9 @@ final class LinePayResponse
         }
 
         return match ($this->returnCode) {
+            // 對方系統暫時無法服務。
+            '1105' => PaymentFailureReason::ProviderUnavailable,
+
             /*
              * 我們這邊送錯了——header、金額或最低消費設定有問題。
              *
@@ -174,14 +210,20 @@ final class LinePayResponse
              * request 被當場拒絕，確定沒有建立付款 session，屬於可安全重試的
              * 確定性失敗——留在待對帳只會把訂單鎖死。
              */
-            '1104', '1105', '1106', '1124', '1183' => PaymentFailureReason::VerificationFailed,
+            '1104', '1106', '1124', '1183' => PaymentFailureReason::VerificationFailed,
 
             // 真正屬於客戶／付款方式被拒的代碼。
             '1101', '1102', '1110', '1142', '1298' => PaymentFailureReason::Declined,
 
-            '1155' => PaymentFailureReason::AmountMismatch,
-            '1198' => PaymentFailureReason::Timeout,
-
+            /*
+             * ⛔ `1155`（invalid transaction ID）與 `1198`（API request
+             * duplicated）刻意不分類。
+             *
+             * 先前把它們當成「金額不符」與「逾時」——那是猜的，官方定義並非
+             * 如此。更重要的是，兩者都無法證明錢沒有移動：重複的請求可能是
+             * 第一次就成功了。在沒有查詢 API 之前，安全的答案是「不知道」，
+             * 交給人工對帳，⛔ 不自動重試。
+             */
             default => PaymentFailureReason::Unknown,
         };
     }
