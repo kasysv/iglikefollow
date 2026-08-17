@@ -38,7 +38,7 @@ final class InvoiceIssueResult
         public readonly ?string $randomCode = null,
         public readonly ?string $providerReference = null,
         public readonly ?InvoiceFailureReason $reason = null,
-        public readonly mixed $issuedAt = null,
+        public readonly ?CarbonInterface $issuedAt = null,
     ) {}
 
     /**
@@ -51,7 +51,7 @@ final class InvoiceIssueResult
         string $invoiceNumber,
         ?string $randomCode = null,
         ?string $providerReference = null,
-        mixed $issuedAt = null,
+        ?CarbonInterface $issuedAt = null,
     ): self {
         return new self('issued', $invoiceNumber, $randomCode, $providerReference, issuedAt: $issuedAt);
     }

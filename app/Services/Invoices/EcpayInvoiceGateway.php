@@ -3,6 +3,7 @@
 namespace App\Services\Invoices;
 
 use App\Contracts\InvoiceGateway;
+use App\DTO\EcpayInvoiceResponse;
 use App\DTO\InvoiceIssueResult;
 use App\Enums\InvoiceFailureReason;
 use App\Models\Invoice;
@@ -80,7 +81,12 @@ class EcpayInvoiceGateway implements InvoiceGateway
         return InvoiceIssueResult::ambiguous(InvoiceFailureReason::Unknown);
     }
 
-    private function issuedResult($response, string $relateNumber): InvoiceIssueResult
+    /**
+     * ⛔ Only reached when the client has already proved the date parses; the
+     * client refuses to report `issued` otherwise, so this never writes an
+     * invented timestamp.
+     */
+    private function issuedResult(EcpayInvoiceResponse $response, string $relateNumber): InvoiceIssueResult
     {
         return InvoiceIssueResult::issued(
             invoiceNumber: $response->invoiceNumber,

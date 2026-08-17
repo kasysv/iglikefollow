@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Actions\Invoices\IssueInvoice;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\InvoiceFailureReason;
@@ -17,6 +18,7 @@ use Ecpay\Sdk\Services\AesService;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -100,7 +102,14 @@ class EcpayInvoiceAdapterTest extends TestCase
         return app(EcpayInvoiceGateway::class);
     }
 
-    /** An encrypted ECPay reply, built the way they would build it. */
+    /**
+     * An encrypted ECPay reply, built the way they build it.
+     *
+     * ⛔ `encrypt()` receives the array directly. The SDK does its own
+     * json_encode inside; encoding first here would build a fixture that is
+     * wrong in exactly the same way the client used to be, and the pair would
+     * agree with each other while agreeing with nothing ECPay sends.
+     */
     private function reply(array $inner, mixed $transCode = 1, ?string $merchantId = null): array
     {
         return [
@@ -108,10 +117,11 @@ class EcpayInvoiceAdapterTest extends TestCase
             'RpHeader' => ['Timestamp' => 1755400000],
             'TransCode' => $transCode,
             'TransMsg' => '',
-            'Data' => $this->aes()->encrypt(json_encode($inner, JSON_UNESCAPED_UNICODE)),
+            'Data' => $this->aes()->encrypt($inner),
         ];
     }
 
+    /** 官方 Issue 成功欄位。 */
     private function successInner(array $overrides = []): array
     {
         return array_merge([
@@ -123,54 +133,124 @@ class EcpayInvoiceAdapterTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * 官方 GetIssue 成功欄位——與 Issue 完全不同的 schema。
+     *
+     * ⛔ 不可重用 successInner()：真實查詢回的是 `IIS_*`，用 Issue fixture 測
+     * 查詢等於沒有測到查詢。
+     */
+    private function queryInner(array $overrides = []): array
+    {
+        return array_merge([
+            'RtnCode' => 1,
+            'RtnMsg' => '查詢成功',
+            'IIS_Mer_ID' => self::MERCHANT,
+            'IIS_Number' => 'AB12345678',
+            'IIS_Relate_Number' => 'IGLTEST01',
+            'IIS_Create_Date' => '2026-08-17 10:30:00',
+            'IIS_Random_Number' => '1234',
+            'IIS_Issue_Status' => '1',
+            'IIS_Invalid_Status' => '0',
+        ], $overrides);
+    }
+
     private function fakeIssue(array $body, int $status = 200): void
     {
         Http::fake([self::ISSUE => Http::response($body, $status)]);
     }
 
+    /** 解出某次 request 的 Data；⛔ 直接得到 array，不做二次 json_decode。 */
+    private function sentData(Request $request): array
+    {
+        return $this->aes()->decrypt($request->data()['Data']);
+    }
+
     // ==================================== 1. 官方 AES 固定向量
 
-    public function test_the_aes_service_round_trips(): void
+    /**
+     * 綠界官方文件 <https://developers.ecpay.com.tw/7958/> 的固定向量。
+     *
+     * key／IV 就是官方測試值，明文與密文亦然。我在 M3B-B2 初版寫「官方沒有
+     * 可重現的固定向量」是錯的——官方頁面同時提供明文、key、IV 與密文，這裡
+     * 已用它們反證。
+     */
+    private const OFFICIAL_PLAIN = ['Name' => 'Test', 'ID' => 'A123456789'];
+
+    private const OFFICIAL_CIPHER = 'uvI4yrErM37XNQkXGAgRgJAgHn2t72jahaMZzYhWL1HmvH4WV18VJDP2i9pTbC+tby5nxVExLLFyAkbjbS2Dvg==';
+
+    public function test_the_official_plaintext_encrypts_to_the_official_cipher(): void
     {
-        $plain = json_encode(['MerchantID' => self::MERCHANT, 'RelateNumber' => 'IGLTEST01']);
+        // ⛔ 陣列直接進 encrypt()：SDK 內部自行 json_encode → urlencode → AES。
+        $this->assertSame(self::OFFICIAL_CIPHER, $this->aes()->encrypt(self::OFFICIAL_PLAIN));
+    }
 
-        $cipher = $this->aes()->encrypt($plain);
+    public function test_the_official_cipher_decrypts_to_the_official_array(): void
+    {
+        $decrypted = $this->aes()->decrypt(self::OFFICIAL_CIPHER);
 
-        $this->assertNotSame($plain, $cipher);
-        $this->assertSame($plain, $this->aes()->decrypt($cipher));
+        // ⛔ 直接就是 array，不需要也不可以再 json_decode。
+        $this->assertIsArray($decrypted);
+        $this->assertSame(self::OFFICIAL_PLAIN, $decrypted);
+    }
+
+    public function test_pre_encoding_the_payload_does_not_match_the_official_cipher(): void
+    {
+        /*
+         * 這是初版的做法：先 json_encode 再交給 encrypt()。
+         *
+         * ⛔ 它不會報錯，只會產生另一段密文——綠界解出來會是一個 JSON 字串而
+         * 不是物件。初版的 fixture 兩邊用同一個錯誤流程，所以 69 個測試全綠，
+         * 卻沒有任何一個證明過 wire 相容。這個測試就是為了讓那個錯誤無法再
+         * 悄悄通過。
+         */
+        $doubled = $this->aes()->encrypt(json_encode(self::OFFICIAL_PLAIN, JSON_UNESCAPED_UNICODE));
+
+        $this->assertNotSame(self::OFFICIAL_CIPHER, $doubled);
     }
 
     public function test_the_cipher_is_deterministic_for_the_same_input(): void
     {
         // ⛔ AES-128-CBC with a fixed IV：同一份輸入必須得到同一份密文，
         // 否則測試無法固定向量，也代表 IV 不是我們以為的那個。
-        $plain = 'IGLIKEFOLLOW-B2-VECTOR';
-
-        $this->assertSame($this->aes()->encrypt($plain), $this->aes()->encrypt($plain));
+        $this->assertSame(
+            $this->aes()->encrypt(self::OFFICIAL_PLAIN),
+            $this->aes()->encrypt(self::OFFICIAL_PLAIN),
+        );
     }
 
     public function test_a_wrong_key_cannot_decrypt(): void
     {
-        $cipher = $this->aes()->encrypt('secret payload');
-
         $wrong = new AesService('0000000000000000', self::HASH_IV);
 
-        // 解出來的內容不可能等於原文。
         $decrypted = null;
 
         try {
-            $decrypted = $wrong->decrypt($cipher);
+            $decrypted = $wrong->decrypt(self::OFFICIAL_CIPHER);
         } catch (\Throwable) {
             $decrypted = null;
         }
 
-        $this->assertNotSame('secret payload', $decrypted);
+        $this->assertNotSame(self::OFFICIAL_PLAIN, $decrypted);
+    }
+
+    public function test_a_wrong_iv_cannot_decrypt(): void
+    {
+        $wrong = new AesService(self::HASH_KEY, '0000000000000000');
+
+        $decrypted = null;
+
+        try {
+            $decrypted = $wrong->decrypt(self::OFFICIAL_CIPHER);
+        } catch (\Throwable) {
+            $decrypted = null;
+        }
+
+        $this->assertNotSame(self::OFFICIAL_PLAIN, $decrypted);
     }
 
     public function test_a_tampered_cipher_does_not_yield_the_original(): void
     {
-        $cipher = $this->aes()->encrypt('secret payload');
-        $tampered = substr($cipher, 0, -4).'AAAA';
+        $tampered = substr(self::OFFICIAL_CIPHER, 0, -4).'AAAA';
 
         $decrypted = null;
 
@@ -180,7 +260,7 @@ class EcpayInvoiceAdapterTest extends TestCase
             $decrypted = null;
         }
 
-        $this->assertNotSame('secret payload', $decrypted);
+        $this->assertNotSame(self::OFFICIAL_PLAIN, $decrypted);
     }
 
     // ==================================== 2. 四種 checkout mapping
@@ -458,10 +538,20 @@ class EcpayInvoiceAdapterTest extends TestCase
             'lookalike host' => ['https://einvoice-stage.ecpay.com.tw.evil.example.com/B2CInvoice/Issue'],
             'arbitrary host' => ['https://evil.example.com/B2CInvoice/Issue'],
             'non https' => ['http://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
+            // ⛔ 同一台主機、不同 operation：作廢發票絕不能因為主機對就送出去。
+            'same host invalid path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid'],
+            'same host query path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'same host root' => ['https://einvoice-stage.ecpay.com.tw/'],
+            'trailing slash' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue/'],
+            'query string' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue?debug=1'],
+            'fragment' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue#f'],
+            'userinfo' => ['https://user@einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
+            'explicit port' => ['https://einvoice-stage.ecpay.com.tw:8443/B2CInvoice/Issue'],
+            'uppercased path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/ISSUE'],
         ];
     }
 
-    /** ⛔ 端點只能是版本控制中的 stage 主機。 */
+    /** ⛔ Issue 端點必須與白名單完全一致；同主機不同 path 也拒絕。 */
     #[DataProvider('rejectedEndpointProvider')]
     public function test_a_non_allowlisted_endpoint_sends_nothing(string $endpoint): void
     {
@@ -470,6 +560,47 @@ class EcpayInvoiceAdapterTest extends TestCase
 
         $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isFailed());
         Http::assertNothingSent();
+    }
+
+    public static function rejectedQueryEndpointProvider(): array
+    {
+        return [
+            'blank' => [''],
+            'production host' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'lookalike host' => ['https://einvoice-stage.ecpay.com.tw.evil.example.com/B2CInvoice/GetIssue'],
+            'arbitrary host' => ['https://evil.example.com/B2CInvoice/GetIssue'],
+            'non https' => ['http://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
+            // ⛔ 查詢端點被換成 Issue 就會變成「重開一張」，這是最危險的一種錯配。
+            'same host issue path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
+            'same host invalid path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid'],
+            'trailing slash' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue/'],
+            'query string' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue?debug=1'],
+            'fragment' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue#f'],
+            'userinfo' => ['https://user@einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'explicit port' => ['https://einvoice-stage.ecpay.com.tw:8443/B2CInvoice/GetIssue'],
+        ];
+    }
+
+    /**
+     * ⛔ 查詢端點不合法時：Issue 仍送 1 次，查詢 0 次，結果維持不明。
+     *
+     * 不可因為「查不到」就當成沒開；也不可因為查詢端點壞掉就重開一張。
+     */
+    #[DataProvider('rejectedQueryEndpointProvider')]
+    public function test_a_non_allowlisted_query_endpoint_is_never_called(string $endpoint): void
+    {
+        config()->set('integrations.endpoints.ecpay_invoice_query.sandbox', $endpoint);
+
+        Http::fake([
+            self::ISSUE => Http::response($this->reply($this->successInner(), transCode: 99)),
+            self::QUERY => Http::response($this->reply($this->queryInner())),
+        ]);
+
+        $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
+
+        $this->assertTrue($result->isAmbiguous());
+        Http::assertSentCount(1);
+        Http::assertNotSent(fn ($request) => $request->url() === self::QUERY);
     }
 
     // ==================================== 6. request envelope
@@ -517,18 +648,39 @@ class EcpayInvoiceAdapterTest extends TestCase
         });
     }
 
-    public function test_the_encrypted_data_actually_contains_the_payload(): void
+    /**
+     * ⛔ 官方 wire contract：解密後直接就是 array。
+     *
+     * 這個測試在初版會失敗——初版解出來的是一段 JSON 字串，`is_array()` 為
+     * false。這正是它存在的理由：double encode 不會報錯，只會安靜地送出綠界
+     * 讀不懂的格式。
+     */
+    public function test_the_encrypted_data_decrypts_directly_to_an_array(): void
     {
         $this->fakeIssue($this->reply($this->successInner()));
 
         $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
 
         Http::assertSent(function ($request) {
-            $decrypted = json_decode($this->aes()->decrypt($request->data()['Data']), true);
+            $decrypted = $this->aes()->decrypt($request->data()['Data']);
 
+            // ⛔ 不做 json_decode：需要再解一次就代表格式是錯的。
             return is_array($decrypted)
                 && $decrypted['SalesAmount'] === 590
-                && $decrypted['Print'] === '0';
+                && $decrypted['Print'] === '0'
+                && $decrypted['MerchantID'] === self::MERCHANT;
+        });
+    }
+
+    public function test_the_encrypted_data_is_not_a_json_string(): void
+    {
+        $this->fakeIssue($this->reply($this->successInner()));
+
+        $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
+
+        Http::assertSent(function ($request) {
+            // 初版送的是 JSON 字串；⛔ 這裡明確反證那個形狀不會再出現。
+            return ! is_string($this->aes()->decrypt($request->data()['Data']));
         });
     }
 
@@ -607,6 +759,16 @@ class EcpayInvoiceAdapterTest extends TestCase
             'empty random number' => [['RandomNumber' => '']],
             'array date' => [['InvoiceDate' => ['2026-08-17']]],
             'empty date' => [['InvoiceDate' => '']],
+            /*
+             * ⛔ 格式對不上官方的日期不算成功。
+             *
+             * 初版只要求「非空字串」，解析失敗就悄悄改用本地 now()。那會寫下
+             * 一個與國稅局紀錄不同的開立時間，而且沒有任何人會在當下發現。
+             */
+            'unparseable date' => [['InvoiceDate' => 'not a date']],
+            'impossible date' => [['InvoiceDate' => '2026-13-45 99:99:99']],
+            'date only' => [['InvoiceDate' => '2026-08-17']],
+            'wrong separator' => [['InvoiceDate' => '2026.08.17 10:30:00']],
         ];
     }
 
@@ -687,35 +849,67 @@ class EcpayInvoiceAdapterTest extends TestCase
         $this->assertLessThanOrEqual(1, $issues, 'Issue 不得送出第二次');
     }
 
+    /**
+     * 查詢用的 RelateNumber 必須就是這張發票的那一個。
+     *
+     * ⛔ 官方 GetIssue 成功欄位是 `IIS_*`，與 Issue 的 `InvoiceNo` 系列完全
+     * 不同；初版兩者共用同一個 parser 與同一份 fixture，所以真實查詢回應永遠
+     * 讀不懂——唯一能解開「不明」的路徑其實從來沒有通過。
+     */
+    private function positiveQueryFor(Invoice $invoice): array
+    {
+        return $this->reply($this->queryInner([
+            'IIS_Relate_Number' => EcpayInvoiceGateway::relateNumberFor($invoice),
+        ]));
+    }
+
     public function test_a_positive_query_converges_to_issued(): void
     {
+        $invoice = $this->invoiceFor($this->paidOrder());
+        $expected = EcpayInvoiceGateway::relateNumberFor($invoice);
+
         Http::fake([
             self::ISSUE => fn () => throw new ConnectionException('timeout'),
             // 查詢證明發票其實已經開出來了。
-            self::QUERY => Http::response($this->reply($this->successInner())),
+            self::QUERY => Http::response($this->positiveQueryFor($invoice)),
         ]);
-
-        $order = $this->paidOrder();
-        $invoice = $this->invoiceFor($order);
-        $expected = EcpayInvoiceGateway::relateNumberFor($invoice);
 
         $result = $this->gateway()->issue($invoice, 'k');
 
         $this->assertTrue($result->isIssued());
         $this->assertSame('AB12345678', $result->invoiceNumber);
+        $this->assertSame('1234', $result->randomCode);
         // ⛔ 用同一個 RelateNumber 收斂。
         $this->assertSame($expected, $result->providerReference);
+        // 收斂後採用的是對方的開立時間，不是我們的 now()。
+        $this->assertSame('2026-08-17 10:30:00', $result->issuedAt->format('Y-m-d H:i:s'));
     }
 
-    public function test_the_query_uses_the_same_relate_number(): void
+    public function test_an_issue_shaped_query_reply_is_not_proof(): void
     {
+        /*
+         * ⛔ 這正是初版的 fixture：拿 Issue 的成功欄位當查詢證據。
+         *
+         * 真實綠界不會這樣回，所以它不能被接受為「已開立」的證明；否則我們
+         * 是在用一個自己造出來的形狀說服自己發票存在。
+         */
         Http::fake([
             self::ISSUE => fn () => throw new ConnectionException('timeout'),
             self::QUERY => Http::response($this->reply($this->successInner())),
         ]);
 
+        $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isAmbiguous());
+    }
+
+    public function test_the_query_uses_the_same_relate_number(): void
+    {
         $invoice = $this->invoiceFor($this->paidOrder());
         $expected = EcpayInvoiceGateway::relateNumberFor($invoice);
+
+        Http::fake([
+            self::ISSUE => fn () => throw new ConnectionException('timeout'),
+            self::QUERY => Http::response($this->positiveQueryFor($invoice)),
+        ]);
 
         $this->gateway()->issue($invoice, 'k');
 
@@ -724,9 +918,11 @@ class EcpayInvoiceAdapterTest extends TestCase
                 return true;
             }
 
-            $inner = json_decode($this->aes()->decrypt($request->data()['Data']), true);
+            // ⛔ 直接是 array。
+            $inner = $this->sentData($request);
 
-            return $inner['RelateNumber'] === $expected;
+            return $inner['RelateNumber'] === $expected
+                && $inner['MerchantID'] === self::MERCHANT;
         });
     }
 
@@ -747,6 +943,69 @@ class EcpayInvoiceAdapterTest extends TestCase
         ]);
 
         $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isAmbiguous());
+    }
+
+    /**
+     * 每一種「差一點就算證明」的查詢回應。
+     *
+     * ⛔ 全部維持不明。收斂的條件是「這張、我們的、已開立、未作廢」都成立；
+     * 少一項就不是證明，而人工看一眼的成本遠低於重開一張發票。
+     */
+    public static function insufficientQueryProofProvider(): array
+    {
+        return [
+            'wrong merchant' => [['IIS_Mer_ID' => '9999999']],
+            'missing merchant' => [['IIS_Mer_ID' => null]],
+            'wrong relate number' => [['IIS_Relate_Number' => 'SOMEONEELSE01']],
+            'missing relate number' => [['IIS_Relate_Number' => null]],
+            'not issued yet' => [['IIS_Issue_Status' => '0']],
+            'loose issue status bool' => [['IIS_Issue_Status' => true]],
+            'loose issue status int' => [['IIS_Issue_Status' => 1]],
+            'unknown issue status' => [['IIS_Issue_Status' => '9']],
+            'voided' => [['IIS_Invalid_Status' => '1']],
+            'loose invalid status int' => [['IIS_Invalid_Status' => 0]],
+            'unknown invalid status' => [['IIS_Invalid_Status' => '9']],
+            'missing number' => [['IIS_Number' => null]],
+            'array number' => [['IIS_Number' => ['AB1']]],
+            'empty number' => [['IIS_Number' => '']],
+            'missing random' => [['IIS_Random_Number' => null]],
+            'array random' => [['IIS_Random_Number' => ['1234']]],
+            'missing date' => [['IIS_Create_Date' => null]],
+            'unparseable date' => [['IIS_Create_Date' => 'not a date']],
+            'impossible date' => [['IIS_Create_Date' => '2026-13-45 99:99:99']],
+            'array date' => [['IIS_Create_Date' => ['2026-08-17 10:30:00']]],
+            'failed rtn code' => [['RtnCode' => 0]],
+            'string rtn code' => [['RtnCode' => '1']],
+        ];
+    }
+
+    #[DataProvider('insufficientQueryProofProvider')]
+    public function test_an_incomplete_query_proof_stays_ambiguous(array $override): void
+    {
+        $invoice = $this->invoiceFor($this->paidOrder());
+
+        $inner = array_merge(
+            $this->queryInner(['IIS_Relate_Number' => EcpayInvoiceGateway::relateNumberFor($invoice)]),
+            $override,
+        );
+
+        Http::fake([
+            self::ISSUE => fn () => throw new ConnectionException('timeout'),
+            self::QUERY => Http::response($this->reply($inner)),
+        ]);
+
+        $result = $this->gateway()->issue($invoice, 'k');
+
+        $this->assertTrue($result->isAmbiguous());
+        $this->assertNull($result->invoiceNumber);
+
+        // ⛔ 不明之後不得再送 Issue，也不得重複查詢。
+        $sent = ['issue' => 0, 'query' => 0];
+        foreach (Http::recorded() as [$request]) {
+            $sent[$request->url() === self::ISSUE ? 'issue' : 'query']++;
+        }
+        $this->assertLessThanOrEqual(1, $sent['issue']);
+        $this->assertLessThanOrEqual(1, $sent['query']);
     }
 
     public function test_a_query_timeout_stays_ambiguous(): void
@@ -800,6 +1059,80 @@ class EcpayInvoiceAdapterTest extends TestCase
         // ⛔ 密文同樣不得保存：它是機密加上一段延遲。
         $this->assertStringNotContainsString('=', (string) $result->code());
         $this->assertNotNull($result->reason);
+    }
+
+    /**
+     * 走完整條落盤路徑，再逐一檢查每一個可能留下痕跡的地方。
+     *
+     * ⛔ 只 serialize DTO 是不夠的：DTO 乾淨不代表 invoice 欄位、attempt 欄位、
+     * audit 或 log 檔案乾淨。真正的問題是「provider 的自由文字有沒有在某處被
+     * 存下來」，那必須看實際寫進去的每一列。
+     */
+    public function test_no_provider_text_survives_the_full_persistence_path(): void
+    {
+        $leak = 'MerchantID=2000132 HashKey='.self::HASH_KEY
+            .' secret-buyer@example.test 0912345678 12345678 CIPHER/AbC+dEf=';
+
+        Http::fake([
+            self::ISSUE => Http::response($this->reply(['RtnCode' => 9999, 'RtnMsg' => $leak])),
+            self::QUERY => Http::response(['MerchantID' => self::MERCHANT, 'TransCode' => 0], 200),
+        ]);
+
+        $logFile = storage_path('logs/laravel.log');
+        $logSizeBefore = is_file($logFile) ? filesize($logFile) : 0;
+
+        $order = $this->paidOrder(['customer_email' => 'secret-buyer@example.test']);
+        $invoice = $this->invoiceFor($order);
+
+        app(IssueInvoice::class)->handle($invoice);
+
+        $invoice = $invoice->fresh();
+
+        // 這條路徑真的走完了：不明結果已收斂成待對帳。
+        $this->assertSame(InvoiceStatus::ReconciliationRequired, $invoice->status);
+
+        $surfaces = [
+            'invoice row' => json_encode(DB::table('invoices')->get(), JSON_UNESCAPED_UNICODE),
+            'attempt rows' => json_encode(DB::table('invoice_attempts')->get(), JSON_UNESCAPED_UNICODE),
+            'order row' => json_encode(DB::table('orders')->get(), JSON_UNESCAPED_UNICODE),
+        ];
+
+        /*
+         * ⛔ 開票路徑不寫 audit（audit 只記後台 credential 操作）。
+         *
+         * 這裡如實斷言「這條路徑沒有產生任何 audit row」，而不是為了讓檢查看
+         * 起來完整就去造一筆不存在的紀錄——那會用假證據通過驗收。表本身仍被
+         * 掃過一次，日後若有人在這條路徑加上 audit，marker 檢查會立刻涵蓋它。
+         */
+        $this->assertSame(0, DB::table('admin_audit_logs')->count(), '開票路徑不應寫入 audit');
+
+        $surfaces['audit rows'] = json_encode(
+            DB::table('admin_audit_logs')->get(),
+            JSON_UNESCAPED_UNICODE
+        );
+
+        // 新增的 log 內容（若有）。
+        if (is_file($logFile) && filesize($logFile) > $logSizeBefore) {
+            $handle = fopen($logFile, 'r');
+            fseek($handle, $logSizeBefore);
+            $surfaces['log tail'] = (string) fread($handle, filesize($logFile) - $logSizeBefore);
+            fclose($handle);
+        }
+
+        foreach ([
+            self::HASH_KEY, 'secret-buyer@example.test', '0912345678',
+            'MerchantID=', 'HashKey=', 'CIPHER/AbC+dEf=', $leak,
+        ] as $marker) {
+            foreach ($surfaces as $where => $content) {
+                $this->assertStringNotContainsString($marker, (string) $content, "{$where} 外洩：{$marker}");
+            }
+        }
+
+        // 存下來的理由必須是本地 allowlist 的值。
+        $this->assertContains(
+            $invoice->failure_code,
+            array_column(InvoiceFailureReason::cases(), 'value')
+        );
     }
 
     public function test_the_failure_reason_is_always_allowlisted(): void
