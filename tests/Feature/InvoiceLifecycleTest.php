@@ -55,6 +55,9 @@ class InvoiceLifecycleTest extends TestCase
         // ⛔ 這一輪不得有任何外部呼叫。
         Http::preventStrayRequests();
 
+        // B2：發票 sandbox 總開關預設關閉，測試需明確開啟。
+        config()->set('integrations.invoice.sandbox_enabled', true);
+
         $this->gateway = new FakeInvoiceGateway;
         $this->app->instance(InvoiceGateway::class, $this->gateway);
     }

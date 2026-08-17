@@ -30,7 +30,9 @@ use App\Policies\ServiceContentSectionPolicy;
 use App\Policies\ServicePolicy;
 use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
+use App\Services\Invoices\InvoiceSandboxGuard;
 use App\Support\CatalogRepository;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\View;
@@ -105,19 +107,31 @@ class AppServiceProvider extends ServiceProvider
     private function bindInvoiceGateway(): void
     {
         $this->app->singleton(InvoiceGateway::class, function () {
+            /*
+             * ⛔ Production is refused before anything else is considered.
+             *
+             * Not "no adapter is configured yet" — a hard refusal, so that
+             * neither INVOICE_GATEWAY nor a forged config can start issuing
+             * real tax documents. Enabling that needs its own approval, not a
+             * changed environment variable.
+             */
+            if ($this->app->environment('production')) {
+                throw new RuntimeException(
+                    '⛔ production 尚未獲准開立電子發票；本輪只支援 sandbox。'
+                );
+            }
+
+            // sandbox 開關開啟且設定齊全時，才使用真實的綠界 stage adapter。
+            if (InvoiceSandboxGuard::setting() !== null) {
+                return $this->app->make(EcpayInvoiceGateway::class);
+            }
+
             if ($this->app->environment('local', 'testing')) {
                 return new FakeInvoiceGateway;
             }
 
-            if (config('integrations.invoice.gateway') === 'fake') {
-                throw new RuntimeException(
-                    'Fake 發票 gateway 只能用於 local 與 testing；'
-                    .'正式環境必須設定真實 adapter 並經過明確批准。'
-                );
-            }
-
             throw new RuntimeException(
-                '尚未提供正式的發票 gateway adapter；⛔ 不得以 Fake 代替。'
+                '尚未提供可用的發票 gateway；⛔ 不得以 Fake 代替。'
             );
         });
     }

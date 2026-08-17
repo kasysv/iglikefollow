@@ -401,8 +401,13 @@ class IntegrationSettingsTest extends TestCase
             $this->assertSame('', $environments['production'] ?? '', "{$provider} 的 production 端點不得填入");
         }
 
-        // ⛔ 發票 sandbox 留給 B2，TheMostPanel 完全未證實。
-        $this->assertSame('', $endpoints['ecpay_invoice']['sandbox']);
+        // B2 已批准綠界 stage 發票端點；⛔ 只接受官方 stage 主機。
+        $this->assertStringStartsWith(
+            'https://einvoice-stage.ecpay.com.tw/',
+            $endpoints['ecpay_invoice']['sandbox']
+        );
+        // ⛔ TheMostPanel 完全未證實，仍留空。
+        $this->assertSame('', $endpoints['themostpanel']['production']);
     }
 
     public function test_only_sandbox_payments_are_enablable(): void

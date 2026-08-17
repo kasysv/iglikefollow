@@ -36,8 +36,15 @@ return [
             'sandbox' => 'https://sandbox-api-pay.line.me',
             'production' => '',
         ],
+        // 綠界 B2C 電子發票 stage（2026-08-17 核對官方文件）。
+        // ⛔ production 仍留空：正式開立發票需要另一次明確批准。
         'ecpay_invoice' => [
-            'sandbox' => '',
+            'sandbox' => 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue',
+            'production' => '',
+        ],
+        // 結果不明時的唯讀查詢端點；⛔ 只用來「確認是否已開出」，不重開。
+        'ecpay_invoice_query' => [
+            'sandbox' => 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue',
             'production' => '',
         ],
         'themostpanel' => [
@@ -77,6 +84,17 @@ return [
      */
     'invoice' => [
         'gateway' => env('INVOICE_GATEWAY', 'fake'),
+
+        /*
+         | Sandbox 開立發票總開關。
+         |
+         | ⛔ 預設關閉。關閉時 adapter 一律 fail closed——不送出任何請求，也不
+         | 退回 Fake。填了 credential 也不等於開始開立發票。
+         |
+         | ⛔ production 永遠不受這個開關影響：InvoiceSandboxGuard 另外硬性
+         | 拒絕 production 環境。
+         */
+        'sandbox_enabled' => env('INVOICE_SANDBOX_ENABLED', false),
     ],
 
     /*

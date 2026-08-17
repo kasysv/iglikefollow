@@ -3,6 +3,7 @@
 namespace App\DTO;
 
 use App\Enums\InvoiceFailureReason;
+use Carbon\CarbonInterface;
 
 /**
  * What a provider said when asked to issue an invoice.
@@ -37,14 +38,22 @@ final class InvoiceIssueResult
         public readonly ?string $randomCode = null,
         public readonly ?string $providerReference = null,
         public readonly ?InvoiceFailureReason $reason = null,
+        public readonly mixed $issuedAt = null,
     ) {}
 
+    /**
+     * @param  CarbonInterface|null  $issuedAt  the provider's own issue
+     *                                          time. ⛔ Preferred over our clock: the tax authority's record uses
+     *                                          theirs, and a local timestamp would drift from it by however long the
+     *                                          queue took.
+     */
     public static function issued(
         string $invoiceNumber,
         ?string $randomCode = null,
         ?string $providerReference = null,
+        mixed $issuedAt = null,
     ): self {
-        return new self('issued', $invoiceNumber, $randomCode, $providerReference);
+        return new self('issued', $invoiceNumber, $randomCode, $providerReference, issuedAt: $issuedAt);
     }
 
     /**

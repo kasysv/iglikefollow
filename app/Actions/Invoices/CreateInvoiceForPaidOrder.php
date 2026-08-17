@@ -5,9 +5,9 @@ namespace App\Actions\Invoices;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\InvoiceStatus;
-use App\Models\IntegrationSetting;
 use App\Models\Invoice;
 use App\Models\Order;
+use App\Services\Invoices\InvoiceSandboxGuard;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -100,34 +100,26 @@ class CreateInvoiceForPaidOrder
      */
     private function gatewayIsConfigured(): bool
     {
-        foreach (IntegrationProvider::EcpayInvoice->environments() as $environment) {
-            $setting = IntegrationSetting::query()
-                ->where('provider', IntegrationProvider::EcpayInvoice)
-                ->where('environment', $environment)
-                ->first();
-
-            if ($setting?->isUsable()) {
-                return true;
-            }
-        }
-
-        return false;
+        /*
+         * ⛔ 「資料庫裡有 credential」不等於「可以開發票」。
+         *
+         * 總開關、環境與端點白名單都必須成立，否則這張發票應該停在
+         * pending_configuration，而不是排進一個注定失敗的工作。
+         *
+         * ⛔ 這個判斷刻意不因 local／testing 而放寬：M3B-A 已驗收的保證是
+         * 「沒有可用設定就停在 pending_configuration」，那與跑在哪個環境無關。
+         * 用 Fake gateway 的測試仍會自己建立一組可用的 sandbox 設定。
+         */
+        return InvoiceSandboxGuard::setting() !== null;
     }
 
     /** 測試與 adapter 需要知道目前該用哪個環境。 */
     public static function activeEnvironment(): ?IntegrationEnvironment
     {
-        foreach (IntegrationProvider::EcpayInvoice->environments() as $environment) {
-            $setting = IntegrationSetting::query()
-                ->where('provider', IntegrationProvider::EcpayInvoice)
-                ->where('environment', $environment)
-                ->first();
-
-            if ($setting?->isUsable()) {
-                return $environment;
-            }
-        }
-
-        return null;
+        // ⛔ 與 gatewayIsConfigured() 用同一道 gate：總開關、環境與端點白名單
+        // 都必須成立，不能只因為資料庫有一筆 credential 就說「可以開票」。
+        return InvoiceSandboxGuard::setting() !== null
+            ? IntegrationEnvironment::Sandbox
+            : null;
     }
 }

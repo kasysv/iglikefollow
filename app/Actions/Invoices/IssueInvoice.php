@@ -124,7 +124,9 @@ class IssueInvoice
                 'provider_reference' => $result->providerReference,
                 'failure_code' => null,
                 'failure_message' => null,
-                'issued_at' => now(),
+                // ⛔ 優先採用 provider 自己的開立時間：國稅局那邊的紀錄用的是
+                // 他們的時間，用我們的時鐘會差上整個 queue 的延遲。
+                'issued_at' => $result->issuedAt ?? now(),
             ])->save();
 
             return $invoice->fresh();

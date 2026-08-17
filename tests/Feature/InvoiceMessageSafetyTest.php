@@ -64,6 +64,9 @@ class InvoiceMessageSafetyTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+
+        // B2：發票 sandbox 總開關預設關閉，測試需明確開啟。
+        config()->set('integrations.invoice.sandbox_enabled', true);
     }
 
     private function paidOrder(): Order
