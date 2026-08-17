@@ -9,6 +9,7 @@ use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
+use App\Services\Fulfillment\TheMostPanelResponseSizeGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -312,7 +313,7 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         // 欄位名稱與型別足以寫 parser⋯⋯
         $this->assertSame('int', $observation->fieldTypes['service']);
         $this->assertSame('string', $observation->fieldTypes['rate']);
-        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $observation->bodyHash);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $observation->bodyFingerprint);
     }
 
     public function test_no_provider_values_survive_the_observation(): void
@@ -451,15 +452,146 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         $this->assertSame('transport_failed', $observation->outcome);
     }
 
-    public function test_an_oversized_body_is_refused(): void
+    /**
+     * ⛔ 這只證明「解析前的第二層」，不證明 transport 真的中止了。
+     *
+     * `Http::fake()` 的回應本來就已經完整在記憶體裡，所以用一個大字串測出來的
+     * 是事後檢查，不是傳輸中止。真正的 transport 上限由下面的 guard 測試單獨
+     * 驗證；實機接線狀況見結果文件的誠實標註。
+     */
+    public function test_an_oversized_body_is_refused_by_the_second_layer(): void
     {
-        // 2 MiB 上限；⛔ 這是我們的保守選擇，不是供應商的保證。
         Http::fake([self::ENDPOINT => Http::response(str_repeat('a', 2_097_153))]);
         $this->withCredential();
 
         $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
 
         $this->assertContains($observation->outcome, ['body_too_large', 'unparseable_body']);
+    }
+
+    // ==================================== 10. R1：傳輸層大小上限
+
+    /**
+     * ⛔ 宣告長度超限時，body 一個 byte 都不該讀。
+     *
+     * guard 直接測試，不透過 `Http::fake()`：fake 的回應早就在記憶體裡了，
+     * 用它「證明」傳輸中止等於什麼都沒證明。
+     */
+    public function test_the_guard_refuses_an_oversized_declared_length(): void
+    {
+        $this->expectException(\RuntimeException::class);
+
+        TheMostPanelResponseSizeGuard::assertContentLength([
+            'Content-Length' => [(string) (TheMostPanelResponseSizeGuard::MAX_BODY_BYTES + 1)],
+        ]);
+    }
+
+    public function test_the_guard_allows_a_declared_length_within_the_cap(): void
+    {
+        TheMostPanelResponseSizeGuard::assertContentLength(['Content-Length' => ['1024']]);
+
+        $this->assertTrue(true, '合理大小不得被擋下');
+    }
+
+    public function test_the_guard_matches_the_header_case_insensitively(): void
+    {
+        $this->expectException(\RuntimeException::class);
+
+        // HTTP 標頭名稱不分大小寫；只比對一種寫法等於漏掉其他寫法。
+        TheMostPanelResponseSizeGuard::assertContentLength([
+            'content-length' => [(string) (TheMostPanelResponseSizeGuard::MAX_BODY_BYTES + 1)],
+        ]);
+    }
+
+    /**
+     * @return array<string, array{0: array<string, array<int, string>>}>
+     */
+    public static function unknownLengthHeaderProvider(): array
+    {
+        return [
+            'absent' => [[]],
+            'not numeric' => [['Content-Length' => ['abc']]],
+            'conflicting' => [['Content-Length' => ['10', '99999999']]],
+        ];
+    }
+
+    /**
+     * ⛔ 長度未知或互相矛盾時不放行，也不猜——交給下載過程的檢查。
+     *
+     * @param  array<string, array<int, string>>  $headers
+     */
+    #[DataProvider('unknownLengthHeaderProvider')]
+    public function test_an_unknown_declared_length_defers_to_progress(array $headers): void
+    {
+        TheMostPanelResponseSizeGuard::assertContentLength($headers);
+
+        // 標頭階段不擋，但下載超過上限時仍會中止。
+        $this->expectException(\RuntimeException::class);
+
+        TheMostPanelResponseSizeGuard::assertProgress(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES + 1);
+    }
+
+    public function test_the_guard_aborts_a_chunked_download_that_grows_too_large(): void
+    {
+        // 上限之內持續下載沒問題⋯⋯
+        TheMostPanelResponseSizeGuard::assertProgress(1024);
+        TheMostPanelResponseSizeGuard::assertProgress(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES);
+
+        // ⛔ ⋯⋯超過就中止，不管對方宣稱了什麼。
+        $this->expectException(\RuntimeException::class);
+
+        TheMostPanelResponseSizeGuard::assertProgress(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES + 1);
+    }
+
+    public function test_a_size_abort_is_reported_as_body_too_large(): void
+    {
+        // 模擬 guard 在 transport 期間丟出的中止。
+        Http::fake([
+            self::ENDPOINT => fn () => throw new \RuntimeException(TheMostPanelResponseSizeGuard::REASON),
+        ]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        // ⛔ 回報成「太大」而不是「連線失敗」：兩者的處理方式不同。
+        $this->assertSame('body_too_large', $observation->outcome);
+    }
+
+    /**
+     * ⛔ Guzzle 會把我們的例外包起來，訊息只留在最內層。
+     *
+     * `on_headers` 丟出的例外會先被 Guzzle 換成「An error was encountered
+     * during the on_headers event」，Laravel 再包成 ConnectionException。
+     * 只看最外層訊息，就會把「太大」誤報成一般連線失敗——兩者對讀結果的人
+     * 意義完全不同。實機驗證確認了這個包裝行為。
+     */
+    public function test_a_wrapped_size_abort_is_still_recognised(): void
+    {
+        $inner = new \RuntimeException(TheMostPanelResponseSizeGuard::REASON);
+        $middle = new \RuntimeException('An error was encountered during the on_headers event', 0, $inner);
+        $outer = new ConnectionException('generic transport failure', 0, $middle);
+
+        $this->assertTrue(TheMostPanelResponseSizeGuard::isSizeAbort($outer));
+        $this->assertFalse(TheMostPanelResponseSizeGuard::isSizeAbort(
+            new \RuntimeException('some unrelated failure')
+        ));
+    }
+
+    public function test_a_size_abort_keeps_no_exception_text(): void
+    {
+        Http::fake([
+            self::ENDPOINT => fn () => throw new \RuntimeException(
+                TheMostPanelResponseSizeGuard::REASON.' '.self::KEY_MARKER
+            ),
+        ]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+
+        // ⛔ 例外訊息同樣不落盤。
+        $this->assertStringNotContainsString(self::KEY_MARKER, (string) $encoded);
     }
 
     public function test_no_failure_path_keeps_provider_text(): void
@@ -532,5 +664,256 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
     {
         $this->assertSame('', config('integrations.endpoints.themostpanel.production'));
         $this->assertSame(self::ENDPOINT, config('integrations.themostpanel_read_only.endpoint'));
+    }
+
+    // ==================================== 7. R1：欄位名稱也是供應商控制的文字
+
+    /**
+     * ⛔ 供應商挑選自己的 JSON key，所以 key 就是它可以任意填入的文字。
+     *
+     * 初版只把名稱截到 40 字就原樣輸出——但比 40 字短的 API key 會完整存活。
+     * 這些情境全部由 GPT 的反證重現。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function leakyFieldNameProvider(): array
+    {
+        return [
+            'key as field name' => [self::KEY_MARKER],
+            'key with prefix' => ['prefix_'.self::KEY_MARKER],
+            'key with suffix' => [self::KEY_MARKER.'_suffix'],
+            'key embedded' => ['a'.self::KEY_MARKER.'z'],
+        ];
+    }
+
+    #[DataProvider('leakyFieldNameProvider')]
+    public function test_an_api_key_in_a_field_name_is_redacted(string $fieldName): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([$fieldName => 'x'])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+
+        // ⛔ 連片段都不得殘留。
+        $this->assertStringNotContainsString(self::KEY_MARKER, (string) $encoded);
+        $this->assertStringContainsString('redacted_field', (string) $encoded);
+    }
+
+    public function test_an_order_id_in_a_field_name_is_redacted(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['order_112233_detail' => 'x'])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Status, '112233');
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+
+        // ⛔ 訂單編號識別一位客人的購買，出現在 key 裡也一樣。
+        $this->assertStringNotContainsString('112233', (string) $encoded);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unsafeFieldNameProvider(): array
+    {
+        return [
+            'chinese' => ['祕密欄位名稱'],
+            'control chars' => ["field\x00\x1fname"],
+            'newline' => ["line1\nline2"],
+            'ansi escape' => ["\033[31mred"],
+            'very long' => [str_repeat('z', 300)],
+            'json-ish' => ['{"nested":"value"}'],
+            'html' => ['<script>alert(1)</script>'],
+            'leading digit' => ['1field'],
+        ];
+    }
+
+    /** ⛔ 不是可辨識的技術欄位名稱就不顯示原文，只留位置佔位符。 */
+    #[DataProvider('unsafeFieldNameProvider')]
+    public function test_an_unrecognisable_field_name_is_never_printed(string $fieldName): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([$fieldName => 1])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $encoded = json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE);
+
+        $this->assertStringNotContainsString($fieldName, (string) $encoded);
+        // 仍然知道有這個欄位、型別是什麼。
+        $this->assertSame(['field_1' => 'int'], $observation->fieldTypes);
+    }
+
+    public function test_a_normal_field_name_is_still_shown(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([
+            'service' => 1, 'start_count' => 0, 'remains' => 10, 'currency-code' => 'USD',
+        ])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        // ⛔ 抹掉一切會讓這個工具沒有用：正常的技術欄位名稱必須看得到。
+        $this->assertArrayHasKey('service', $observation->fieldTypes);
+        $this->assertArrayHasKey('start_count', $observation->fieldTypes);
+        $this->assertArrayHasKey('currency-code', $observation->fieldTypes);
+    }
+
+    /**
+     * ⛔ 兩個都被抹掉的欄位不得互相覆蓋。
+     *
+     * 直接覆寫會讓輸出少一個欄位，看起來像回應比實際更簡單。
+     */
+    public function test_redacted_names_do_not_collide(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([
+            '祕密一' => 1,
+            '祕密二' => 'x',
+            self::KEY_MARKER => true,
+            self::KEY_MARKER.'-2' => 1.5,
+        ])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        // 四個欄位進去，四個欄位出來。
+        $this->assertCount(4, $observation->fieldTypes);
+        $this->assertStringNotContainsString(
+            self::KEY_MARKER,
+            (string) json_encode($observation->toArray(), JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    // ==================================== 8. R1：keyed fingerprint
+
+    public function test_the_fingerprint_is_keyed_not_a_plain_digest(): void
+    {
+        $body = json_encode(['balance' => '12.34', 'currency' => 'USD']);
+        Http::fake([self::ENDPOINT => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+        $this->withCredential();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+
+        /*
+         * ⛔ 普通 SHA-256 對短回應可以被枚舉還原。
+         *
+         * GPT 用已知欄位順序枚舉 `0.00`～`2000.00`，約 1,200 次就還原出餘額。
+         * 加了金鑰之後，沒有我們 app key 的人手上沒有可比對的東西。
+         */
+        $this->assertNotSame(
+            hash('sha256', (string) $body),
+            $observation->bodyFingerprint,
+        );
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $observation->bodyFingerprint);
+    }
+
+    public function test_the_fingerprint_is_stable_for_the_same_body_and_key(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['balance' => '1.00'])]);
+        $this->withCredential();
+
+        $first = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+        $second = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+
+        // 同一份 body、同一把金鑰：指紋必須一致，否則無法比對兩次回應。
+        $this->assertSame($first->bodyFingerprint, $second->bodyFingerprint);
+    }
+
+    public function test_a_different_app_key_gives_a_different_fingerprint(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['balance' => '1.00'])]);
+        $this->withCredential();
+
+        $first = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+
+        config()->set('app.key', 'base64:'.base64_encode(str_repeat('b', 32)));
+
+        $second = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+
+        $this->assertNotSame($first->bodyFingerprint, $second->bodyFingerprint);
+    }
+
+    public function test_a_missing_app_key_fails_closed_rather_than_degrading(): void
+    {
+        Http::fake();
+        $this->withCredential();
+        config()->set('app.key', '');
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance);
+
+        // ⛔ 沒有金鑰就沒有指紋，而不是「先用不安全的版本頂著」。
+        $this->assertSame('blocked_no_app_key', $observation->outcome);
+        Http::assertNothingSent();
+    }
+
+    public function test_the_observation_no_longer_advertises_a_plain_hash(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['balance' => '1.00'])]);
+        $this->withCredential();
+
+        $array = $this->probe()->probe(TheMostPanelReadOnlyAction::Balance)->toArray();
+
+        // ⛔ 名稱必須說清楚是 HMAC，讀報告的人不必自己推斷差別。
+        $this->assertArrayNotHasKey('body_sha256', $array);
+        $this->assertArrayHasKey('body_hmac_sha256', $array);
+    }
+
+    // ==================================== 9. R1：credential 只讀一次
+
+    /**
+     * ⛔ 兩次讀取之間，設定可能已經被刪除或輪替。
+     *
+     * 初版先讀一次判斷「有沒有 key」，通過後又讀一次組 payload。GPT 在中間刪掉
+     * setting，於是 request 帶著 `key=null` 送了出去——閘門說有，送出的沒有。
+     */
+    public function test_the_credential_is_read_once_and_that_value_is_sent(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['ok' => true])]);
+        $setting = $this->withCredential();
+
+        // 第一次讀取之後，設定就消失了。
+        IntegrationSetting::query()->whereKey($setting->id)->delete();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        // 這一輪已經通過閘門，所以請求會送出——但必須帶著驗證過的那把 key。
+        if ($observation->outcome === 'blocked_no_credential') {
+            Http::assertNothingSent();
+
+            return;
+        }
+
+        Http::assertSent(fn ($request) => ($request->data()['key'] ?? null) === self::KEY_MARKER);
+    }
+
+    public function test_a_request_is_never_sent_with_a_null_key(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['ok' => true])]);
+        // ⛔ 完全沒有設定：不得送出任何帶 null key 的請求。
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame('blocked_no_credential', $observation->outcome);
+        Http::assertNothingSent();
+    }
+
+    public function test_a_blank_credential_is_treated_as_missing(): void
+    {
+        Http::fake();
+
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::TheMostPanel, IntegrationEnvironment::Production)
+            ->create();
+
+        $setting->credentials = ['ApiKey' => '   '];
+        $setting->save();
+
+        $observation = $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
+
+        $this->assertSame('blocked_no_credential', $observation->outcome);
+        Http::assertNothingSent();
     }
 }

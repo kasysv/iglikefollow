@@ -30,7 +30,16 @@ final class TheMostPanelProbeObservation
         public readonly ?string $topLevelType = null,
         public readonly array $fieldTypes = [],
         public readonly ?int $itemCount = null,
-        public readonly ?string $bodyHash = null,
+        /**
+         * ⛔ A keyed HMAC, never a plain digest.
+         *
+         * The first version stored `hash('sha256', $body)` and the result
+         * document called it irreversible. It is not: a `balance` response is
+         * short and predictably formatted, so candidate values can be hashed
+         * until one matches — a reviewer recovered one in about 1,200 guesses.
+         * The name says `hmac` so nobody has to infer the difference.
+         */
+        public readonly ?string $bodyFingerprint = null,
         public readonly ?int $elapsedMs = null,
     ) {}
 
@@ -45,7 +54,7 @@ final class TheMostPanelProbeObservation
         string $topLevelType,
         array $fieldTypes,
         ?int $itemCount,
-        string $bodyHash,
+        string $bodyFingerprint,
         int $elapsedMs,
     ): self {
         return new self(
@@ -55,7 +64,7 @@ final class TheMostPanelProbeObservation
             $topLevelType,
             $fieldTypes,
             $itemCount,
-            $bodyHash,
+            $bodyFingerprint,
             $elapsedMs,
         );
     }
@@ -106,7 +115,8 @@ final class TheMostPanelProbeObservation
             'top_level_type' => $this->topLevelType,
             'field_types' => $this->fieldTypes ?: null,
             'item_count' => $this->itemCount,
-            'body_sha256' => $this->bodyHash,
+            // ⛔ 名稱明說是 HMAC：普通 SHA-256 對短回應可被枚舉還原。
+            'body_hmac_sha256' => $this->bodyFingerprint,
             'elapsed_ms' => $this->elapsedMs,
         ], fn ($value) => $value !== null);
     }
