@@ -339,6 +339,249 @@ class FulfillmentMappingUiTest extends TestCase
         $this->assertSame(0, $catalogQueries);
     }
 
+    // ==================================== UI-B:數量相容性 enable guard
+
+    /** boundary equal:供應商範圍恰好等於本站實際可購範圍 → 可啟用。 */
+    public function test_enabling_with_exactly_matching_bounds_succeeds(): void
+    {
+        // variant factory:min 100/max 10000/step 100 → 實際 100–10000。
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '81011',
+            'minimum_quantity_raw' => '100',
+            'maximum_quantity_raw' => '10000',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '81011',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertTrue(FulfillmentMapping::query()->sole()->is_enabled);
+    }
+
+    /** ⛔ 供應商最低量高於本站實際最低可購量:不得啟用;停用草稿可保存。 */
+    public function test_a_provider_minimum_above_ours_blocks_enabling_but_allows_a_disabled_draft(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '82022',
+            'minimum_quantity_raw' => '150',
+            'maximum_quantity_raw' => '20000',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '82022',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+
+        // 同一組合,停用 → 草稿可保存。
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '82022',
+                'is_enabled' => false,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertFalse(FulfillmentMapping::query()->sole()->is_enabled);
+    }
+
+    /** ⛔ 供應商最高量低於本站實際最高可購量:不得啟用。 */
+    public function test_a_provider_maximum_below_ours_blocks_enabling(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '83033',
+            'minimum_quantity_raw' => '10',
+            'maximum_quantity_raw' => '9999',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '83033',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /** ⛔ 本站範圍內沒有任何可購數量:無論供應商多寬都不得啟用。 */
+    public function test_a_variant_with_no_purchasable_quantity_cannot_be_enabled(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '84044',
+            'minimum_quantity_raw' => '1',
+            'maximum_quantity_raw' => '999999',
+        ]);
+        /*
+         * min 150/max 199/step 100:區間內沒有 step 倍數。
+         * VariantIntegrityObserver 已讓這種款式無法正常保存——⛔ 這裡以
+         * withoutEvents 模擬 legacy／corrupt row,證明 guard 對「不該存在
+         * 但存在」的資料仍 fail closed,不倚賴上游防線。
+         */
+        $variant = ServiceVariant::withoutEvents(fn () => ServiceVariant::factory()->create([
+            'min_quantity' => 150, 'max_quantity' => 199, 'step_quantity' => 100,
+            'default_quantity' => 150,
+        ]));
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '84044',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /** step 讓實際範圍與 raw min/max 不同:只要覆蓋實際範圍就相容。 */
+    public function test_step_derived_effective_bounds_are_used_not_raw_min_max(): void
+    {
+        // raw min 101 → 實際下限 200;raw max 9999 → 實際上限 9900。
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '85055',
+            'minimum_quantity_raw' => '150',
+            'maximum_quantity_raw' => '9950',
+        ]);
+        $variant = ServiceVariant::factory()->create([
+            'min_quantity' => 101, 'max_quantity' => 9999, 'step_quantity' => 100,
+        ]);
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '85055',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertTrue(FulfillmentMapping::query()->sole()->is_enabled);
+    }
+
+    /** ⛔ submit-time race:選擇後、送出前供應商 minimum 變高 → 啟用拒絕。 */
+    public function test_bounds_changing_between_menu_and_submit_block_enabling(): void
+    {
+        $service = ProviderService::factory()->available()->create([
+            'provider_service_id' => '86066',
+            'minimum_quantity_raw' => '10',
+            'maximum_quantity_raw' => '20000',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        $page = Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '86066',
+                'is_enabled' => true,
+            ]);
+
+        // 下一個 snapshot 把 minimum 抬高到本站範圍之上。
+        $service->update(['minimum_quantity_raw' => '99999']);
+
+        $page->call('create')->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /** ⛔ 竄改的 variant state:guard 重讀 DB,不存在的款式不得啟用。 */
+    public function test_a_tampered_variant_id_blocks_enabling(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '87077',
+            'minimum_quantity_raw' => '10',
+            'maximum_quantity_raw' => '20000',
+        ]);
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => 999999,
+                'provider_service_id' => '87077',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /** Owner 對照畫面:本站實際範圍、provider 事實、rate 警語與相容標示。 */
+    public function test_the_compatibility_summary_shows_both_sides_and_the_rate_warning(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '88088',
+            'name' => '虛構對照服務',
+            'minimum_quantity_raw' => '150',
+            'maximum_quantity_raw' => '20000',
+            'rate_raw' => '0.90',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        // ->live() 選擇後 placeholder 重新 render:以最終 HTML 驗證。
+        $html = html_entity_decode(
+            Livewire::test(CreateFulfillmentMapping::class)
+                ->fillForm([
+                    'service_variant_id' => $variant->id,
+                    'provider_service_id' => '88088',
+                ])
+                ->html(),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8',
+        );
+
+        // 本站實際範圍與 provider 事實同畫面。
+        $this->assertStringContainsString('實際可購 100–10000', $html);
+        $this->assertStringContainsString('虛構對照服務', $html);
+        $this->assertStringContainsString('min 150／max 20000', $html);
+        $this->assertStringContainsString('不是本站售價', $html);
+        // min 150 > 實際下限 100 → 不相容標示。
+        $this->assertStringContainsString('✘', $html);
+        $this->assertStringContainsString('供應商最低量高於本站實際最低可購量', $html);
+    }
+
+    /** ⛔ placeholder 是 provider text 的新出口:rendered HTML 必須 escaped。 */
+    public function test_the_compatibility_summary_escapes_hostile_provider_text(): void
+    {
+        $hostile = '<script>alert("summary-xss")</script>';
+
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '89099',
+            'name' => $hostile,
+            'minimum_quantity_raw' => '10',
+            'maximum_quantity_raw' => '20000',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        $html = Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '89099',
+            ])
+            ->html();
+
+        $this->assertStringNotContainsString($hostile, $html);
+        $this->assertStringNotContainsString('<script>alert("summary-xss")', $html);
+        // 正向證明 placeholder 真的渲染了敵意文字(escaped),不是沒渲染。
+        $this->assertStringContainsString('summary-xss', $html);
+    }
+
     /** stale 舊值必須在編輯表單的選項中看得見(帶失效附註),不是憑空消失。 */
     public function test_the_edit_form_shows_the_stale_id_with_a_stale_note(): void
     {
