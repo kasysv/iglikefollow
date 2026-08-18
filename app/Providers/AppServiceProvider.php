@@ -45,6 +45,7 @@ use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
 use App\Services\Fulfillment\DisabledFulfillmentGateway;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
+use App\Services\Fulfillment\TheMostPanelFulfillmentGateway;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
@@ -160,6 +161,19 @@ class AppServiceProvider extends ServiceProvider
                 && $this->app->environment('local', 'testing')
             ) {
                 return new FakeFulfillmentGateway;
+            }
+
+            /*
+             * ⛔ DISPATCH-ADAPTER-A:themostpanel adapter 只在 testing 可
+             * 解析,而且它的 credential source 與 transport 都必須由測試
+             * 明確綁定——沒有任何 production implementation 存在,local
+             * 也不在此分支內,`.env` 無法把它變成 live driver。
+             */
+            if (
+                config('fulfillment.driver') === 'themostpanel'
+                && $this->app->environment('testing')
+            ) {
+                return $this->app->make(TheMostPanelFulfillmentGateway::class);
             }
 
             // ⛔ 預設就是不派單。

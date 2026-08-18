@@ -11,7 +11,6 @@ use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
 use Illuminate\Support\Facades\Http;
-use stdClass;
 use Throwable;
 
 /**
@@ -262,51 +261,8 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
      */
     private function bodyEchoesCredential(string $body, string $key): bool
     {
-        if (str_contains($body, $key)) {
-            return true;
-        }
-
-        /*
-         * ⛔ 不用 assoc decode。assoc 模式會把純數字 object property name
-         * canonical 化成 integer array key——一把 Unicode-escaped 的純數字
-         * API Key 就這樣逃過了字串檢查（GPT R1 反例）。stdClass 的 property
-         * name 永遠是字串，foreach 也原樣保留，型別差異不會被抹掉。
-         */
-        return $this->structureContains(json_decode($body), $key);
-    }
-
-    /** 遞迴檢查 decode 後的每個 object property name 與 string value。 */
-    private function structureContains(mixed $value, string $key): bool
-    {
-        if (is_string($value)) {
-            return str_contains($value, $key);
-        }
-
-        if ($value instanceof stdClass) {
-            foreach ($value as $name => $item) {
-                // ⛔ (string) 是雙保險：object property name 本來就是字串。
-                if (str_contains((string) $name, $key)) {
-                    return true;
-                }
-
-                if ($this->structureContains($item, $key)) {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        if (is_array($value)) {
-            // JSON list：index 不可能載 key，只遞迴 value。
-            foreach ($value as $item) {
-                if ($this->structureContains($item, $key)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        // ⛔ B1-R2 接受的雙 pass 檢查,抽取為共用 guard 供 dispatch adapter 重用。
+        return TheMostPanelCredentialEchoGuard::echoes($body, $key);
     }
 
     /**
@@ -322,52 +278,13 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
         TheMostPanelBoundedResponseStream $sink,
         TheMostPanelTransferState $transfer,
     ) {
-        return Http::asForm()
-            ->connectTimeout(self::CONNECT_TIMEOUT)
-            ->timeout(self::TOTAL_TIMEOUT)
-            // ⛔ 不自動重試：rate limit 未知。
-            ->withoutRedirecting()
-            /*
-             * ⛔ 明確要求不壓縮，並關閉自動解壓。
-             *
-             * 否則「線路上 2 KB、解壓後 2 GB」就能繞過整套大小限制：cURL
-             * 的上限看的是 wire bytes，而我們解析的是解壓後的內容。
-             */
-            ->withHeaders(['Accept-Encoding' => 'identity'])
-            ->withOptions([
-                // ⛔ TLS 驗證維持開啟；verify=false 永久禁止。
-                'verify' => true,
-                'decode_content' => false,
-                /*
-                 * ⛔ 真正的傳輸上限：由 libcurl 本身執行。
-                 *
-                 * bounded sink 只能限制我們「存下」多少；連線仍會繼續，
-                 * 對方要送多少就送多少。8.4.0 起的 max-filesize 才會在
-                 * 傳輸途中直接中止——這也是 runtime 能力閘存在的理由。
-                 */
-                'curl' => [
-                    CURLOPT_MAXFILESIZE_LARGE => TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,
-                ],
-                // handler 無關的第二層：限制實際保存的位元組數。
-                'sink' => $sink,
-                // 已宣告長度就超限、或宣告了壓縮編碼時，連第一個 byte 都不收。
-                'on_headers' => function ($response) {
-                    TheMostPanelResponseSizeGuard::assertContentLength($response->getHeaders());
-                    TheMostPanelResponseSizeGuard::assertIdentityEncoding($response->getHeaders());
-                },
-                // ⛔ 只取 errno，不取任何訊息。
-                'on_stats' => function ($stats) use ($transfer) {
-                    $transfer->record($stats->getHandlerErrorData());
-                },
-                /*
-                 * 額外一層，⛔ 但不是 hard cap：它何時觸發由 handler 決定，
-                 * 不由我們決定。
-                 */
-                'progress' => function ($downloadTotal, $downloaded) {
-                    TheMostPanelResponseSizeGuard::assertProgress((int) $downloaded);
-                },
-            ])
-            ->post($this->endpoint(), $payload);
+        // ⛔ 唯一的 hardened chain,抽取為共用 transport;禁止複製第二份。
+        return (new TheMostPanelHardenedTransport)->postExactlyOnce(
+            (string) $this->endpoint(),
+            $payload,
+            $sink,
+            $transfer,
+        );
     }
 
     /**

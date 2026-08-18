@@ -23,6 +23,7 @@ use App\Models\User;
 use App\Services\Fulfillment\DisabledFulfillmentGateway;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
 use App\Services\Fulfillment\FulfillmentDispatchGate;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -94,7 +95,7 @@ class FulfillmentSafetyTest extends TestCase
             'switch off' => ['fake', false],
             'driver disabled' => ['disabled', true],
             'both off' => ['disabled', false],
-            'unknown driver' => ['themostpanel', true],
+            'unknown driver' => ['no-such-driver', true],
         ];
     }
 
@@ -108,16 +109,38 @@ class FulfillmentSafetyTest extends TestCase
         $this->assertFalse(FulfillmentDispatchGate::enabled());
     }
 
-    public function test_a_forged_driver_cannot_produce_an_http_client(): void
+    /*
+     * DISPATCH-ADAPTER-A 之後,themostpanel driver 存在——但只在 testing
+     * 環境、且 credential source 由測試明確綁定時。以下兩個測試把
+     * 「.env 偽造 driver」的兩條路都堵死。
+     */
+
+    /** ⛔ local(或任何非 testing)環境:themostpanel driver 仍只得到 disabled。 */
+    public function test_a_forged_driver_outside_testing_yields_the_disabled_gateway(): void
     {
-        // ⛔ M4A 根本沒有 HTTP client，所以設定成 themostpanel 也只會得到 disabled。
+        $this->app['env'] = 'local';
         config()->set('fulfillment.driver', 'themostpanel');
+        config()->set('fulfillment.dispatch_enabled', true);
         $this->app->forgetInstance(FulfillmentGateway::class);
 
+        $this->assertFalse(FulfillmentDispatchGate::enabled());
         $this->assertInstanceOf(
             DisabledFulfillmentGateway::class,
             $this->app->make(FulfillmentGateway::class)
         );
+
+        $this->app['env'] = 'testing';
+    }
+
+    /** ⛔ testing 環境沒有明確綁定 credential source:fail closed,不會默默生出 HTTP client。 */
+    public function test_the_themostpanel_driver_without_bindings_fails_closed(): void
+    {
+        config()->set('fulfillment.driver', 'themostpanel');
+        $this->app->forgetInstance(FulfillmentGateway::class);
+
+        $this->expectException(BindingResolutionException::class);
+
+        $this->app->make(FulfillmentGateway::class);
     }
 
     // ==================================== 2. 付款事件的隔離

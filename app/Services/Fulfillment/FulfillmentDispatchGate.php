@@ -32,7 +32,17 @@ class FulfillmentDispatchGate
             return false;
         }
 
-        // ⛔ disabled driver 代表沒有任何可用的送出實作。
-        return config('fulfillment.driver') === 'fake';
+        /*
+         * ⛔ disabled driver 代表沒有任何可用的送出實作。
+         *
+         * `themostpanel` 只在 testing 環境成立:DISPATCH-ADAPTER-A 的
+         * adapter 走注入式 fake transport 跑端到端,⛔ 不存在任何可由
+         * `.env` 在 local／production 開啟的 live driver 路徑。
+         */
+        return match (config('fulfillment.driver')) {
+            'fake' => true,
+            'themostpanel' => app()->environment('testing'),
+            default => false,
+        };
     }
 }
