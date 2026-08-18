@@ -33,9 +33,19 @@ class ListProviderServices extends ListRecords
             return $warning.'本機尚未同步供應商服務目錄；沒有資料代表尚未同步，不代表帳戶沒有服務。';
         }
 
-        $lastSeen = (string) ProviderService::query()->max('last_seen_at');
+        $lastSeen = ProviderService::query()->max('last_seen_at');
+
+        if ($lastSeen === null) {
+            /*
+             * ⛔ Schema 允許 last_seen_at 為 null(R1):有 rows 但沒有觀察
+             * 時間,不得宣稱「最近成功觀察」或顯示空括號——那會把來源不明
+             * 的資料偽裝成同步證據。
+             */
+            return $warning
+                .'本機已有 '.$observed.' 筆服務資料，但未記錄觀察時間；不能視為最近同步的證據。';
+        }
 
         return $warning
-            .'本機最近成功觀察 '.$observed.' 筆服務（最後觀察 '.$lastSeen.'）。';
+            .'本機最近成功觀察 '.$observed.' 筆服務（最後觀察 '.(string) $lastSeen.'）。';
     }
 }

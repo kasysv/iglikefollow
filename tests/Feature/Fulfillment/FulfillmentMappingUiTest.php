@@ -10,10 +10,13 @@ use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Models\User;
+use App\Rules\AvailableProviderService;
 use Filament\Forms\Components\Select;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -212,6 +215,128 @@ class FulfillmentMappingUiTest extends TestCase
         } else {
             $page->assertHasFormErrors();
         }
+    }
+
+    // ==================================== R1:shape 先行的 fail-closed 邊界
+
+    /**
+     * ⛔ GPT 反例:array state 曾讓 rule 的 `(string)` cast 產生
+     * `Array to string conversion` warning。R1 之後 shape 先行:非 string
+     * 與非 canonical 形狀在 cast／regex／DB query 之前就以固定訊息拒絕。
+     *
+     * @return array<string, array{0: mixed}>
+     */
+    public static function malformedShapeProvider(): array
+    {
+        return [
+            'array' => [['91011']],
+            'nested array' => [[['deep' => '91011']]],
+            'object' => [(object) ['id' => '91011']],
+            'null' => [null],
+            'bool true' => [true],
+            'bool false' => [false],
+            'int' => [91011],
+            'float' => [910.11],
+            'overlong string' => [str_repeat('9', 65)],
+            'zero' => ['0'],
+            'leading zeros' => ['00791011'],
+            'decimal string' => ['9.5'],
+            'signed string' => ['-91011'],
+            'alpha string' => ['NOT-IN-CATALOG'],
+            'embedded space' => ['9101 1'],
+        ];
+    }
+
+    #[DataProvider('malformedShapeProvider')]
+    public function test_a_malformed_shape_fails_closed_without_warnings_or_queries(mixed $value): void
+    {
+        // catalog 有資料,證明「不查 DB」是 shape gate 的效果,不是空庫巧合。
+        $this->availableService('91011');
+
+        $catalogQueries = 0;
+        $watching = true;
+
+        DB::listen(function ($query) use (&$catalogQueries, &$watching) {
+            if ($watching && str_contains($query->sql, 'provider_services')) {
+                $catalogQueries++;
+            }
+        });
+
+        $failedWith = null;
+
+        // ⛔ 任何 PHP warning／notice 都直接讓測試失敗。
+        set_error_handler(function (int $errno, string $errstr): bool {
+            $this->fail('⛔ 不可信輸入產生了 PHP error:'.$errstr);
+        });
+
+        try {
+            (new AvailableProviderService)->validate(
+                'provider_service_id',
+                $value,
+                function (string $message) use (&$failedWith) {
+                    $failedWith = $message;
+
+                    return new class
+                    {
+                        public function __call(string $name, array $arguments): static
+                        {
+                            return $this;
+                        }
+                    };
+                },
+            );
+        } finally {
+            restore_error_handler();
+            $watching = false;
+        }
+
+        $this->assertSame(AvailableProviderService::FAILED_MESSAGE, $failedWith);
+        // ⛔ 不合法 shape 永不觸碰 provider_services。
+        $this->assertSame(0, $catalogQueries);
+    }
+
+    /** ⛔ GPT 原反例的 end-to-end 版本:array state 進 form → error、0 mapping、無 warning。 */
+    public function test_an_array_state_is_rejected_at_submit(): void
+    {
+        $this->availableService('91011');
+        $variant = ServiceVariant::factory()->create();
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => ['91011'],
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /** 歷史保留例外不查 DB:exact 相等的舊 string(即使非 canonical)直接通過。 */
+    public function test_the_retainable_stale_id_passes_without_touching_the_catalog(): void
+    {
+        $catalogQueries = 0;
+        $watching = true;
+
+        DB::listen(function ($query) use (&$catalogQueries, &$watching) {
+            if ($watching && str_contains($query->sql, 'provider_services')) {
+                $catalogQueries++;
+            }
+        });
+
+        $failedWith = null;
+
+        (new AvailableProviderService('OLD-GONE-0001'))->validate(
+            'provider_service_id',
+            'OLD-GONE-0001',
+            function (string $message) use (&$failedWith) {
+                $failedWith = $message;
+            },
+        );
+        $watching = false;
+
+        $this->assertNull($failedWith);
+        $this->assertSame(0, $catalogQueries);
     }
 
     /** stale 舊值必須在編輯表單的選項中看得見(帶失效附註),不是憑空消失。 */

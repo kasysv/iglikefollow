@@ -246,6 +246,90 @@ class ProviderServiceAdminTest extends TestCase
             ->assertCanNotSeeTableRecords([$unavailable]);
     }
 
+    /** R1:cancel filter 的獨立正／反資料證明。 */
+    public function test_the_cancel_filter_narrows_to_cancelable_rows(): void
+    {
+        $this->actingAs($this->owner());
+
+        $cancelable = ProviderService::factory()->available()->create(['supports_cancel' => true]);
+        $other = ProviderService::factory()->available()->create(['supports_cancel' => false]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('supports_cancel', true)
+            ->assertCanSeeTableRecords([$cancelable])
+            ->assertCanNotSeeTableRecords([$other]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('supports_cancel', false)
+            ->assertCanSeeTableRecords([$other])
+            ->assertCanNotSeeTableRecords([$cancelable]);
+    }
+
+    /**
+     * ⛔ R1:filter 選項 label 是 provider-controlled text 的另一個出口。
+     * 敵意 category／service type 進 filter 後,整份 rendered HTML(含
+     * filter dropdown)不得出現任何 raw payload;且該敵意值必須真的作為
+     * filter option 運作(round-trip 篩選命中),證明不是「filter 根本
+     * 沒渲染」的假陰性。
+     */
+    public function test_hostile_filter_option_labels_are_escaped(): void
+    {
+        $this->actingAs($this->owner());
+
+        $hostileCategory = '<script>alert("filter-cat-xss")</script>';
+        $hostileType = '<img src=x onerror=alert("filter-type-xss")>';
+
+        $hostile = ProviderService::factory()->available()->create([
+            'category' => $hostileCategory,
+            'service_type' => $hostileType,
+        ]);
+        $benign = ProviderService::factory()->available()->create([
+            'category' => '正常分類',
+            'service_type' => 'Default',
+        ]);
+
+        // 敵意值確實作為 filter option 運作。
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('category', $hostileCategory)
+            ->assertCanSeeTableRecords([$hostile])
+            ->assertCanNotSeeTableRecords([$benign]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('service_type', $hostileType)
+            ->assertCanSeeTableRecords([$hostile])
+            ->assertCanNotSeeTableRecords([$benign]);
+
+        // 整份 component HTML(含 filter UI)0 個 raw payload;escaped 版本存在。
+        $html = Livewire::test(ListProviderServices::class)->html();
+
+        // raw payload(含未 escape 的 < >)全頁 0 出現;'<script>' 標籤本身也不得存在。
+        $this->assertStringNotContainsString($hostileCategory, $html);
+        $this->assertStringNotContainsString($hostileType, $html);
+        $this->assertStringNotContainsString('<script>alert', $html);
+        // escaped 版本存在(< > " 都被轉義,payload 只剩純文字)。
+        $this->assertStringContainsString('&lt;script&gt;alert(&quot;filter-cat-xss&quot;)', $html);
+        $this->assertStringContainsString('&lt;img src=x onerror=alert(&quot;filter-type-xss&quot;)&gt;', $html);
+    }
+
+    /**
+     * ⛔ R1:count>0 但 last_seen_at 全 null——不得宣稱「最近成功觀察」
+     * 或顯示空括號;來源不明的 rows 不能偽裝成同步證據。
+     */
+    public function test_rows_without_observation_timestamps_do_not_claim_recent_sync(): void
+    {
+        // factory 預設:unavailable、兩個 seen timestamps 均 null。
+        ProviderService::factory()->count(2)->create();
+
+        $response = $this->actingAs($this->owner())->get(self::URL);
+
+        $response->assertOk();
+        $response->assertSee('不是本站售價');
+        $response->assertSee('未記錄觀察時間');
+        $response->assertSee('不能視為最近同步的證據');
+        $response->assertDontSee('最近成功觀察');
+        $response->assertDontSee('（最後觀察');
+    }
+
     /** 公開頁不得因 catalog 存在而查詢它。 */
     public function test_the_storefront_never_queries_the_catalog(): void
     {
