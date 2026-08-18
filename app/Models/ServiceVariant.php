@@ -53,9 +53,20 @@ class ServiceVariant extends Model
             return false;
         }
 
+        $step = (int) $this->step_quantity;
+
+        /*
+         * ⛔ R1:corrupt step 不是照常計算的理由。step < 1 的款式沒有任何
+         * 合法數量——直接 false,絕不進 modulo(step 0 會 DivisionByZeroError,
+         * 而 checkout 根層不允許任何 warning／exception)。
+         */
+        if ($step < 1) {
+            return false;
+        }
+
         return $quantity >= $this->min_quantity
             && $quantity <= $this->max_quantity
-            && $quantity % $this->step_quantity === 0
+            && $quantity % $step === 0
             && Money::divides($rate, $quantity)
             && Money::isPayable($rate, $quantity);
     }
@@ -75,10 +86,22 @@ class ServiceVariant extends Model
     {
         $min = (int) $this->min_quantity;
         $max = (int) $this->max_quantity;
-        $step = max(1, (int) $this->step_quantity);
+        $step = (int) $this->step_quantity;
 
-        // >= min 的第一個 step 倍數。
-        $first = (int) (ceil($min / $step) * $step);
+        /*
+         * ⛔ R1:step < 1 不得靜默正規化成 1——那會把 checkout 根本賣不了
+         * 的 corrupt 款式說成「可購」。沒有合法 step 就沒有可購數量。
+         */
+        if ($step < 1) {
+            return null;
+        }
+
+        /*
+         * >= min 的第一個「正」step 倍數。⛔ 0 永遠不是可購數量
+         * (quantityIsValid 拒絕 0),所以 legacy min 0 的起點是第一個
+         * 正倍數,不是 0。
+         */
+        $first = (int) (ceil(max($min, 1) / $step) * $step);
 
         return $first <= $max ? $first : null;
     }

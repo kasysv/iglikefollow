@@ -155,6 +155,52 @@ class QuantityCompatibilityTest extends TestCase
         $this->assertSame(QuantityCompatibility::MALFORMED_PROVIDER_BOUNDS, $a->reason);
     }
 
+    // ==================================== R1:local structure 先行
+
+    /**
+     * ⛔ GPT 反例:step 0 曾被 `max(1, step)` 靜默修成 1 而標成相容,
+     * checkout 對同一資料卻 Modulo-by-zero。R1 之後結構先行:不比較
+     * provider、不標相容、無 warning。
+     */
+    public function test_the_gpt_step_zero_probe_is_structurally_incompatible_without_warnings(): void
+    {
+        set_error_handler(function (int $errno, string $errstr): bool {
+            $this->fail('⛔ corrupt structure 產生了 PHP error:'.$errstr);
+        });
+
+        try {
+            $a = QuantityCompatibility::assess(self::variant(100, 10000, 0), self::service('10', '20000'));
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertFalse($a->compatible);
+        $this->assertSame(QuantityCompatibility::INVALID_SITE_QUANTITY_STRUCTURE, $a->reason);
+        // ⛔ 不得回報任何「實際可購」數字:那正是原反例顯示 100–10000 的來源。
+        $this->assertNull($a->siteFirstPurchasable);
+        $this->assertNull($a->siteLastPurchasable);
+    }
+
+    /** min<1、max<min、step<1:全部在 provider 比較之前以固定 reason 拒絕。 */
+    public function test_invalid_site_structures_are_rejected_before_provider_comparison(): void
+    {
+        $cases = [
+            'min zero' => self::variant(0, 10000, 100),
+            'negative min' => self::variant(-10, 10000, 100),
+            'negative step' => self::variant(100, 10000, -5),
+            'max below min' => self::variant(500, 100, 100),
+        ];
+
+        foreach ($cases as $label => $variant) {
+            // provider 給到最寬,證明拒絕與 provider 無關。
+            $a = QuantityCompatibility::assess($variant, self::service('1', '999999999999'));
+
+            $this->assertFalse($a->compatible, $label);
+            $this->assertSame(QuantityCompatibility::INVALID_SITE_QUANTITY_STRUCTURE, $a->reason, $label);
+            $this->assertStringContainsString('結構不合法', $a->label(), $label);
+        }
+    }
+
     /** label 是固定本地文案:⛔ 不含任何 provider 值。 */
     public function test_labels_are_fixed_and_value_free(): void
     {

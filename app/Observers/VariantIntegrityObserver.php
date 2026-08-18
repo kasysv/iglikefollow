@@ -55,6 +55,17 @@ class VariantIntegrityObserver
             ]);
         }
 
+        /*
+         * ⛔ R1:0 永遠不是可購數量(checkout 根層拒絕 quantity <= 0),
+         * 所以 min 0 是結構矛盾——UI 會顯示一個不存在的「最低可購 0」。
+         * 草稿與已發布一律適用。
+         */
+        if ($min < 1) {
+            throw ValidationException::withMessages([
+                'min_quantity' => '最少買多少必須至少為 1。',
+            ]);
+        }
+
         if ($min > $max) {
             throw ValidationException::withMessages([
                 'min_quantity' => '最少買多少不能大於最多買多少。',

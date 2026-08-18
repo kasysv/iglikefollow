@@ -919,6 +919,57 @@ class OrderTransactionIntegrityTest extends TestCase
         Money::total(PHP_INT_MAX, 999);
     }
 
+    /**
+     * ⛔ M4B-MAPPING-UI-B R1:corrupt step 不是照常計算的理由。step 0／
+     * 負值的 row(繞過 observer 直接寫入)在 checkout 根層只回 false——
+     * 絕不 Modulo-by-zero,也不產生任何 warning;checkout 入口不建 order。
+     */
+    public function test_a_corrupt_step_fails_closed_without_dividing_by_zero(): void
+    {
+        $variant = $this->variant();
+
+        foreach ([0, -100] as $badStep) {
+            DB::table('service_variants')->where('id', $variant->id)
+                ->update(['step_quantity' => $badStep]);
+
+            $fresh = ServiceVariant::query()->findOrFail($variant->id);
+
+            set_error_handler(function (int $errno, string $errstr): bool {
+                $this->fail('⛔ corrupt step 產生了 PHP error:'.$errstr);
+            });
+
+            try {
+                $this->assertFalse($fresh->quantityIsValid(100));
+                $this->assertFalse($fresh->quantityIsValid(1000));
+                // ⛔ 不得把 step<1 正規化成 1:沒有合法 step 就沒有可購數量。
+                $this->assertNull($fresh->firstPurchasableQuantity());
+            } finally {
+                restore_error_handler();
+            }
+
+            $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1000])
+                ->assertRedirect();
+
+            $this->assertSame(0, Order::count());
+            $this->assertSame(0, OrderItem::count());
+        }
+    }
+
+    /** ⛔ R1:legacy min 0 的第一個可購數量是第一個正 step 倍數,永遠不是 0。 */
+    public function test_a_zero_minimum_never_offers_zero_as_purchasable(): void
+    {
+        $variant = $this->variant();
+
+        DB::table('service_variants')->where('id', $variant->id)
+            ->update(['min_quantity' => 0]);
+
+        $fresh = ServiceVariant::query()->findOrFail($variant->id);
+
+        $this->assertFalse($fresh->quantityIsValid(0));
+        $this->assertSame((int) $fresh->step_quantity, $fresh->firstPurchasableQuantity());
+        $this->assertGreaterThan(0, $fresh->firstPurchasableQuantity());
+    }
+
     public function test_a_non_positive_quantity_is_refused(): void
     {
         $this->expectException(UnsellablePriceException::class);

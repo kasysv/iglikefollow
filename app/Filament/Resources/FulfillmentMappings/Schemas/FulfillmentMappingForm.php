@@ -222,15 +222,21 @@ class FulfillmentMappingForm
             return '請先選擇商品款式與供應商服務,這裡會顯示雙方數量範圍與相容性。';
         }
 
-        $first = $variant->firstPurchasableQuantity();
-        $step = max(1, (int) $variant->step_quantity);
-        $last = intdiv((int) $variant->max_quantity, $step) * $step;
+        /*
+         * ⛔ R1:effective bounds 只有一個來源——同一次 assess() 的
+         * siteFirstPurchasable／siteLastPurchasable 與 label。這裡不得再用
+         * `max(1, step)` 自行算另一套:GPT 反例證明那會把 step 0 的
+         * corrupt 款式顯示成「實際可購 100–10000」而 checkout 直接崩潰。
+         */
+        $assessment = QuantityCompatibility::assess($variant, $service);
 
         $site = '本站:'.($variant->service?->platform?->name ?? '—')
             .'／'.($variant->service?->name ?? '—')
             .'／'.$variant->label
-            .';設定 min '.$variant->min_quantity.'／max '.$variant->max_quantity.'/step '.$step
-            .';實際可購 '.($first === null ? '無(設定不合規)' : $first.'–'.$last).'。';
+            .';設定 min '.$variant->min_quantity.'／max '.$variant->max_quantity.'/step '.(int) $variant->step_quantity
+            .';實際可購 '.($assessment->siteFirstPurchasable === null
+                ? '無(設定不合規)'
+                : $assessment->siteFirstPurchasable.'–'.$assessment->siteLastPurchasable).'。';
 
         $provider = '供應商:'.$service->provider_service_id
             .'｜'.$service->name
@@ -245,7 +251,7 @@ class FulfillmentMappingForm
         $availability = $service->is_available ? '' : '⚠ 此代碼已不在可用目錄,僅可停用保留。';
 
         return $site.PHP_EOL.$provider.PHP_EOL
-            .QuantityCompatibility::assess($variant, $service)->label()
+            .$assessment->label()
             .($availability === '' ? '' : PHP_EOL.$availability);
     }
 }

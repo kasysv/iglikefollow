@@ -27,6 +27,8 @@ use App\Models\ServiceVariant;
  */
 final class QuantityCompatibility
 {
+    public const INVALID_SITE_QUANTITY_STRUCTURE = 'invalid_site_quantity_structure';
+
     public const NO_PURCHASABLE_QUANTITY = 'no_purchasable_quantity';
 
     public const MALFORMED_PROVIDER_BOUNDS = 'malformed_provider_bounds';
@@ -50,6 +52,20 @@ final class QuantityCompatibility
 
     public static function assess(ServiceVariant $variant, ProviderService $service): self
     {
+        $min = (int) $variant->min_quantity;
+        $max = (int) $variant->max_quantity;
+        $step = (int) $variant->step_quantity;
+
+        /*
+         * ⛔ R1:先驗本站 local structure,再談 provider。GPT 反例證明
+         * `max(1, step)` 會把 step 0 的 corrupt 款式標成相容,而 checkout
+         * 對同一筆資料 Modulo-by-zero——結構不合法(min<1、max<min、
+         * step<1)直接以固定 reason 拒絕,不比較 provider、不標相容。
+         */
+        if ($min < 1 || $max < $min || $step < 1) {
+            return new self(false, null, null, self::INVALID_SITE_QUANTITY_STRUCTURE);
+        }
+
         $first = $variant->firstPurchasableQuantity();
 
         if ($first === null) {
@@ -57,8 +73,7 @@ final class QuantityCompatibility
             return new self(false, null, null, self::NO_PURCHASABLE_QUANTITY);
         }
 
-        $step = max(1, (int) $variant->step_quantity);
-        $last = intdiv((int) $variant->max_quantity, $step) * $step;
+        $last = intdiv($max, $step) * $step;
 
         $providerMin = (string) $service->minimum_quantity_raw;
         $providerMax = (string) $service->maximum_quantity_raw;
@@ -84,6 +99,7 @@ final class QuantityCompatibility
     {
         return match ($this->reason) {
             null => '✔ 數量相容:供應商範圍可完整承接本站可購數量。',
+            self::INVALID_SITE_QUANTITY_STRUCTURE => '✘ 不相容:本站款式數量設定結構不合法(min/max/step),請先修正款式。',
             self::NO_PURCHASABLE_QUANTITY => '✘ 不相容:本站款式的數量範圍內沒有任何可購數量(min/max/step 設定問題)。',
             self::MALFORMED_PROVIDER_BOUNDS => '✘ 不相容:供應商數量欄位格式異常,無法安全比較。',
             self::PROVIDER_MINIMUM_TOO_HIGH => '✘ 不相容:供應商最低量高於本站實際最低可購量。',

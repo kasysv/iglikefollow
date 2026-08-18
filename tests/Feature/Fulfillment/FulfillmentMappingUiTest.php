@@ -15,6 +15,7 @@ use Filament\Forms\Components\Select;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -474,6 +475,96 @@ class FulfillmentMappingUiTest extends TestCase
             ->assertHasNoFormErrors();
 
         $this->assertTrue(FulfillmentMapping::query()->sole()->is_enabled);
+    }
+
+    /**
+     * ⛔ R1/GPT end-to-end:step 0 corrupt row(繞過 observer)不得啟用,
+     * summary 標「結構不合法」而不是把它顯示成「實際可購 100–10000」。
+     */
+    public function test_a_corrupt_step_zero_variant_cannot_be_enabled_and_is_labelled(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '78088',
+            'minimum_quantity_raw' => '10',
+            'maximum_quantity_raw' => '20000',
+        ]);
+        $variant = ServiceVariant::withoutEvents(fn () => ServiceVariant::factory()->create([
+            'step_quantity' => 0,
+        ]));
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '78088',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+
+        $html = html_entity_decode(
+            Livewire::test(CreateFulfillmentMapping::class)
+                ->fillForm([
+                    'service_variant_id' => $variant->id,
+                    'provider_service_id' => '78088',
+                ])
+                ->html(),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8',
+        );
+
+        $this->assertStringContainsString('結構不合法', $html);
+        $this->assertStringContainsString('實際可購 無(設定不合規)', $html);
+        $this->assertStringNotContainsString('實際可購 100–10000', $html);
+        $this->assertStringNotContainsString('✔ 數量相容', $html);
+    }
+
+    /** ⛔ R1:min 0 由 observer 直接拒絕;legacy row 也不得啟用或顯示「可購 0」。 */
+    public function test_a_zero_minimum_is_rejected_and_never_shown_as_purchasable(): void
+    {
+        try {
+            ServiceVariant::factory()->create(['min_quantity' => 0, 'default_quantity' => 100]);
+            $this->fail('min 0 必須被 observer 拒絕');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('min_quantity', $e->errors());
+        }
+
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '77077',
+            'minimum_quantity_raw' => '1',
+            'maximum_quantity_raw' => '999999',
+        ]);
+        $variant = ServiceVariant::withoutEvents(fn () => ServiceVariant::factory()->create([
+            'min_quantity' => 0, 'default_quantity' => 100,
+        ]));
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '77077',
+                'is_enabled' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+
+        $html = html_entity_decode(
+            Livewire::test(CreateFulfillmentMapping::class)
+                ->fillForm([
+                    'service_variant_id' => $variant->id,
+                    'provider_service_id' => '77077',
+                ])
+                ->html(),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8',
+        );
+
+        // ⛔ 不得顯示不存在的「實際可購 0」或相容。
+        $this->assertStringNotContainsString('實際可購 0', $html);
+        $this->assertStringContainsString('結構不合法', $html);
+        $this->assertStringNotContainsString('✔ 數量相容', $html);
     }
 
     /** ⛔ submit-time race:選擇後、送出前供應商 minimum 變高 → 啟用拒絕。 */
