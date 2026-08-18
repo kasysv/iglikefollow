@@ -5,11 +5,13 @@ namespace App\Filament\Resources\ServiceVariants\Schemas;
 use App\Filament\Support\ImageField;
 use App\Models\ServiceVariant;
 use App\Support\Money;
+use App\Support\VariantFulfillmentCard;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\Auth;
 
@@ -159,6 +161,23 @@ class ServiceVariantForm
                         ->required()
                         ->maxLength(3),
                 ])->columns(2),
+
+            /*
+             * 履約對照卡:edit-only、Owner-only、read-only。
+             * ⛔ editor 不得看到 provider service ID/名稱/raw rate;create
+             * 頁無 record 不顯示。卡片內容全部來自「目前已儲存值」。
+             */
+            Section::make('履約對照')
+                ->description('目前已儲存的履約對應、雙方上下限與價格對照。')
+                ->visible(fn (?ServiceVariant $record): bool => $record !== null
+                    && (Auth::user()?->isOwner() ?? false))
+                ->schema([
+                    View::make('filament.service-variants.fulfillment-card')
+                        ->viewData(fn (?ServiceVariant $record): array => [
+                            'card' => $record === null ? null : VariantFulfillmentCard::for($record),
+                        ])
+                        ->columnSpanFull(),
+                ]),
 
             Section::make('編號與圖片')
                 ->description('這些是選填的，主要給你自己對帳和之後串接系統用。')
