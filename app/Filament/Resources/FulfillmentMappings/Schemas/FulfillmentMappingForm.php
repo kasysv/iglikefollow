@@ -4,11 +4,14 @@ namespace App\Filament\Resources\FulfillmentMappings\Schemas;
 
 use App\Enums\FulfillmentPayloadType;
 use App\Enums\IntegrationProvider;
+use App\Models\FulfillmentMapping;
+use App\Models\ProviderService;
 use App\Models\ServiceVariant;
+use App\Rules\AvailableProviderService;
 use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 
 class FulfillmentMappingForm
@@ -44,13 +47,62 @@ class FulfillmentMappingForm
                         ->label('供應商')
                         ->options([IntegrationProvider::TheMostPanel->value => 'TheMostPanel'])
                         ->default(IntegrationProvider::TheMostPanel->value)
+                        /*
+                         * ⛔ Provider 是固定值,不是選擇:disabled 讓 client
+                         * 輸入被忽略,dehydrated 讓 server 端 state(create
+                         * 的 default／edit 的既有值)照常寫入。
+                         */
+                        ->disabled()
+                        ->dehydrated()
+                        // ⛔ server-side belt:即使 state 被竄改也只接受固定值。
+                        ->rule('in:'.IntegrationProvider::TheMostPanel->value)
                         ->required(),
 
-                    TextInput::make('provider_service_id')
+                    Select::make('provider_service_id')
                         ->label('供應商服務代碼')
-                        ->helperText('供應商後台的 service ID。填錯會派到別的服務，請務必核對。')
+                        ->helperText('只能從已觀察且可用的供應商服務目錄選擇。填錯會派到別的服務，請務必核對。')
+                        /*
+                         * 選項只列 available catalog rows;label 帶 ID／名稱
+                         * ／分類方便辨識。⛔ provider-controlled text 只當
+                         * 純文字 label,Filament escaped 渲染,絕不 ->html()。
+                         *
+                         * 編輯 stale mapping 時,舊 ID 以「已不在可用目錄」
+                         * 附註列出,讓 Owner 看得見歷史值——能否保存由
+                         * server-side rule 決定,不由選單決定。
+                         */
+                        ->options(function (?FulfillmentMapping $record): array {
+                            $options = ProviderService::query()
+                                ->where('provider', IntegrationProvider::TheMostPanel->value)
+                                ->where('is_available', true)
+                                ->orderBy('provider_service_id')
+                                ->get()
+                                ->mapWithKeys(fn (ProviderService $service) => [
+                                    $service->provider_service_id => $service->provider_service_id
+                                        .'｜'.$service->name
+                                        .'｜'.$service->category,
+                                ])
+                                ->all();
+
+                            $current = $record?->provider_service_id;
+
+                            if ($current !== null && $current !== '' && ! isset($options[$current])) {
+                                $options[$current] = $current.'（已不在可用目錄）';
+                            }
+
+                            return $options;
+                        })
+                        ->searchable()
                         ->required()
-                        ->maxLength(64),
+                        /*
+                         * ⛔ Submit-time server-side re-validation:選單只是
+                         * 方便,不是邊界。啟用中(is_enabled true)一律要求
+                         * available;只有停用時才可保留編輯前的 stale ID。
+                         */
+                        ->rules(fn (Get $get, ?FulfillmentMapping $record): array => [
+                            new AvailableProviderService(
+                                $get('is_enabled') ? null : $record?->provider_service_id,
+                            ),
+                        ]),
 
                     Select::make('payload_type')
                         ->label('資料型別')

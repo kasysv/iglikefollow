@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\ProviderServices\Pages;
 
 use App\Filament\Resources\ProviderServices\ProviderServiceResource;
+use App\Models\ProviderService;
 use Filament\Resources\Pages\ListRecords;
 
 class ListProviderServices extends ListRecords
@@ -16,12 +17,25 @@ class ListProviderServices extends ListRecords
     }
 
     /*
-     * ⛔ 兩句警語都必須常駐：rate 是供應商原始值不是本站售價，而
-     * CATALOG-A 還沒同步過真實帳戶——沒有這兩句，這頁看起來像定價表。
+     * ⛔ rate 警語必須常駐：rate 是供應商原始值不是本站售價——沒有這句，
+     * 這頁看起來像定價表。第二句依事實而變：B4-C-C-B 之後本機已觀察過
+     * 真實 catalog，再寫死「尚未同步」就是錯誤陳述；有資料時只陳述安全
+     * 事實（row count 與最後觀察時間），不下任何商業判斷。
      */
     public function getSubheading(): ?string
     {
-        return 'rate 是供應商原始值，幣別／計費單位未驗證，不是本站售價。'
-            .'CATALOG-A 為本機 foundation，尚未同步真實帳戶。';
+        $warning = 'rate 是供應商原始值，幣別／計費單位未驗證，不是本站售價。';
+
+        $observed = ProviderService::query()->count();
+
+        if ($observed === 0) {
+            // ⛔ 沒資料的正確解讀仍是「尚未同步」，不是「帳戶沒有服務」。
+            return $warning.'本機尚未同步供應商服務目錄；沒有資料代表尚未同步，不代表帳戶沒有服務。';
+        }
+
+        $lastSeen = (string) ProviderService::query()->max('last_seen_at');
+
+        return $warning
+            .'本機最近成功觀察 '.$observed.' 筆服務（最後觀察 '.$lastSeen.'）。';
     }
 }

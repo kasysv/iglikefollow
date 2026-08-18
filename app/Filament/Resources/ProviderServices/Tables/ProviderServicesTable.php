@@ -2,15 +2,24 @@
 
 namespace App\Filament\Resources\ProviderServices\Tables;
 
+use App\Models\ProviderService;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 
 /**
  * ⛔ Every text column here is provider-controlled and rendered as plain,
  * escaped text — TextColumn's default. Nothing calls `->html()`, and nothing
  * ever may: a service name is exactly where a hostile catalog would put
- * markup.
+ * markup. Filter options built from catalog values are rendered through the
+ * same escaping — they are labels, never markup.
+ *
+ * 264 real rows made scrolling useless: the Owner reviews the catalog by
+ * searching service ID / name / category and narrowing by availability,
+ * category, type, refill and cancel. Still strictly read-only — no export,
+ * sync, test, create, edit or delete.
  */
 class ProviderServicesTable
 {
@@ -20,7 +29,7 @@ class ProviderServicesTable
             ->columns([
                 TextColumn::make('provider')->label('供應商')->badge(),
                 // 只有 Owner 看得到這張表，⛔ 所以這一欄不再另外遮罩。
-                TextColumn::make('provider_service_id')->label('服務代碼')->copyable(),
+                TextColumn::make('provider_service_id')->label('服務代碼')->copyable()->searchable(),
                 TextColumn::make('name')->label('名稱')->searchable()->wrap(),
                 TextColumn::make('service_type')->label('型別原文'),
                 TextColumn::make('category')->label('分類原文')->searchable(),
@@ -32,6 +41,30 @@ class ProviderServicesTable
                 IconColumn::make('supports_cancel')->label('cancel')->boolean(),
                 IconColumn::make('is_available')->label('可用')->boolean(),
                 TextColumn::make('last_seen_at')->label('最後觀察')->dateTime('Y-m-d H:i')->sortable(),
+            ])
+            ->filters([
+                TernaryFilter::make('is_available')->label('可用'),
+                /*
+                 * 分類／型別選項取自已觀察 catalog 的 distinct 值。
+                 * ⛔ provider-controlled text 只能是純文字 label,Filament
+                 * 以 escaped 文字渲染選項;絕不 ->html()。
+                 */
+                SelectFilter::make('category')
+                    ->label('分類')
+                    ->options(fn (): array => ProviderService::query()
+                        ->distinct()
+                        ->orderBy('category')
+                        ->pluck('category', 'category')
+                        ->all()),
+                SelectFilter::make('service_type')
+                    ->label('型別')
+                    ->options(fn (): array => ProviderService::query()
+                        ->distinct()
+                        ->orderBy('service_type')
+                        ->pluck('service_type', 'service_type')
+                        ->all()),
+                TernaryFilter::make('supports_refill')->label('refill'),
+                TernaryFilter::make('supports_cancel')->label('cancel'),
             ])
             ->defaultSort('id', 'desc')
             // ⛔ 「尚未同步」而非「帳戶沒有服務」：本機從未觀察過真實 catalog。

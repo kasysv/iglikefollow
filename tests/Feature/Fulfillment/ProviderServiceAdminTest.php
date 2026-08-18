@@ -2,12 +2,14 @@
 
 namespace Tests\Feature\Fulfillment;
 
+use App\Filament\Resources\ProviderServices\Pages\ListProviderServices;
 use App\Models\ProviderService;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -67,13 +69,34 @@ class ProviderServiceAdminTest extends TestCase
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 
-    public function test_the_rate_and_not_synced_warnings_are_always_visible(): void
+    public function test_the_rate_warning_and_empty_copy_are_visible_before_any_sync(): void
     {
         $response = $this->actingAs($this->owner())->get(self::URL);
 
         $response->assertOk();
+        // ⛔ rate 警語常駐;沒資料時仍是「尚未同步」而非「帳戶沒有服務」。
         $response->assertSee('不是本站售價');
-        $response->assertSee('CATALOG-A 為本機 foundation，尚未同步真實帳戶');
+        $response->assertSee('尚未同步');
+        $response->assertSee('不代表帳戶沒有服務');
+    }
+
+    /**
+     * ⛔ B4-C-C-B 之後「尚未同步真實帳戶」是錯誤陳述:有資料時說明改為
+     * 安全事實(row count＋最後觀察時間),rate 警語仍常駐。
+     */
+    public function test_an_observed_catalog_shows_the_count_and_last_seen_instead_of_not_synced(): void
+    {
+        ProviderService::factory()->count(3)->available()->create();
+        ProviderService::query()->update(['last_seen_at' => '2026-08-18 12:49:15', 'first_seen_at' => '2026-08-18 12:49:15']);
+
+        $response = $this->actingAs($this->owner())->get(self::URL);
+
+        $response->assertOk();
+        $response->assertSee('不是本站售價');
+        $response->assertSee('本機最近成功觀察 3 筆服務');
+        $response->assertSee('2026-08-18 12:49:15');
+        // ⛔ 有資料時不得再宣稱尚未同步。
+        $response->assertDontSee('尚未同步');
     }
 
     public function test_the_empty_state_says_not_synced_rather_than_no_services(): void
@@ -163,6 +186,64 @@ class ProviderServiceAdminTest extends TestCase
         }
 
         $this->assertSame(['admin/provider-services'], $matched);
+    }
+
+    // ==================================== MAPPING-UI-A:Owner review 搜尋／篩選
+
+    /** 264 筆真實 catalog 之後,Owner 靠搜尋而不是捲動找服務。 */
+    public function test_the_catalog_is_searchable_by_id_name_and_category(): void
+    {
+        $this->actingAs($this->owner());
+
+        $target = ProviderService::factory()->available()->create([
+            'provider_service_id' => '91011',
+            'name' => '獨特虛構搜尋服務',
+            'category' => '獨特虛構分類',
+        ]);
+        $other = ProviderService::factory()->available()->create([
+            'provider_service_id' => '92022',
+            'name' => '另一個虛構服務',
+            'category' => '別的分類',
+        ]);
+
+        foreach (['91011', '獨特虛構搜尋服務', '獨特虛構分類'] as $term) {
+            Livewire::test(ListProviderServices::class)
+                ->searchTable($term)
+                ->assertCanSeeTableRecords([$target])
+                ->assertCanNotSeeTableRecords([$other]);
+        }
+    }
+
+    public function test_the_catalog_is_filterable_by_availability_category_type_refill_and_cancel(): void
+    {
+        $this->actingAs($this->owner());
+
+        $available = ProviderService::factory()->available()->create([
+            'category' => '分類甲', 'service_type' => 'Default', 'supports_refill' => true,
+        ]);
+        $unavailable = ProviderService::factory()->create([
+            'category' => '分類乙', 'service_type' => 'Custom', 'supports_refill' => false,
+        ]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('is_available', true)
+            ->assertCanSeeTableRecords([$available])
+            ->assertCanNotSeeTableRecords([$unavailable]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('category', '分類乙')
+            ->assertCanSeeTableRecords([$unavailable])
+            ->assertCanNotSeeTableRecords([$available]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('service_type', 'Default')
+            ->assertCanSeeTableRecords([$available])
+            ->assertCanNotSeeTableRecords([$unavailable]);
+
+        Livewire::test(ListProviderServices::class)
+            ->filterTable('supports_refill', true)
+            ->assertCanSeeTableRecords([$available])
+            ->assertCanNotSeeTableRecords([$unavailable]);
     }
 
     /** 公開頁不得因 catalog 存在而查詢它。 */
