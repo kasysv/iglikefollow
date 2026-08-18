@@ -61,13 +61,10 @@ class SyncTheMostPanelServiceCatalog extends Command
 
         try {
             /*
-             * ⛔ 路徑固定在 storage 私有目錄，不接受 CLI／env 指定;
-             * 檔名只由驗證後的 ID 組成。
+             * ⛔ 路徑固定在 storage 私有目錄,由 ledger class 自行解析;
+             * 這裡連指定目錄的能力都沒有,檔名只由驗證後的 ID 組成。
              */
-            $ledger = TheMostPanelCatalogSyncExecutionLedger::open(
-                storage_path('app/private/themostpanel/catalog-sync-attempts'),
-                $executionId,
-            );
+            $ledger = TheMostPanelCatalogSyncExecutionLedger::open($executionId);
         } catch (RuntimeException $e) {
             // ledger 的兩個固定安全訊息;⛔ 此時 source／credential／HTTP 均為 0。
             $this->error($e->getMessage());
@@ -82,7 +79,8 @@ class SyncTheMostPanelServiceCatalog extends Command
             $this->line($field.': '.(is_bool($value) ? ($value ? 'true' : 'false') : (string) $value));
         }
 
-        if (! $ledger->recordFinal($result->toArray())) {
+        // ⛔ 傳 typed result object,不傳 array:ledger 內部自行呼叫 toArray()。
+        if (! $ledger->recordFinal($result)) {
             /*
              * ⛔ final append 失敗不重跑 action——action 已經發生了。initial
              * marker 永久保留,本 ID 已消耗,交人工審查。

@@ -2,6 +2,7 @@
 
 namespace App\Services\Fulfillment;
 
+use App\Data\Fulfillment\ProviderServiceCatalogSyncResult;
 use RuntimeException;
 
 /**
@@ -22,11 +23,21 @@ use RuntimeException;
  * quietly rebuild the file.
  *
  * ⛔ Contents are safe fields only: execution ID, UTC timestamp, a fixed
- * state, and the sync result's safe array. No exception, raw body,
- * credential or provider business data has any entrance here.
+ * state, and the sync result's safe array. The final record accepts only the
+ * typed result object — no array, string or other caller-shaped entrance —
+ * so no exception, raw body, credential or provider business data can reach
+ * the file even from a future buggy caller.
+ *
+ * ⛔ The location is not a parameter. The ledger lives in exactly one place
+ * under the application's private storage; no caller, CLI option, env value
+ * or config key can point it anywhere else. Tests isolate themselves by
+ * swapping the storage root, never by handing this class a path.
  */
 class TheMostPanelCatalogSyncExecutionLedger
 {
+    /** ⛔ 唯一的 ledger 位置,寫死在 class 內;不存在任何目錄參數。 */
+    private const RELATIVE_DIRECTORY = 'app/private/themostpanel/catalog-sync-attempts';
+
     /** 8–64 位大寫英數與連字號,首字元須為英數;⛔ 非秘密識別碼。 */
     public const ID_PATTERN = '/\A[A-Z0-9][A-Z0-9-]{7,63}\z/';
 
@@ -60,11 +71,14 @@ class TheMostPanelCatalogSyncExecutionLedger
      * or an initial write that cannot be flushed. On failure the caller has
      * nothing to call the source with.
      */
-    public static function open(string $directory, string $executionId): self
+    public static function open(string $executionId): self
     {
         if (! self::isValidExecutionId($executionId)) {
             throw new RuntimeException(self::CREATE_FAILED_MESSAGE);
         }
+
+        // ⛔ 固定位置:目錄由 class 自行解析,caller 沒有任何指定入口。
+        $directory = storage_path(self::RELATIVE_DIRECTORY);
 
         if (! is_dir($directory) && ! @mkdir($directory, 0770, true) && ! is_dir($directory)) {
             throw new RuntimeException(self::CREATE_FAILED_MESSAGE);
@@ -112,15 +126,19 @@ class TheMostPanelCatalogSyncExecutionLedger
      * has already happened, so the only correct reaction to a failure is
      * "keep the initial marker, tell a human" — never a rerun.
      *
-     * @param  array<string, mixed>  $safeFields
+     * ⛔ Typed entrance only. The parameter type is the boundary: the result
+     * class is the allowlist of everything a ledger line may contain, and its
+     * own `toArray()` is called here, inside. An arbitrary array — the shape
+     * GPT's counter-probe used to persist fake raw-body and credential
+     * markers — no longer has any way in.
      */
-    public function recordFinal(array $safeFields): bool
+    public function recordFinal(ProviderServiceCatalogSyncResult $result): bool
     {
         return $this->append([
             'execution_id' => $this->executionId,
             'state' => 'completed',
             'recorded_at_utc' => gmdate('Y-m-d\TH:i:s\Z'),
-        ] + $safeFields);
+        ] + $result->toArray());
     }
 
     /** @param array<string, mixed> $record */
