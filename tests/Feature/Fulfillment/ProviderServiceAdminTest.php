@@ -246,6 +246,20 @@ class ProviderServiceAdminTest extends TestCase
             ->assertCanNotSeeTableRecords([$unavailable]);
     }
 
+    /** 預設排序:服務代碼由最小開始且為數值序——'9' 在 '99'、'100' 之前。 */
+    public function test_the_default_sort_is_numeric_ascending_by_service_id(): void
+    {
+        $this->actingAs($this->owner());
+
+        $c = ProviderService::factory()->available()->create(['provider_service_id' => '100']);
+        $b = ProviderService::factory()->available()->create(['provider_service_id' => '99']);
+        $a = ProviderService::factory()->available()->create(['provider_service_id' => '9']);
+
+        // ⛔ 數值序(長度＋lexicographic),不是字典序('100' < '99')。
+        Livewire::test(ListProviderServices::class)
+            ->assertCanSeeTableRecords([$a, $b, $c], inOrder: true);
+    }
+
     /** R1:cancel filter 的獨立正／反資料證明。 */
     public function test_the_cancel_filter_narrows_to_cancelable_rows(): void
     {

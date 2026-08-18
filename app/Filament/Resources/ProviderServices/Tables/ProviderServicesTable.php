@@ -8,6 +8,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * ⛔ Every text column here is provider-controlled and rendered as plain,
@@ -29,7 +30,18 @@ class ProviderServicesTable
             ->columns([
                 TextColumn::make('provider')->label('供應商')->badge(),
                 // 只有 Owner 看得到這張表，⛔ 所以這一欄不再另外遮罩。
-                TextColumn::make('provider_service_id')->label('服務代碼')->copyable()->searchable(),
+                TextColumn::make('provider_service_id')
+                    ->label('服務代碼')
+                    ->copyable()
+                    ->searchable()
+                    /*
+                     * 服務代碼是 canonical digit string:數值排序用
+                     * 長度＋lexicographic,與 parser／compatibility 的
+                     * overflow-safe 比較同一語意;⛔ 不 CAST 成 int。
+                     * $direction 由 Filament 提供,只會是 asc／desc。
+                     */
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderByRaw("length(provider_service_id) {$direction}, provider_service_id {$direction}")),
                 TextColumn::make('name')->label('名稱')->searchable()->wrap(),
                 TextColumn::make('service_type')->label('型別原文'),
                 TextColumn::make('category')->label('分類原文')->searchable(),
@@ -66,7 +78,8 @@ class ProviderServicesTable
                 TernaryFilter::make('supports_refill')->label('refill'),
                 TernaryFilter::make('supports_cancel')->label('cancel'),
             ])
-            ->defaultSort('id', 'desc')
+            // 預設:服務代碼由最小開始(數值序),小代碼在第一頁。
+            ->defaultSort('provider_service_id', 'asc')
             // ⛔ 「尚未同步」而非「帳戶沒有服務」：本機從未觀察過真實 catalog。
             ->emptyStateHeading('尚未同步')
             ->emptyStateDescription(
