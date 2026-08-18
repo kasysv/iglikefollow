@@ -81,18 +81,35 @@ final class TheMostPanelCatalogParseException extends Exception
         'service', 'name', 'type', 'category', 'rate', 'min', 'max', 'refill', 'cancel',
     ];
 
+    /**
+     * ⛔ The seven JSON types a decoded value can have — the entire safe
+     * vocabulary for "what the field actually was". A type code describes
+     * the JSON type and nothing else: no value, no length, no class name,
+     * no body fragment.
+     *
+     * @var list<string>
+     */
+    private const OBSERVED_TYPES = [
+        'string', 'integer', 'float', 'boolean', 'null', 'object', 'list',
+    ];
+
     private function __construct(
         public readonly string $reason,
         public readonly ?string $field = null,
+        /** JSON type code；只有 WRONG_TYPE 可帶，⛔ 從不是 provider 值。 */
+        public readonly ?string $observedType = null,
     ) {
-        // ⛔ 固定安全訊息：reason 與欄位名都出自本地 allowlist，沒有任何回應內容。
+        // ⛔ 固定安全訊息：reason、欄位名與型別碼都出自本地 allowlist，
+        // 沒有任何回應內容。
         parent::__construct(
             'TheMostPanel services 回應未通過本地驗證：'.$reason
-            .($field !== null ? '（欄位 '.$field.'）' : '')
+            .($field !== null
+                ? '（欄位 '.$field.($observedType !== null ? '，觀察型別 '.$observedType : '').'）'
+                : '')
         );
     }
 
-    public static function because(string $reason, ?string $field = null): self
+    public static function because(string $reason, ?string $field = null, ?string $observedType = null): self
     {
         if (! self::isAllowlistedReason($reason)) {
             // ⛔ Programmer error, failed closed: an unlisted reason could be
@@ -104,7 +121,21 @@ final class TheMostPanelCatalogParseException extends Exception
             throw new InvalidArgumentException('⛔ 不在 allowlist 中的 catalog 欄位名。');
         }
 
-        return new self($reason, $field);
+        /*
+         * ⛔ Observed type 的組合規則是 constructor factory 層的硬約束,
+         * 不是慣例:WRONG_TYPE 必須同時帶 documented field 與 allowlisted
+         * JSON type;其他 reason 一律不得帶 type。任意字串、class name、
+         * 大小寫變體、控制字元與超長輸入全部在嚴格 in_array 就失敗。
+         */
+        if ($reason === self::WRONG_TYPE) {
+            if ($field === null || $observedType === null || ! self::isAllowlistedObservedType($observedType)) {
+                throw new InvalidArgumentException('⛔ WRONG_TYPE 必須帶文件欄位名與 allowlisted JSON type。');
+            }
+        } elseif ($observedType !== null) {
+            throw new InvalidArgumentException('⛔ 只有 WRONG_TYPE 可帶 observed type。');
+        }
+
+        return new self($reason, $field, $observedType);
     }
 
     /**
@@ -120,5 +151,10 @@ final class TheMostPanelCatalogParseException extends Exception
     public static function isDocumentedField(string $field): bool
     {
         return in_array($field, self::FIELDS, true);
+    }
+
+    public static function isAllowlistedObservedType(string $observedType): bool
+    {
+        return in_array($observedType, self::OBSERVED_TYPES, true);
     }
 }

@@ -54,6 +54,8 @@ final class ProviderServiceCatalogSyncResult
         public readonly ?string $parserReason = null,
         /** 文件九欄位之一；⛔ 永遠不是 provider 值。 */
         public readonly ?string $parserField = null,
+        /** 七碼 JSON type 之一；只有 WRONG_TYPE 可帶，⛔ 永遠不是 provider 值。 */
+        public readonly ?string $parserObservedType = null,
     ) {}
 
     public static function applied(?int $httpStatus, ?int $elapsedMs): self
@@ -83,7 +85,19 @@ final class ProviderServiceCatalogSyncResult
             ? $exception->field
             : null;
 
-        return new self('catalog_rejected_by_parser', false, $httpStatus, $elapsedMs, $reason, $field);
+        /*
+         * ⛔ Observed type 只在完整合法組合下通過:reason 恰為 WRONG_TYPE、
+         * field 是文件九欄位之一、type 在七碼 allowlist 內。任何一項不符
+         * 就丟棄,不印。
+         */
+        $observedType = $reason === TheMostPanelCatalogParseException::WRONG_TYPE
+            && $field !== null
+            && $exception->observedType !== null
+            && TheMostPanelCatalogParseException::isAllowlistedObservedType($exception->observedType)
+            ? $exception->observedType
+            : null;
+
+        return new self('catalog_rejected_by_parser', false, $httpStatus, $elapsedMs, $reason, $field, $observedType);
     }
 
     /**
@@ -113,6 +127,7 @@ final class ProviderServiceCatalogSyncResult
             'elapsed_ms' => $this->elapsedMs,
             'parser_reason' => $this->parserReason,
             'parser_field' => $this->parserField,
+            'parser_observed_type' => $this->parserObservedType,
         ], fn ($value) => $value !== null);
     }
 }

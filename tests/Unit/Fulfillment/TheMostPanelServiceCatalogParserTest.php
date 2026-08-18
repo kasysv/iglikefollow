@@ -64,6 +64,11 @@ class TheMostPanelServiceCatalogParserTest extends TestCase
             $this->fail('必須整份拒絕，卻通過了。');
         } catch (TheMostPanelCatalogParseException $e) {
             $this->assertSame($reason, $e->reason);
+
+            // ⛔ B4-C-A contract：只有 WRONG_TYPE 可帶 observed type。
+            if ($e->reason !== TheMostPanelCatalogParseException::WRONG_TYPE) {
+                $this->assertNull($e->observedType);
+            }
         }
     }
 
@@ -282,5 +287,120 @@ class TheMostPanelServiceCatalogParserTest extends TestCase
             TheMostPanelCatalogParseException::WRONG_TYPE,
             'sk-live-fake-value'
         );
+    }
+
+    // ==================================== B4-C-A：安全 JSON type diagnostic
+
+    /**
+     * B4-B 只知道 `min` 型別錯,不知道實際是什麼型別。七種 JSON type 各以
+     * 一個 fictional fixture 實測:exception 帶出精確 allowlisted type code,
+     * 而 provider 值不在任何輸出。
+     *
+     * @return array<string, array{0: string, 1: string, 2: array<string, mixed>}>
+     */
+    public static function observedTypeProvider(): array
+    {
+        return [
+            'boolean field got string' => ['refill', 'string', self::item(['refill' => 'true'])],
+            'min got integer (B4-B live shape)' => ['min', 'integer', self::item(['min' => 10])],
+            'rate got float' => ['rate', 'float', self::item(['rate' => 0.9])],
+            'name got boolean' => ['name', 'boolean', self::item(['name' => true])],
+            'category got null' => ['category', 'null', self::item(['category' => null])],
+            'min got object' => ['min', 'object', self::item(['min' => (object) ['nested' => 1]])],
+            'max got list' => ['max', 'list', self::item(['max' => ['10']])],
+        ];
+    }
+
+    #[DataProvider('observedTypeProvider')]
+    public function test_a_wrong_type_rejection_names_the_safe_json_type(
+        string $expectedField,
+        string $expectedType,
+        array $item,
+    ): void {
+        try {
+            $this->parser()->parse(json_encode([$item]));
+            $this->fail('必須整份拒絕，卻通過了。');
+        } catch (TheMostPanelCatalogParseException $e) {
+            $this->assertSame(TheMostPanelCatalogParseException::WRONG_TYPE, $e->reason);
+            $this->assertSame($expectedField, $e->field);
+            $this->assertSame($expectedType, $e->observedType);
+
+            // ⛔ 診斷只描述型別:fixture 的值不在 message 或欄位。
+            $this->assertStringNotContainsString('10', $e->getMessage());
+            $this->assertStringNotContainsString('0.9', $e->getMessage());
+            $this->assertStringNotContainsString('nested', $e->getMessage());
+        }
+    }
+
+    /**
+     * ⛔ 診斷新增不放寬 schema:B4-B 同形狀的 integer `min` 仍整份拒絕,
+     * canonical digit string 仍照常接受。
+     */
+    public function test_the_integer_min_fixture_is_still_rejected_entirely(): void
+    {
+        $raw = json_encode([self::item(), self::item(['service' => 9102, 'min' => 10])]);
+
+        try {
+            $this->parser()->parse($raw);
+            $this->fail('integer min 必須整份拒絕');
+        } catch (TheMostPanelCatalogParseException $e) {
+            $this->assertSame(TheMostPanelCatalogParseException::WRONG_TYPE, $e->reason);
+            $this->assertSame('min', $e->field);
+            $this->assertSame('integer', $e->observedType);
+        }
+
+        // string '10' 的原 fixture 仍接受——接受規則一個字都沒動。
+        $this->assertCount(1, $this->parser()->parse(json_encode([self::item()])));
+    }
+
+    /** ⛔ 組合規則是 constructor factory 的硬約束,不合法組合全部 fail closed。 */
+    public function test_illegal_observed_type_combinations_cannot_be_constructed(): void
+    {
+        $e = TheMostPanelCatalogParseException::class;
+
+        $illegal = [
+            'WRONG_TYPE 缺 type' => fn () => $e::because($e::WRONG_TYPE, 'min'),
+            'WRONG_TYPE 缺 field' => fn () => $e::because($e::WRONG_TYPE, null, 'integer'),
+            'WRONG_TYPE 全缺' => fn () => $e::because($e::WRONG_TYPE),
+            '其他 reason 帶 type' => fn () => $e::because($e::MISSING_FIELD, 'min', 'integer'),
+            '無 field 的 reason 帶 type' => fn () => $e::because($e::MALFORMED_JSON, null, 'string'),
+        ];
+
+        foreach ($illegal as $label => $construct) {
+            try {
+                $construct();
+                $this->fail($label.':必須 InvalidArgumentException');
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    /** ⛔ allowlist 之外的 type 字串沒有任何建構路徑。 */
+    public function test_observed_types_outside_the_allowlist_cannot_be_constructed(): void
+    {
+        $e = TheMostPanelCatalogParseException::class;
+
+        $bad = [
+            'class name' => 'stdClass',
+            'case variant' => 'InTeGeR',
+            'php alias' => 'double',
+            'fake key marker' => 'FAKE-API-KEY-MARKER-777',
+            'newline' => "integer\n",
+            'ansi escape' => "\x1b[31minteger",
+            'overlong' => str_repeat('integer', 64),
+            'empty' => '',
+        ];
+
+        foreach ($bad as $label => $type) {
+            $this->assertFalse($e::isAllowlistedObservedType($type), $label);
+
+            try {
+                $e::because($e::WRONG_TYPE, 'min', $type);
+                $this->fail($label.':必須 InvalidArgumentException');
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 }

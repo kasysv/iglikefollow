@@ -929,13 +929,16 @@ class TheMostPanelCatalogSyncTest extends TestCase
 
     // ==================================== 12. B4-A：parser 安全診斷
 
-    /** @return array<string, array{0: mixed, 1: string, 2: ?string}> */
+    /** @return array<string, array{0: mixed, 1: string, 2: ?string, 3: ?string}> */
     public static function parserDiagnosticProvider(): array
     {
         $item = self::fictionalServices()[0];
 
         $wrongRateType = $item;
         $wrongRateType['rate'] = 0.9;
+
+        $integerMin = $item;
+        $integerMin['min'] = 10;
 
         $missingCancel = $item;
         unset($missingCancel['cancel']);
@@ -948,25 +951,28 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $badServiceId['service'] = '9101';
 
         return [
-            'malformed json' => ['[{"service": 1,', 'catalog_malformed_json', null],
-            'top-level object' => ['{"error":"fictional"}', 'catalog_top_level_not_list', null],
-            'empty list' => ['[]', 'catalog_empty_list', null],
-            'wrong rate type' => [[$wrongRateType], 'catalog_wrong_type', 'rate'],
-            'missing cancel' => [[$missingCancel], 'catalog_missing_field', 'cancel'],
-            'inverted bounds' => [[$invertedBounds], 'catalog_quantity_bounds_inverted', 'max'],
-            'service id as string' => [[$badServiceId], 'catalog_invalid_service_id', 'service'],
+            'malformed json' => ['[{"service": 1,', 'catalog_malformed_json', null, null],
+            'top-level object' => ['{"error":"fictional"}', 'catalog_top_level_not_list', null, null],
+            'empty list' => ['[]', 'catalog_empty_list', null, null],
+            'wrong rate type' => [[$wrongRateType], 'catalog_wrong_type', 'rate', 'float'],
+            'integer min (B4-B live shape)' => [[$integerMin], 'catalog_wrong_type', 'min', 'integer'],
+            'missing cancel' => [[$missingCancel], 'catalog_missing_field', 'cancel', null],
+            'inverted bounds' => [[$invertedBounds], 'catalog_quantity_bounds_inverted', 'max', null],
+            'service id as string' => [[$badServiceId], 'catalog_invalid_service_id', 'service', null],
         ];
     }
 
     /**
      * ⛔ B3 之後的修正：parser 拒絕不再只剩一個籠統代碼。result 帶出 parser
-     * 自己的本地 allowlisted reason 與文件欄位名——而且只有這兩樣。
+     * 自己的本地 allowlisted reason、文件欄位名與（B4-C-A 起、僅限
+     * WRONG_TYPE）allowlisted JSON type——而且只有這三樣。
      */
     #[DataProvider('parserDiagnosticProvider')]
     public function test_a_parser_rejection_carries_the_safe_reason_and_field(
         mixed $body,
         string $expectedReason,
         ?string $expectedField,
+        ?string $expectedObservedType,
     ): void {
         Http::fake([self::ENDPOINT => Http::response($body)]);
         $this->withCredential();
@@ -977,11 +983,19 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $this->assertFalse($result->applied);
         $this->assertSame($expectedReason, $result->parserReason);
         $this->assertSame($expectedField, $result->parserField);
+        $this->assertSame($expectedObservedType, $result->parserObservedType);
 
         $encoded = json_encode($result->toArray(), JSON_UNESCAPED_UNICODE);
 
-        // toArray 帶 reason；field 只在有值時出現。
+        // toArray 帶 reason；field／type 只在有值時出現。
         $this->assertSame($expectedReason, $result->toArray()['parser_reason']);
+
+        if ($expectedObservedType !== null) {
+            $this->assertSame($expectedObservedType, $result->toArray()['parser_observed_type']);
+        } else {
+            $this->assertArrayNotHasKey('parser_observed_type', $result->toArray());
+        }
+
         // ⛔ provider 值與 key 不出現。
         $this->assertStringNotContainsString(self::KEY_MARKER, $encoded);
         $this->assertStringNotContainsString('虛構', $encoded);
@@ -1000,8 +1014,10 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $this->assertSame('server_error', $result->outcome);
         $this->assertNull($result->parserReason);
         $this->assertNull($result->parserField);
+        $this->assertNull($result->parserObservedType);
         $this->assertArrayNotHasKey('parser_reason', $result->toArray());
         $this->assertArrayNotHasKey('parser_field', $result->toArray());
+        $this->assertArrayNotHasKey('parser_observed_type', $result->toArray());
     }
 
     /**
@@ -1013,13 +1029,27 @@ class TheMostPanelCatalogSyncTest extends TestCase
     {
         $exception = TheMostPanelCatalogParseException::because(
             TheMostPanelCatalogParseException::WRONG_TYPE,
-            'rate'
+            'rate',
+            'float'
         );
 
         $result = ProviderServiceCatalogSyncResult::rejectedByParser($exception, 200, 12);
 
         $this->assertSame('catalog_wrong_type', $result->parserReason);
         $this->assertSame('rate', $result->parserField);
+        $this->assertSame('float', $result->parserObservedType);
+
+        // 非 WRONG_TYPE 的 exception 不帶 type,result 也不得出現該欄位。
+        $nonType = ProviderServiceCatalogSyncResult::rejectedByParser(
+            TheMostPanelCatalogParseException::because(
+                TheMostPanelCatalogParseException::MISSING_FIELD,
+                'cancel'
+            ),
+            200,
+            12,
+        );
+        $this->assertNull($nonType->parserObservedType);
+        $this->assertArrayNotHasKey('parser_observed_type', $nonType->toArray());
 
         // allowlist 之外的 reason／field 在 exception 層就 fail closed。
         $this->expectException(\InvalidArgumentException::class);
@@ -1041,7 +1071,9 @@ class TheMostPanelCatalogSyncTest extends TestCase
 
         $this->assertSame('catalog_stale_refused', $result->outcome);
         $this->assertNull($result->parserReason);
+        $this->assertNull($result->parserObservedType);
         $this->assertArrayNotHasKey('parser_reason', $result->toArray());
+        $this->assertArrayNotHasKey('parser_observed_type', $result->toArray());
 
         Date::setTestNow();
     }

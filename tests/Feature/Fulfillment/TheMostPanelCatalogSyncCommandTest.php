@@ -357,19 +357,19 @@ class TheMostPanelCatalogSyncCommandTest extends TestCase
             ->expectsOutputToContain('outcome: catalog_rejected_by_parser')
             ->expectsOutputToContain('parser_reason: catalog_wrong_type')
             ->expectsOutputToContain('parser_field: rate')
+            // ⛔ B4-C-A:WRONG_TYPE 另帶 allowlisted JSON type,仍不帶值。
+            ->expectsOutputToContain('parser_observed_type: float')
             ->doesntExpectOutputToContain('0.9')
             ->assertFailed();
 
-        $final = json_decode(
-            array_values(array_filter(explode(
-                "\n",
-                (string) file_get_contents($this->ledgerPath('B4A-CMD-0006'))
-            )))[1],
-            true
-        );
+        $raw = (string) file_get_contents($this->ledgerPath('B4A-CMD-0006'));
+        $final = json_decode(array_values(array_filter(explode("\n", $raw)))[1], true);
 
         $this->assertSame('catalog_wrong_type', $final['parser_reason']);
         $this->assertSame('rate', $final['parser_field']);
+        $this->assertSame('float', $final['parser_observed_type']);
+        // ⛔ ledger 只多一個 allowlisted key＋code:fixture 值不落地。
+        $this->assertStringNotContainsString('0.9', $raw);
         $this->assertSame(0, ProviderService::query()->count());
     }
 

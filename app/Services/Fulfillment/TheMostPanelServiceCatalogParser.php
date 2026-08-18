@@ -182,7 +182,8 @@ class TheMostPanelServiceCatalogParser
         if (! is_string($value)) {
             throw TheMostPanelCatalogParseException::because(
                 TheMostPanelCatalogParseException::WRONG_TYPE,
-                $field
+                $field,
+                $this->jsonType($value)
             );
         }
 
@@ -225,7 +226,8 @@ class TheMostPanelServiceCatalogParser
         if (! is_string($value)) {
             throw TheMostPanelCatalogParseException::because(
                 TheMostPanelCatalogParseException::WRONG_TYPE,
-                'rate'
+                'rate',
+                $this->jsonType($value)
             );
         }
 
@@ -248,7 +250,8 @@ class TheMostPanelServiceCatalogParser
         if (! is_string($value)) {
             throw TheMostPanelCatalogParseException::because(
                 TheMostPanelCatalogParseException::WRONG_TYPE,
-                $field
+                $field,
+                $this->jsonType($value)
             );
         }
 
@@ -302,10 +305,35 @@ class TheMostPanelServiceCatalogParser
         if (! is_bool($value)) {
             throw TheMostPanelCatalogParseException::because(
                 TheMostPanelCatalogParseException::WRONG_TYPE,
-                $field
+                $field,
+                $this->jsonType($value)
             );
         }
 
         return $value;
+    }
+
+    /**
+     * The safe JSON type of a decoded value — the diagnostic added after
+     * B4-B's live rejection could only say "wrong type" without saying which.
+     *
+     * ⛔ Local type checks only, mapping to the exception's closed seven-code
+     * vocabulary. Never `get_debug_type()`, a class name or the value itself.
+     * The parser decodes with assoc=false, so a JSON object is `stdClass` and
+     * a PHP array can only mean a JSON list; any other internal type has no
+     * safe name and fails closed with a fixed message.
+     */
+    private function jsonType(mixed $value): string
+    {
+        return match (true) {
+            is_string($value) => 'string',
+            is_int($value) => 'integer',
+            is_float($value) => 'float',
+            is_bool($value) => 'boolean',
+            $value === null => 'null',
+            $value instanceof stdClass => 'object',
+            is_array($value) => 'list',
+            default => throw new \InvalidArgumentException('⛔ 無法安全分類的內部型別。'),
+        };
     }
 }
