@@ -200,4 +200,262 @@ class StagingDeploymentArtifactsTest extends TestCase
             $this->assertSame([], $suspicious, $file.' 含疑似金鑰的長 base64 字串');
         }
     }
+
+    // ==================================== R1:shell runtime 反證(真的執行)
+
+    /** 找到 bash;⛔ 找不到就明確 fail,不假裝通過。 */
+    private function bash(): string
+    {
+        foreach ([
+            'C:\\Program Files\\Git\\bin\\bash.exe',
+            'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+            '/usr/bin/bash',
+            '/bin/bash',
+        ] as $candidate) {
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $this->fail('⛔ 找不到 bash(Git Bash/Linux bash);runtime 反證無法執行。');
+    }
+
+    /** 建立 fake-curl bin 目錄;⛔ 永不連網,依 URL 回 fixture。 */
+    private function makeFakeCurl(string $mode = 'ok'): string
+    {
+        $dir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'fake-curl-'.uniqid();
+        mkdir($dir, 0777, true);
+
+        $script = <<<'SH'
+#!/usr/bin/env bash
+# fake curl:⛔ 不連網;依 URL 回 fixture(1 H1、meta noindex、
+# X-Robots noindex、robots Disallow)。FAKE_CURL_MODE=fail 模擬 transport failure。
+MODE="${FAKE_CURL_MODE:-ok}"
+HEAD=0
+OUT=""
+URL=""
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then OUT="$a"; fi
+    case "$a" in
+        -sSI|-I) HEAD=1 ;;
+        https://*|http://*) URL="$a" ;;
+    esac
+    prev="$a"
+done
+if [ "$MODE" = "fail" ]; then exit 6; fi
+if [ "$HEAD" = "1" ]; then
+    printf 'HTTP/2 200\r\nx-robots-tag: noindex, nofollow\r\n\r\n'
+    exit 0
+fi
+case "$URL" in
+    */robots.txt) BODY="User-agent: *
+Disallow: /" ;;
+    */up|*/api/health) BODY='ok' ;;
+    *) BODY='<html><head><meta name="robots" content="noindex, nofollow"></head><body><h1>fixture</h1></body></html>' ;;
+esac
+if [ -n "$OUT" ]; then printf '%s' "$BODY" > "$OUT"; fi
+printf '200'
+SH;
+
+        file_put_contents($dir.DIRECTORY_SEPARATOR.'curl', $script);
+        @chmod($dir.DIRECTORY_SEPARATOR.'curl', 0755);
+
+        return $dir;
+    }
+
+    /**
+     * 在受控 PATH＋TMPDIR 下執行 shell script;回 [exitCode, output]。
+     *
+     * ⛔ Windows 的 escapeshellarg 會毀掉內嵌引號,所以把整段 inner
+     * command 寫成 wrapper 檔再交給 bash 執行——cmd 層只有兩個引號安全
+     * 的參數(bash.exe 與 wrapper 路徑)。
+     */
+    private function runScript(string $scriptWinPath, string $args, string $fakeBinDir, string $tmpDir, string $extraExports = ''): array
+    {
+        $bash = $this->bash();
+
+        $cyg = fn (string $winPath): string => "\"\$(cygpath -u '".$this->msys($winPath)."' 2>/dev/null || echo '".$this->msys($winPath)."')\"";
+
+        $wrapper = $tmpDir.DIRECTORY_SEPARATOR.'wrapper-'.uniqid().'.sh';
+        $lines = implode("\n", [
+            '#!/usr/bin/env bash',
+            'FAKEBIN='.$cyg($fakeBinDir),
+            'export PATH="$FAKEBIN:$PATH"',
+            'export TMPDIR='.$cyg($tmpDir),
+            $extraExports,
+            'bash '.$cyg($scriptWinPath).' '.$args.' 2>&1',
+            '',
+        ]);
+        file_put_contents($wrapper, $lines);
+
+        $output = [];
+        $exit = 0;
+        exec('"'.$bash.'" "'.$wrapper.'"', $output, $exit);
+
+        @unlink($wrapper);
+
+        return [$exit, implode("\n", $output)];
+    }
+
+    /** 單引號安全化(路徑不得含單引號;反斜線轉正斜線交給 cygpath)。 */
+    private function msys(string $path): string
+    {
+        $this->assertStringNotContainsString("'", $path);
+
+        return str_replace('\\', '/', $path);
+    }
+
+    /** ⛔ P0 反證:全流程 fixture 下 post-deploy check 必須 exit 0,無 unbound variable。 */
+    public function test_the_post_deploy_check_passes_end_to_end_against_fixtures(): void
+    {
+        $fake = $this->makeFakeCurl();
+        $tmp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pdc-tmp-'.uniqid();
+        mkdir($tmp, 0777, true);
+
+        [$exit, $output] = $this->runScript(
+            base_path(self::DIR.'staging-post-deploy-check.sh'),
+            "'https://staging.example.invalid'",
+            $fake,
+            $tmp,
+        );
+
+        $this->assertSame(0, $exit, $output);
+        $this->assertStringContainsString('全部通過', $output);
+        $this->assertStringNotContainsString('unbound variable', $output);
+        // tempfile 清理:受控 TMPDIR 內不得殘留。
+        $this->assertSame([], glob($tmp.DIRECTORY_SEPARATOR.'*') ?: [], 'tempfile 未清理');
+    }
+
+    /** ⛔ transport failure:明確 BLOCKER、exit 非 0、無 unbound variable、tempfile 清理。 */
+    public function test_the_post_deploy_check_fails_closed_on_transport_failure(): void
+    {
+        $fake = $this->makeFakeCurl();
+        $tmp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pdc-tmp-'.uniqid();
+        mkdir($tmp, 0777, true);
+
+        [$exit, $output] = $this->runScript(
+            base_path(self::DIR.'staging-post-deploy-check.sh'),
+            "'https://staging.example.invalid'",
+            $fake,
+            $tmp,
+            'export FAKE_CURL_MODE=fail;',
+        );
+
+        $this->assertSame(1, $exit, $output);
+        $this->assertStringContainsString('BLOCKER', $output);
+        $this->assertStringContainsString('transport-failure', $output);
+        $this->assertStringNotContainsString('unbound variable', $output);
+        $this->assertSame([], glob($tmp.DIRECTORY_SEPARATOR.'*') ?: [], 'tempfile 未清理');
+    }
+
+    /** base URL 限 https 根網址:非 https、帶 path、帶 userinfo 全部拒絕。 */
+    public function test_the_post_deploy_check_rejects_bad_base_urls(): void
+    {
+        $fake = $this->makeFakeCurl();
+        $tmp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pdc-tmp-'.uniqid();
+        mkdir($tmp, 0777, true);
+
+        foreach ([
+            "'http://staging.example.invalid'",
+            "'https://staging.example.invalid/path'",
+            "'https://user@staging.example.invalid'",
+            "'https://staging.example.invalid/?q=1'",
+        ] as $bad) {
+            [$exit, $output] = $this->runScript(
+                base_path(self::DIR.'staging-post-deploy-check.sh'),
+                $bad,
+                $fake,
+                $tmp,
+            );
+
+            $this->assertSame(1, $exit, $bad.' => '.$output);
+            $this->assertStringContainsString('根網址', $output, $bad);
+            $this->assertStringNotContainsString('unbound variable', $output, $bad);
+        }
+
+        $this->assertSame([], glob($tmp.DIRECTORY_SEPARATOR.'*') ?: []);
+    }
+
+    /**
+     * ⛔ P1 反證:BACKUP_DIR 在 app tree 內時,deploy script 必須在
+     * maintenance／mysqldump／git fetch 之前就停止——以「一被呼叫就寫
+     * marker」的 fake php/git/mysqldump 證明它們 0 次被叫。
+     */
+    public function test_the_deploy_script_guard_stops_before_any_side_effect(): void
+    {
+        $root = sys_get_temp_dir().DIRECTORY_SEPARATOR.'deploy-guard-'.uniqid();
+        $app = $root.DIRECTORY_SEPARATOR.'app';
+        mkdir($app.DIRECTORY_SEPARATOR.'public', 0777, true);
+        file_put_contents($app.DIRECTORY_SEPARATOR.'public'.DIRECTORY_SEPARATOR.'index.php', '<?php');
+
+        $badBackup = $app.DIRECTORY_SEPARATOR.'storage-backups';
+        mkdir($badBackup, 0777, true);
+
+        // sentinel bin:php/git/mysqldump 一被呼叫就寫 marker。
+        $bin = $root.DIRECTORY_SEPARATOR.'bin';
+        mkdir($bin, 0777, true);
+        $marker = $root.DIRECTORY_SEPARATOR.'SIDE-EFFECT-MARKER';
+        $sentinel = "#!/usr/bin/env bash\nprintf touched > \"\$(cygpath -u ".escapeshellarg($marker).' 2>/dev/null || echo '.escapeshellarg($marker).")\"\nexit 1\n";
+        foreach (['php', 'git', 'mysqldump', 'composer'] as $tool) {
+            file_put_contents($bin.DIRECTORY_SEPARATOR.$tool, $sentinel);
+            @chmod($bin.DIRECTORY_SEPARATOR.$tool, 0755);
+        }
+
+        $exports = 'export DEPLOY_MODE=git;'
+            .'export APP_PATH="$(cygpath -u '.escapeshellarg($app).' 2>/dev/null || echo '.escapeshellarg($app).')";'
+            .'export BACKUP_DIR="$(cygpath -u '.escapeshellarg($badBackup).' 2>/dev/null || echo '.escapeshellarg($badBackup).')";'
+            .'export PHP_BIN=php;export TARGET_COMMIT=deadbeef;';
+
+        [$exit, $output] = $this->runScript(
+            base_path(self::DIR.'deploy-script.example.sh'),
+            '',
+            $bin,
+            $root,
+            $exports,
+        );
+
+        $this->assertSame(2, $exit, $output);
+        $this->assertStringContainsString('path guard', $output);
+        $this->assertStringContainsString('位於 APP_PATH', $output);
+        // ⛔ 誠實訊息:尚未進 maintenance,而非宣稱維持 maintenance。
+        $this->assertStringContainsString('尚未進入 maintenance', $output);
+        // ⛔ php/git/mysqldump/composer 0 次被叫。
+        $this->assertFileDoesNotExist($marker);
+    }
+
+    /** guard 的其他 fail-closed 分支:不存在的 BACKUP_DIR 同樣在任何 side effect 前停止。 */
+    public function test_the_deploy_script_guard_rejects_a_missing_backup_dir(): void
+    {
+        $root = sys_get_temp_dir().DIRECTORY_SEPARATOR.'deploy-guard2-'.uniqid();
+        $app = $root.DIRECTORY_SEPARATOR.'app';
+        mkdir($app.DIRECTORY_SEPARATOR.'public', 0777, true);
+        file_put_contents($app.DIRECTORY_SEPARATOR.'public'.DIRECTORY_SEPARATOR.'index.php', '<?php');
+
+        $bin = $root.DIRECTORY_SEPARATOR.'bin';
+        mkdir($bin, 0777, true);
+        $marker = $root.DIRECTORY_SEPARATOR.'SIDE-EFFECT-MARKER';
+        $sentinel = "#!/usr/bin/env bash\nprintf touched > \"\$(cygpath -u ".escapeshellarg($marker).' 2>/dev/null || echo '.escapeshellarg($marker).")\"\nexit 1\n";
+        foreach (['php', 'git', 'mysqldump', 'composer'] as $tool) {
+            file_put_contents($bin.DIRECTORY_SEPARATOR.$tool, $sentinel);
+            @chmod($bin.DIRECTORY_SEPARATOR.$tool, 0755);
+        }
+
+        $exports = 'export DEPLOY_MODE=git;'
+            .'export APP_PATH="$(cygpath -u '.escapeshellarg($app).' 2>/dev/null || echo '.escapeshellarg($app).')";'
+            .'export BACKUP_DIR=/nonexistent-backup-dir-r1;'
+            .'export PHP_BIN=php;export TARGET_COMMIT=deadbeef;';
+
+        [$exit, $output] = $this->runScript(
+            base_path(self::DIR.'deploy-script.example.sh'),
+            '',
+            $bin,
+            $root,
+            $exports,
+        );
+
+        $this->assertSame(2, $exit, $output);
+        $this->assertStringContainsString('path guard', $output);
+        $this->assertFileDoesNotExist($marker);
+    }
 }
