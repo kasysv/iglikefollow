@@ -1,0 +1,29 @@
+; =====================================================================
+; RunCloud Process Manager / Supervisor 範本:Laravel queue worker
+; =====================================================================
+; ⛔ 未執行範本。path 與 user 為 placeholder,由 Owner 依 RunCloud 實際
+; 值填入。worker 是 long-lived process:每次部署後必須
+; `php artisan queue:restart`(見 deploy-script.example.sh)。
+;
+; command 基準(⛔ 參數語意,勿改動):
+;   --tries=3    worker 層的重試上限。⛔ 這「不會」覆蓋 job 自身的
+;                $tries:SubmitFulfillmentOrder::$tries=1 仍由 job 封頂
+;                (Laravel:job 屬性優先於 CLI 值),unknown submission
+;                永不因 worker 設定被自動重送;其餘 jobs($tries=3)
+;                與此一致。
+;   --timeout=60 必須小於 database queue retry_after(現值 90),否則
+;                同一 job 可能被兩個 worker 同時處理。
+;   --max-time=3600  每小時自然輪替,配合 process manager 自動重啟。
+
+[program:iglikefollow-staging-worker]
+command=/usr/bin/php /home/<runcloud-user>/webapps/<app-name>/artisan queue:work database --sleep=3 --tries=3 --timeout=60 --max-time=3600
+directory=/home/<runcloud-user>/webapps/<app-name>
+user=<runcloud-user>
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/home/<runcloud-user>/logs/iglikefollow-staging-worker.log
+stopwaitsecs=70

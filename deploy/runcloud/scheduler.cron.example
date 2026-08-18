@@ -1,0 +1,9 @@
+# =====================================================================
+# RunCloud cron 範本:Laravel scheduler(每分鐘)
+# =====================================================================
+# ⛔ 未執行範本;<php-binary> 與 <app-path> 由 Owner 依 RunCloud 實際值
+# 填入(例:/usr/bin/php 與 /home/<runcloud-user>/webapps/<app-name>)。
+# scheduler 內含每 10 分鐘的履約狀態輪詢 command;其 gate 未開時為
+# no-op,不會呼叫任何 provider。
+
+* * * * * cd <app-path> && <php-binary> artisan schedule:run >> /dev/null 2>&1
