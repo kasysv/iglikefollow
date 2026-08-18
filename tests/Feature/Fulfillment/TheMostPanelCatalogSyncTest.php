@@ -937,8 +937,9 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $wrongRateType = $item;
         $wrongRateType['rate'] = 0.9;
 
-        $integerMin = $item;
-        $integerMin['min'] = 10;
+        // ⛔ B4-C-C-A 後 min 接受 integer;integer 診斷覆蓋移到仍禁止 integer 的 name。
+        $integerName = $item;
+        $integerName['name'] = 123;
 
         $missingCancel = $item;
         unset($missingCancel['cancel']);
@@ -955,7 +956,7 @@ class TheMostPanelCatalogSyncTest extends TestCase
             'top-level object' => ['{"error":"fictional"}', 'catalog_top_level_not_list', null, null],
             'empty list' => ['[]', 'catalog_empty_list', null, null],
             'wrong rate type' => [[$wrongRateType], 'catalog_wrong_type', 'rate', 'float'],
-            'integer min (B4-B live shape)' => [[$integerMin], 'catalog_wrong_type', 'min', 'integer'],
+            'integer name' => [[$integerName], 'catalog_wrong_type', 'name', 'integer'],
             'missing cancel' => [[$missingCancel], 'catalog_missing_field', 'cancel', null],
             'inverted bounds' => [[$invertedBounds], 'catalog_quantity_bounds_inverted', 'max', null],
             'service id as string' => [[$badServiceId], 'catalog_invalid_service_id', 'service', null],
@@ -1076,5 +1077,39 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $this->assertArrayNotHasKey('parser_observed_type', $result->toArray());
 
         Date::setTestNow();
+    }
+
+    // ==================================== 13. B4-C-C-A:quantity integer 正規化
+
+    /**
+     * ⛔ B4-C-B live shape 的完整路徑:integer `min`(與 mixed `max`)現在
+     * 通過 parser 正規化,catalog 原子套用,DB 只保存 canonical digit
+     * string——沒有任何欄位記得原本是 integer。
+     */
+    public function test_integer_quantities_apply_end_to_end_as_canonical_strings(): void
+    {
+        $services = self::fictionalServices();
+        $services[0]['min'] = 10;      // B4-C-B 實測形狀
+        $services[1]['max'] = 5000;    // mixed:string min＋integer max
+
+        Http::fake([self::ENDPOINT => Http::response($services)]);
+        $this->withCredential();
+
+        $result = $this->sync();
+
+        $this->assertSame('catalog_applied', $result->outcome);
+        $this->assertTrue($result->applied);
+        $this->assertNull($result->parserReason);
+        $this->assertNull($result->parserObservedType);
+
+        $this->assertSame(2, ProviderService::query()->count());
+
+        $first = ProviderService::query()->where('provider_service_id', '9101')->sole();
+        $this->assertSame('10', $first->minimum_quantity_raw);
+        $this->assertSame('10000', $first->maximum_quantity_raw);
+
+        $second = ProviderService::query()->where('provider_service_id', '9102')->sole();
+        $this->assertSame('50', $second->minimum_quantity_raw);
+        $this->assertSame('5000', $second->maximum_quantity_raw);
     }
 }

@@ -244,9 +244,37 @@ class TheMostPanelServiceCatalogParser
         return $value;
     }
 
-    /** Non-negative canonical digit string — no signs, no leading zeros. */
+    /**
+     * Non-negative quantity, normalized to a canonical digit string.
+     *
+     * Accepted since B4-C-C-A: a canonical digit string (unchanged original
+     * contract), or a non-negative JSON integer — B4-C-B's single live probe
+     * proved the provider sends `min` as a JSON integer, and this validator
+     * is shared by `min` and `max`, which the public Docs list as the same
+     * quantity pair. The integer is canonicalized immediately: a PHP
+     * non-negative int casts to exactly `0` or a no-leading-zero digit
+     * string, so everything downstream — the 64-digit overflow-safe bounds
+     * comparison, the DTO, the DB — still sees only strings.
+     *
+     * ⛔ Still rejected: negative integers (a value problem, not a type
+     * problem), floats including `10.0` and scientific notation, numbers
+     * beyond PHP's integer range (JSON-decoded as float), boolean, null,
+     * object, list, and every non-canonical string. No other field accepts
+     * an integer.
+     */
     private function quantity(mixed $value, string $field): string
     {
+        if (is_int($value)) {
+            if ($value < 0) {
+                throw TheMostPanelCatalogParseException::because(
+                    TheMostPanelCatalogParseException::INVALID_QUANTITY,
+                    $field
+                );
+            }
+
+            return (string) $value;
+        }
+
         if (! is_string($value)) {
             throw TheMostPanelCatalogParseException::because(
                 TheMostPanelCatalogParseException::WRONG_TYPE,

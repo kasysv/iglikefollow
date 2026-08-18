@@ -208,7 +208,8 @@ class TheMostPanelServiceCatalogParserTest extends TestCase
             'rate infinity' => [$e::INVALID_RATE, self::item(['service' => 9102, 'rate' => 'Infinity'])],
             'rate leading zeros' => [$e::INVALID_RATE, self::item(['service' => 9102, 'rate' => '007'])],
             'rate trailing dot' => [$e::INVALID_RATE, self::item(['service' => 9102, 'rate' => '5.'])],
-            'min as number' => [$e::WRONG_TYPE, self::item(['service' => 9102, 'min' => 10])],
+            'min negative integer' => [$e::INVALID_QUANTITY, self::item(['service' => 9102, 'min' => -5])],
+            'max negative integer' => [$e::INVALID_QUANTITY, self::item(['service' => 9102, 'max' => -1])],
             'min decimal' => [$e::INVALID_QUANTITY, self::item(['service' => 9102, 'min' => '1.5'])],
             'min signed' => [$e::INVALID_QUANTITY, self::item(['service' => 9102, 'min' => '+10'])],
             'max blank' => [$e::INVALID_QUANTITY, self::item(['service' => 9102, 'max' => ''])],
@@ -302,7 +303,8 @@ class TheMostPanelServiceCatalogParserTest extends TestCase
     {
         return [
             'boolean field got string' => ['refill', 'string', self::item(['refill' => 'true'])],
-            'min got integer (B4-B live shape)' => ['min', 'integer', self::item(['min' => 10])],
+            // ⛔ B4-C-C-A 後 min 接受 integer;integer 診斷覆蓋移到仍禁止 integer 的 name。
+            'name got integer' => ['name', 'integer', self::item(['name' => 123])],
             'rate got float' => ['rate', 'float', self::item(['rate' => 0.9])],
             'name got boolean' => ['name', 'boolean', self::item(['name' => true])],
             'category got null' => ['category', 'null', self::item(['category' => null])],
@@ -332,25 +334,112 @@ class TheMostPanelServiceCatalogParserTest extends TestCase
         }
     }
 
+    // ==================================== B4-C-C-A:quantity integer 正規化
+
     /**
-     * ⛔ 診斷新增不放寬 schema:B4-B 同形狀的 integer `min` 仍整份拒絕,
-     * canonical digit string 仍照常接受。
+     * B4-C-B live 實測:provider 的 `min` 是 JSON integer。共用 quantity
+     * validator 現在接受 non-negative integer 並立即 canonical 化為 digit
+     * string——DTO 與下游看到的仍然只有 string。
+     *
+     * @return array<string, array{0: array<string, mixed>, 1: string, 2: string}>
      */
-    public function test_the_integer_min_fixture_is_still_rejected_entirely(): void
+    public static function quantityNormalizationProvider(): array
     {
-        $raw = json_encode([self::item(), self::item(['service' => 9102, 'min' => 10])]);
+        return [
+            'B4-C-B live shape: int min + string max' => [self::item(['min' => 10]), '10', '10000'],
+            'string min + int max' => [self::item(['max' => 10000]), '10', '10000'],
+            'both int' => [self::item(['min' => 10, 'max' => 10000]), '10', '10000'],
+            'mixed equal bounds' => [self::item(['min' => 50, 'max' => '50']), '50', '50'],
+            'integer zero keeps string-zero semantics' => [self::item(['min' => 0]), '0', '10000'],
+            'PHP_INT_MAX normalizes and compares beyond int range' => [
+                self::item(['min' => PHP_INT_MAX, 'max' => '1'.str_repeat('0', 40)]),
+                (string) PHP_INT_MAX,
+                '1'.str_repeat('0', 40),
+            ],
+        ];
+    }
 
-        try {
-            $this->parser()->parse($raw);
-            $this->fail('integer min 必須整份拒絕');
-        } catch (TheMostPanelCatalogParseException $e) {
-            $this->assertSame(TheMostPanelCatalogParseException::WRONG_TYPE, $e->reason);
-            $this->assertSame('min', $e->field);
-            $this->assertSame('integer', $e->observedType);
+    #[DataProvider('quantityNormalizationProvider')]
+    public function test_quantity_integers_normalize_to_canonical_digit_strings(
+        array $item,
+        string $expectedMin,
+        string $expectedMax,
+    ): void {
+        $definitions = $this->parser()->parse(json_encode([$item]));
+
+        $this->assertCount(1, $definitions);
+        // ⛔ 輸出永遠是 string:正規化在 parser 邊界完成,不保存原型別。
+        $this->assertSame($expectedMin, $definitions[0]->minimumQuantityRaw);
+        $this->assertSame($expectedMax, $definitions[0]->maximumQuantityRaw);
+    }
+
+    /** mixed 型別的 inverted bounds 無論組合為何都整份拒絕;相等仍接受。 */
+    public function test_mixed_type_inverted_bounds_are_still_rejected(): void
+    {
+        $cases = [
+            'int min > string max' => self::item(['min' => 500, 'max' => '100']),
+            'string min > int max' => self::item(['min' => '500', 'max' => 100]),
+            'both int inverted' => self::item(['min' => 500, 'max' => 100]),
+        ];
+
+        foreach ($cases as $label => $item) {
+            // ⛔ atomic:合法項在前也不得回傳 partial list。
+            $raw = json_encode([self::item(), $item]);
+
+            try {
+                $this->parser()->parse($raw);
+                $this->fail($label.':必須整份拒絕');
+            } catch (TheMostPanelCatalogParseException $e) {
+                $this->assertSame(
+                    TheMostPanelCatalogParseException::QUANTITY_BOUNDS_INVERTED,
+                    $e->reason,
+                    $label
+                );
+            }
         }
+    }
 
-        // string '10' 的原 fixture 仍接受——接受規則一個字都沒動。
-        $this->assertCount(1, $this->parser()->parse(json_encode([self::item()])));
+    /**
+     * ⛔ float 不是 integer:`10.0`、scientific notation 與超過 PHP integer
+     * range 的 JSON number(decode 成 float)全部拒絕,不默默捨入。
+     * 用 raw JSON body,因為 json_encode 會把整數值 float 序列化回 `10`。
+     */
+    public function test_float_and_overflowing_quantity_numbers_are_rejected(): void
+    {
+        $bodies = [
+            'plain float' => '"min":10.0',
+            'scientific notation' => '"min":1e3',
+            'beyond integer range' => '"min":99999999999999999999',
+        ];
+
+        foreach ($bodies as $label => $minFragment) {
+            $raw = '[{"service":9101,"name":"n","type":"t","category":"c",'
+                .'"rate":"1",'.$minFragment.',"max":"10000","refill":true,"cancel":true}]';
+
+            try {
+                $this->parser()->parse($raw);
+                $this->fail($label.':必須整份拒絕');
+            } catch (TheMostPanelCatalogParseException $e) {
+                $this->assertSame(TheMostPanelCatalogParseException::WRONG_TYPE, $e->reason, $label);
+                $this->assertSame('min', $e->field, $label);
+                $this->assertSame('float', $e->observedType, $label);
+            }
+        }
+    }
+
+    /** ⛔ integer 相容只屬於 min/max:其他欄位的規則一個字都沒動。 */
+    public function test_integer_compatibility_does_not_extend_to_other_fields(): void
+    {
+        foreach (['name' => 123, 'type' => 1, 'category' => 7, 'rate' => 1, 'refill' => 1] as $field => $value) {
+            try {
+                $this->parser()->parse(json_encode([self::item([$field => $value])]));
+                $this->fail($field.':integer 必須拒絕');
+            } catch (TheMostPanelCatalogParseException $e) {
+                $this->assertSame(TheMostPanelCatalogParseException::WRONG_TYPE, $e->reason, $field);
+                $this->assertSame($field, $e->field);
+                $this->assertSame('integer', $e->observedType, $field);
+            }
+        }
     }
 
     /** ⛔ 組合規則是 constructor factory 的硬約束,不合法組合全部 fail closed。 */
