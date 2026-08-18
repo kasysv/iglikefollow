@@ -70,14 +70,6 @@ return [
     ],
 
     /*
-     | M4C staging 能力開關:⛔ 全部 default off、非機密、語意單一。
-     | 「credential 已填」不等於「允許連線」——這些 flags 與 credential
-     | presence 是兩件事,readiness 分開顯示。
-     */
-    'sandbox_payment_enabled' => env('SANDBOX_PAYMENT_ENABLED', false),
-    'sandbox_invoice_enabled' => env('SANDBOX_INVOICE_ENABLED', false),
-
-    /*
      | 允許被啟用的 provider／environment 組合。
      |
      | ⛔ 本輪全部為 false。啟用正式交易需要另一次明確批准，而不是有人在後台

@@ -2,10 +2,15 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\FulfillmentPayloadType;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
-use App\Models\IntegrationSetting;
+use App\Models\FulfillmentMapping;
+use App\Models\ProviderService;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
+use App\Services\Invoices\InvoiceSandboxGuard;
+use App\Services\Payments\SandboxGuard;
+use App\Support\QuantityCompatibility;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -94,10 +99,15 @@ class StagingReadinessCommand extends Command
         // ---- 能力開關(off 是預期的 blocked;strict 才算失敗) ----
         $capabilityStatus = fn (bool $on): string => $on ? 'ok' : ($strict ? 'blocker' : 'blocked');
 
-        $sandboxPayment = (bool) config('integrations.sandbox_payment_enabled');
+        /*
+         * ⛔ R1(P0-1):單一事實來源——直接問真正的 runtime guards
+         * (SandboxGuard／InvoiceSandboxGuard),與 adapter 完全同源,
+         * production hard stop 也一併繼承。不存在第二套 alias flags。
+         */
+        $sandboxPayment = SandboxGuard::enabled();
         $checks[] = self::check('sandbox_payment', 'Sandbox 付款能力', $sandboxPayment ? 'enabled' : 'not enabled', $capabilityStatus($sandboxPayment));
 
-        $sandboxInvoice = (bool) config('integrations.sandbox_invoice_enabled');
+        $sandboxInvoice = InvoiceSandboxGuard::enabled();
         $checks[] = self::check('sandbox_invoice', 'Sandbox 發票能力', $sandboxInvoice ? 'enabled' : 'not enabled', $capabilityStatus($sandboxInvoice));
 
         $stagingDispatchFlag = (bool) config('fulfillment.staging.themostpanel_dispatch_enabled');
@@ -129,6 +139,10 @@ class StagingReadinessCommand extends Command
 
         $polling = (bool) config('fulfillment.status_polling_enabled');
         $checks[] = self::check('status_polling', '履約狀態輪詢', $polling ? 'enabled' : 'not enabled', $polling ? 'ok' : 'blocked');
+
+        // ---- mapping readiness(3.4;⛔ 不洩漏任何 ID) ----
+        [$mappingValue, $mappingStatus] = self::mappingReadiness($strict);
+        $checks[] = self::check('fulfillment_mappings', '可派單 mapping', $mappingValue, $mappingStatus);
 
         // ---- credential presence(⛔ 只看存在性,不解密) ----
         foreach ([
@@ -195,7 +209,11 @@ class StagingReadinessCommand extends Command
     }
 
     /**
-     * ⛔ Presence only — hasSecret()/isFullyConfigured() never decrypt.
+     * ⛔ Presence only, R1-hardened: raw query builder, no Eloquent model,
+     * no encrypted cast, no hasSecret()/isFullyConfigured()/secret() — the
+     * ciphertext is never decrypted on any readiness path. "stored" means
+     * exactly that: an encrypted payload exists. It never claims the payload
+     * is complete, decryptable or that the key works.
      *
      * @return array{0: string, 1: string}
      */
@@ -205,27 +223,90 @@ class StagingReadinessCommand extends Command
         bool $strict,
     ): array {
         try {
-            $settings = IntegrationSetting::query()
-                ->where('provider', $provider)
-                ->where('environment', $environment)
-                ->get();
+            $rows = DB::table('integration_settings')
+                ->where('provider', $provider->value)
+                ->where('environment', $environment->value)
+                ->get(['is_enabled', 'identifier', 'credentials']);
 
-            if ($settings->count() === 0) {
+            if ($rows->count() === 0) {
                 return ['absent', $strict ? 'blocker' : 'blocked'];
             }
 
-            if ($settings->count() > 1) {
+            if ($rows->count() > 1) {
                 // 多列無法辨識,部署上是要修的問題。
                 return ['duplicate rows', 'blocker'];
             }
 
-            $setting = $settings->first();
-            $value = 'present;enabled='.($setting->is_enabled ? 'yes' : 'no')
-                .';configured='.($setting->isFullyConfigured() ? 'yes' : 'no');
+            $row = $rows->first();
 
-            $usable = $setting->is_enabled && $setting->isFullyConfigured();
+            $identifierRequired = $provider->identifierLabel() !== null;
+            $identifierState = $identifierRequired
+                ? (filled($row->identifier) ? 'present' : 'missing')
+                : 'not-required';
+            $payloadStored = filled($row->credentials);
+
+            $value = 'present;enabled='.($row->is_enabled ? 'yes' : 'no')
+                .';encrypted_payload='.($payloadStored ? 'stored' : 'missing')
+                .';identifier='.$identifierState;
+
+            $usable = (bool) $row->is_enabled
+                && $payloadStored
+                && ($identifierState !== 'missing');
 
             return [$value, $usable ? 'ok' : ($strict ? 'blocker' : 'blocked')];
+        } catch (Throwable) {
+            return ['unavailable', 'blocker'];
+        }
+    }
+
+    /**
+     * Mapping readiness without leaking a single ID (3.4).
+     *
+     * ⛔ `enabled_compatible` re-verifies every enabled mapping against the
+     * SAME rules the mapping form enforces: provider row exists and is
+     * available, payload type is the supported enum value, and
+     * QuantityCompatibility::assess() says compatible. `is_enabled` alone is
+     * never trusted; malformed or missing provider rows fail closed.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function mappingReadiness(bool $strict): array
+    {
+        try {
+            $total = FulfillmentMapping::query()->count();
+            $enabled = FulfillmentMapping::query()->where('is_enabled', true)->with('serviceVariant')->get();
+
+            $compatible = 0;
+
+            foreach ($enabled as $mapping) {
+                $variant = $mapping->serviceVariant;
+
+                if ($variant === null) {
+                    continue;
+                }
+
+                if ($mapping->payload_type !== FulfillmentPayloadType::LinkQuantity) {
+                    continue;
+                }
+
+                $service = ProviderService::query()
+                    ->where('provider', $mapping->provider)
+                    ->where('provider_service_id', $mapping->provider_service_id)
+                    ->where('is_available', true)
+                    ->first();
+
+                if ($service === null) {
+                    continue;
+                }
+
+                if (QuantityCompatibility::assess($variant, $service)->compatible) {
+                    $compatible++;
+                }
+            }
+
+            $value = 'total='.$total.';enabled='.$enabled->count().';enabled_compatible='.$compatible;
+
+            return [$value, $compatible > 0 ? 'ok' : ($strict ? 'blocker' : 'blocked')];
         } catch (Throwable) {
             return ['unavailable', 'blocker'];
         }

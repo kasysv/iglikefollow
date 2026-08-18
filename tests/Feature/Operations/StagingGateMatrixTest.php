@@ -8,6 +8,7 @@ use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelFulfillmentGateway;
 use App\Services\Fulfillment\TheMostPanelStagingCredentialSource;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -99,6 +100,27 @@ class StagingGateMatrixTest extends TestCase
         ]);
 
         $this->assertInstanceOf(TheMostPanelFulfillmentGateway::class, $gateway);
+    }
+
+    /** ⛔ R1(P0-2):global dispatch 總開關關閉時,container 必須 Disabled、0 credential/HTTP。 */
+    public function test_staging_without_the_global_dispatch_switch_is_disabled(): void
+    {
+        $reads = 0;
+        DB::listen(function ($query) use (&$reads) {
+            if (str_contains($query->sql, 'integration_settings')) {
+                $reads++;
+            }
+        });
+
+        $gateway = $this->gatewayIn('staging', [
+            'fulfillment.driver' => 'themostpanel',
+            'fulfillment.staging.themostpanel_dispatch_enabled' => true,
+            'fulfillment.dispatch_enabled' => false,
+        ]);
+
+        $this->assertInstanceOf(DisabledFulfillmentGateway::class, $gateway);
+        $this->assertSame(0, $reads);
+        Http::assertNothingSent();
     }
 
     /** 未知 environment 一律 Disabled。 */

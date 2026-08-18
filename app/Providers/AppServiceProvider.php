@@ -188,6 +188,9 @@ class AppServiceProvider extends ServiceProvider
                 config('fulfillment.driver') === 'themostpanel'
                 && $this->app->environment('staging')
                 && (bool) config('fulfillment.staging.themostpanel_dispatch_enabled', false)
+                // ⛔ R1(P0-2):global dispatch 總開關也必須成立——container
+                // 本身就不交出 live-capable gateway,不只靠 action gate。
+                && (bool) config('fulfillment.dispatch_enabled', false)
             ) {
                 return new TheMostPanelFulfillmentGateway(
                     new TheMostPanelStagingCredentialSource,

@@ -7,6 +7,8 @@ use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
 use App\Services\Fulfillment\TheMostPanelStagingCredentialSource;
+use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -80,25 +82,24 @@ class StagingCredentialSourceTest extends TestCase
         $this->assertNull($this->source()->apiKey());
     }
 
-    /** ⛔ 多列無法辨識哪一份是真的:null。 */
-    public function test_duplicate_rows_yield_null(): void
+    /**
+     * ⛔ R1(3.5):DB unique 約束使多列結構性不可存在——這裡直接驗證
+     * schema invariant(插入第二列必被拒絕),取代原本的 skip。
+     */
+    public function test_the_schema_rejects_duplicate_provider_rows(): void
     {
         $this->row();
-        // 直接插入第二列繞過唯一防護(如果有的話,也要證明 source 自己會擋)。
-        try {
-            DB::table('integration_settings')->insert([
-                'provider' => IntegrationProvider::TheMostPanel->value,
-                'environment' => IntegrationEnvironment::Production->value,
-                'is_enabled' => 1,
-                'credentials' => DB::table('integration_settings')->value('credentials'),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-        } catch (\Throwable) {
-            $this->markTestSkipped('DB 唯一約束使多列無法存在,source 的多列分支由結構保證。');
-        }
 
-        $this->assertNull($this->source()->apiKey());
+        $this->expectException(UniqueConstraintViolationException::class);
+
+        DB::table('integration_settings')->insert([
+            'provider' => IntegrationProvider::TheMostPanel->value,
+            'environment' => IntegrationEnvironment::Production->value,
+            'is_enabled' => 1,
+            'credentials' => DB::table('integration_settings')->value('credentials'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 
     public function test_a_row_without_the_secret_yields_null(): void
@@ -128,17 +129,59 @@ class StagingCredentialSourceTest extends TestCase
         }
     }
 
-    /** readiness 的 presence 檢查不解密:corrupt ciphertext 也能安全回報。 */
-    public function test_readiness_presence_reporting_survives_corrupt_ciphertext(): void
+    /**
+     * ⛔ R1(P1-1):readiness presence 路徑真正 0 decrypt。corrupt
+     * ciphertext 的列必須回報 `encrypted_payload=stored`(不是
+     * unavailable),而且以「一 decrypt 就 fail 測試」的 encrypter spy
+     * 證明整條 report 路徑沒碰過解密。
+     */
+    public function test_readiness_presence_reports_stored_without_ever_decrypting(): void
     {
         $setting = $this->row();
         DB::table('integration_settings')->where('id', $setting->id)
             ->update(['credentials' => 'corrupt-not-a-ciphertext']);
 
-        $report = StagingReadinessCommand::report();
-        $encoded = json_encode($report, JSON_UNESCAPED_UNICODE);
+        $real = app('encrypter');
+        $spy = new class($real, $this) implements Encrypter
+        {
+            public function __construct(private $real, private $test) {}
 
-        $this->assertIsString($encoded);
+            public function encrypt($value, $serialize = true)
+            {
+                return $this->real->encrypt($value, $serialize);
+            }
+
+            public function decrypt($payload, $unserialize = true)
+            {
+                $this->test->fail('⛔ readiness 路徑呼叫了 decrypt');
+            }
+
+            public function getKey()
+            {
+                return $this->real->getKey();
+            }
+
+            public function getAllKeys()
+            {
+                return $this->real->getAllKeys();
+            }
+
+            public function getPreviousKeys()
+            {
+                return $this->real->getPreviousKeys();
+            }
+        };
+        $this->app->instance('encrypter', $spy);
+
+        $report = StagingReadinessCommand::report();
+
+        $this->app->instance('encrypter', $real);
+
+        $check = collect($report['checks'])->firstWhere('key', 'credential_themostpanel_production');
+        // ⛔ stored,不是 unavailable:presence 與可解密是兩回事。
+        $this->assertSame('present;enabled=yes;encrypted_payload=stored;identifier=not-required', $check['value']);
+
+        $encoded = json_encode($report, JSON_UNESCAPED_UNICODE);
         $this->assertStringNotContainsString(self::KEY_MARKER, $encoded);
         $this->assertStringNotContainsString('corrupt-not-a-ciphertext', $encoded);
     }

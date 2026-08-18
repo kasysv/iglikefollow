@@ -5,6 +5,7 @@ namespace App\Actions\Fulfillment;
 use App\Enums\FulfillmentStatus;
 use App\Jobs\SyncFulfillmentStatus;
 use App\Models\FulfillmentOrder;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 
 /**
  * Pick the fulfilment rows worth asking about, and queue one sync job each.
@@ -65,6 +66,15 @@ class QueueFulfillmentStatusSync
             return false;
         }
 
-        return (bool) config('fulfillment.status_polling_enabled', false);
+        if (! (bool) config('fulfillment.status_polling_enabled', false)) {
+            return false;
+        }
+
+        /*
+         * ⛔ R1(P0-2):gateway capability gate 也必須成立。polling flag
+         * 單獨打開時,排入的 jobs 只會走 Disabled gateway 灌一批
+         * unrecognised events——所以 dispatch gate 不成立就一列都不排。
+         */
+        return FulfillmentDispatchGate::enabled();
     }
 }

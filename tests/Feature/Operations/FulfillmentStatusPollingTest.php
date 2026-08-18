@@ -34,12 +34,31 @@ class FulfillmentStatusPollingTest extends TestCase
     {
         $this->app['env'] = 'staging';
         config()->set('fulfillment.status_polling_enabled', true);
+        // R1:polling 也要求 gateway capability gate 成立。
+        config()->set('fulfillment.driver', 'themostpanel');
+        config()->set('fulfillment.dispatch_enabled', true);
+        config()->set('fulfillment.staging.themostpanel_dispatch_enabled', true);
 
         try {
             return $callback();
         } finally {
             $this->app['env'] = 'testing';
         }
+    }
+
+    /** ⛔ R1:polling flag 單獨打開(dispatch gate 未成立)仍排入 0。 */
+    public function test_polling_without_the_dispatch_gate_queues_nothing(): void
+    {
+        FulfillmentOrder::factory()->submitted('65001')->create();
+
+        $this->app['env'] = 'staging';
+        config()->set('fulfillment.status_polling_enabled', true);
+        // driver/dispatch/staging flag 全部維持 default off。
+        $queued = app(QueueFulfillmentStatusSync::class)->handle();
+        $this->app['env'] = 'testing';
+
+        $this->assertSame(0, $queued);
+        Queue::assertNothingPushed();
     }
 
     public function test_flag_off_queues_nothing_even_in_staging(): void
