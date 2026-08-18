@@ -7,6 +7,7 @@ use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Models\Order;
 use App\Support\Money;
+use App\Support\OrderOperationsSummary;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\Section;
@@ -25,6 +26,24 @@ class ViewOrder extends ViewRecord
     public function infolist(Schema $schema): Schema
     {
         return $schema->components([
+            /*
+             * M4C:四條線的 read-only 摘要——訂單、付款、發票、履約各自獨立。
+             * ⛔ 「尚未建立」就是不存在,不推論成敗;多筆規則見
+             * OrderOperationsSummary;沒有任何重送/標記/測試按鈕。
+             */
+            Section::make('交易流程')
+                ->description('四條線各自獨立;「尚未建立」代表該紀錄不存在,不代表成功或失敗。')
+                ->schema([
+                    TextEntry::make('ops_order')->label('訂單')
+                        ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['order']),
+                    TextEntry::make('ops_payment')->label('付款')
+                        ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['payment']),
+                    TextEntry::make('ops_invoice')->label('發票')
+                        ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['invoice']),
+                    TextEntry::make('ops_fulfillment')->label('履約')
+                        ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['fulfillment']),
+                ])->columns(2),
+
             Section::make('訂單')
                 ->schema([
                     TextEntry::make('reference')->label('訂單編號')->copyable()->weight('bold'),

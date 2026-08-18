@@ -2,11 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Enums\FulfillmentStatus;
+use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Filament\Resources\Orders\Pages\ListOrders;
 use App\Filament\Resources\Orders\Pages\ViewOrder;
 use App\Filament\Resources\Orders\RelationManagers\OrderEventsRelationManager;
 use App\Filament\Resources\Orders\RelationManagers\PaymentAttemptsRelationManager;
+use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
 use App\Models\User;
@@ -59,6 +62,83 @@ class OrderAdminTest extends TestCase
         PaymentAttempt::factory()->create(['order_id' => $order->id]);
 
         return $order->fresh();
+    }
+
+    // ------------------------------------------------------------ M4C 交易流程摘要
+
+    public function test_the_operations_summary_shows_four_independent_lanes(): void
+    {
+        $order = $this->order();
+
+        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+
+        $response->assertOk();
+        $response->assertSee('交易流程');
+        // 四條線各自呈現;不存在的紀錄是「尚未建立」,不是成功或失敗。
+        $response->assertSee('尚未建立'); // invoice 與 fulfillment 都還沒有
+        $response->assertSee('最新嘗試'); // payment attempt 存在(initiated)
+    }
+
+    public function test_multiple_payment_attempts_follow_the_deterministic_rule(): void
+    {
+        $order = $this->order();
+        // 第二筆:成功——有成功以成功為準,不取任意 first()。
+        PaymentAttempt::factory()->create([
+            'order_id' => $order->id,
+            'status' => PaymentStatus::Succeeded,
+        ]);
+
+        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+
+        $response->assertOk();
+        $response->assertSee('已成功(1/2 次嘗試)');
+    }
+
+    /** ⛔ mixed fulfillment 不得標成全部完成。 */
+    public function test_mixed_fulfillment_rows_are_never_labelled_fully_complete(): void
+    {
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $second = $order->items()->create([
+            'platform_name' => 'Instagram', 'service_name' => 'Instagram 粉絲',
+            'variant_label' => '真人粉絲', 'sku' => 'ig-followers-real-x',
+            'unit_price_mills' => 5900, 'quantity' => 500, 'quantity_unit' => '個',
+            'amount' => 295, 'target_kind' => 'account', 'target_value' => 'example_account',
+        ]);
+
+        $completed = FulfillmentOrder::factory()->submitted('71001')->create(['order_item_id' => $item->id]);
+        $completed->forceFill(['status' => FulfillmentStatus::Completed])->save();
+        FulfillmentOrder::factory()->submitted('71002')->create(['order_item_id' => $second->id]);
+
+        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+
+        $response->assertOk();
+        $response->assertDontSee('全部完成');
+        $response->assertSee('共 2 筆');
+    }
+
+    public function test_all_completed_fulfillment_rows_are_labelled_fully_complete(): void
+    {
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $second = $order->items()->create([
+            'platform_name' => 'Instagram', 'service_name' => 'Instagram 粉絲',
+            'variant_label' => '真人粉絲', 'sku' => 'ig-followers-real-y',
+            'unit_price_mills' => 5900, 'quantity' => 500, 'quantity_unit' => '個',
+            'amount' => 295, 'target_kind' => 'account', 'target_value' => 'example_account',
+        ]);
+
+        foreach ([[$item, '72001'], [$second, '72002']] as [$target, $id]) {
+            $row = FulfillmentOrder::factory()->submitted($id)->create(['order_item_id' => $target->id]);
+            $row->forceFill(['status' => FulfillmentStatus::Completed])->save();
+        }
+
+        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+
+        $response->assertOk();
+        $response->assertSee('全部完成(2/2)');
     }
 
     // ------------------------------------------------------------ 權限

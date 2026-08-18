@@ -58,9 +58,24 @@ return [
          | 與交易端點分開，避免有人把「可以查詢」誤讀成「可以下單」。
          */
         'themostpanel' => [
+            /*
+             | staging dispatch 的固定 exact endpoint(M4C)。⛔ 只有
+             | APP_ENV=staging 且多重 default-off gates 全部成立時,adapter
+             | 才會讀到這一個值;它固定在版本控制,後台與 env 都不可輸入。
+             | production 維持空字串:正式派單需要另一次明確批准。
+             */
+            'staging' => 'https://themostpanel.com/api/v2',
             'production' => '',
         ],
     ],
+
+    /*
+     | M4C staging 能力開關:⛔ 全部 default off、非機密、語意單一。
+     | 「credential 已填」不等於「允許連線」——這些 flags 與 credential
+     | presence 是兩件事,readiness 分開顯示。
+     */
+    'sandbox_payment_enabled' => env('SANDBOX_PAYMENT_ENABLED', false),
+    'sandbox_invoice_enabled' => env('SANDBOX_INVOICE_ENABLED', false),
 
     /*
      | 允許被啟用的 provider／environment 組合。

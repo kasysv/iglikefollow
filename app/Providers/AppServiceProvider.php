@@ -45,8 +45,10 @@ use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
 use App\Services\Fulfillment\DisabledFulfillmentGateway;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
+use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelFulfillmentGateway;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
+use App\Services\Fulfillment\TheMostPanelStagingCredentialSource;
 use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
 use App\Services\Invoices\InvoiceSandboxGuard;
@@ -174,6 +176,23 @@ class AppServiceProvider extends ServiceProvider
                 && $this->app->environment('testing')
             ) {
                 return $this->app->make(TheMostPanelFulfillmentGateway::class);
+            }
+
+            /*
+             * ⛔ M4C:staging 是唯一的 production-code 路徑,而且要 driver
+             * ＋staging dispatch flag 同時成立;credential source 固定為
+             * staging 實作(加密 setting 列),capability 由 runtime 實測。
+             * local、production 與未知 environment 永遠落到 Disabled。
+             */
+            if (
+                config('fulfillment.driver') === 'themostpanel'
+                && $this->app->environment('staging')
+                && (bool) config('fulfillment.staging.themostpanel_dispatch_enabled', false)
+            ) {
+                return new TheMostPanelFulfillmentGateway(
+                    new TheMostPanelStagingCredentialSource,
+                    TheMostPanelCurlCapability::fromRuntime(),
+                );
             }
 
             // ⛔ 預設就是不派單。

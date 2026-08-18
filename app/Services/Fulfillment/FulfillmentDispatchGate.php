@@ -41,7 +41,16 @@ class FulfillmentDispatchGate
          */
         return match (config('fulfillment.driver')) {
             'fake' => true,
-            'themostpanel' => app()->environment('testing'),
+            /*
+             * ⛔ themostpanel driver 只有兩條路:testing(注入式 fake
+             * transport)或 staging＋staging dispatch flag(M4C)。local
+             * 與其他 environment 永遠 false;production 已在最上方拒絕。
+             */
+            'themostpanel' => app()->environment('testing')
+                || (
+                    app()->environment('staging')
+                    && (bool) config('fulfillment.staging.themostpanel_dispatch_enabled', false)
+                ),
             default => false,
         };
     }
