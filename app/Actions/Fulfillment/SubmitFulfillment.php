@@ -82,6 +82,11 @@ class SubmitFulfillment
         try {
             return match (true) {
                 $result->isAccepted() => $this->recordSubmitted($claimed, $result, $submission),
+                // ⛔ R1:0 request 的 blocked 收斂回 configuration_pending。
+                $result->isBlocked() => $this->recordBlocked(
+                    $claimed,
+                    $result->reason ?? FulfillmentAttentionReason::DispatchDisabled,
+                ),
                 $result->isRejected() => $this->recordRejected($claimed, $result),
                 default => $this->recordUnknown(
                     $claimed,

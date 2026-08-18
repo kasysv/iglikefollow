@@ -68,22 +68,33 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
 
     public function submit(FulfillmentSubmission $submission): FulfillmentSubmissionResult
     {
-        // ⛔ 網路前的每一個拒絕都是「確定沒送出」:rejected,永不 unknown。
+        /*
+         * ⛔ R1:網路前的每一個阻擋都是「確定沒送出」的設定問題 → blocked,
+         * 收斂 configuration_pending;永不 unknown,也不冒充 provider rejected。
+         */
         if ($this->blockedBeforeNetwork()) {
-            return FulfillmentSubmissionResult::rejected(FulfillmentAttentionReason::DispatchDisabled);
+            return FulfillmentSubmissionResult::blocked(FulfillmentAttentionReason::DispatchDisabled);
         }
 
         if (! $this->isCanonicalId($submission->providerServiceId)
             || $submission->quantity < 1
             || trim($submission->target) === '') {
             // 我們自己的資料不合法:同樣確定沒送出。
-            return FulfillmentSubmissionResult::rejected(FulfillmentAttentionReason::UnsupportedPayload);
+            return FulfillmentSubmissionResult::blocked(FulfillmentAttentionReason::UnsupportedPayload);
         }
 
-        $key = $this->credentials->apiKey();
+        try {
+            $key = $this->credentials->apiKey();
+        } catch (Throwable) {
+            /*
+             * ⛔ credential source 意外 throw:發生在 request 前,仍是
+             * blocked;不得變 submission_unknown,也不帶出 exception 訊息。
+             */
+            return FulfillmentSubmissionResult::blocked(FulfillmentAttentionReason::DispatchDisabled);
+        }
 
         if ($key === null || trim($key) === '') {
-            return FulfillmentSubmissionResult::rejected(FulfillmentAttentionReason::DispatchDisabled);
+            return FulfillmentSubmissionResult::blocked(FulfillmentAttentionReason::DispatchDisabled);
         }
 
         // ⛔ 只支援公開文件的一般 payload:add + service + link + quantity。
@@ -110,7 +121,12 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
             return FulfillmentSyncResult::unrecognised();
         }
 
-        $key = $this->credentials->apiKey();
+        try {
+            $key = $this->credentials->apiKey();
+        } catch (Throwable) {
+            // ⛔ request 前的 credential 問題:unrecognised、0 request。
+            return FulfillmentSyncResult::unrecognised();
+        }
 
         if ($key === null || trim($key) === '') {
             return FulfillmentSyncResult::unrecognised();

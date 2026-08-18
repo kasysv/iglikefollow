@@ -5,6 +5,7 @@ namespace Tests\Feature\Fulfillment;
 use App\Actions\Fulfillment\PrepareFulfillmentForOrder;
 use App\Actions\Fulfillment\SubmitFulfillment;
 use App\Actions\Fulfillment\SyncFulfillmentState;
+use App\Actions\Orders\RecordPaymentResult;
 use App\Contracts\FulfillmentGateway;
 use App\Contracts\TheMostPanelDispatchCredentialSource;
 use App\Enums\FulfillmentStatus;
@@ -15,6 +16,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\PaymentAttempt;
 use App\Models\ServiceVariant;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelFulfillmentGateway;
@@ -25,8 +27,10 @@ use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /**
- * End to end through the REAL adapter with a fake HTTP layer: trusted
- * payment → prepare → claim → one `add` → provider order id → status sync.
+ * The REAL adapter driven through the M3A/M4A pipeline with a fake HTTP
+ * layer — both as direct action calls (fast, per-branch) and as the true
+ * cross-seam path: trusted payment result → OrderPaid (after commit) →
+ * queue listener → prepare → claim → one `add` → provider order id.
  *
  * ⛔ This is the M3A/M4A pipeline driven through TheMostPanelFulfillmentGateway
  * instead of the in-memory Fake — same actions, same jobs, same guards — with
@@ -69,7 +73,12 @@ class TheMostPanelDispatchAdapterTest extends TestCase
         $this->app->bind(TheMostPanelCurlCapability::class, fn () => TheMostPanelCurlCapability::supported());
     }
 
-    /** 一張已付款、mapping 齊全(enabled)、開關開啟的訂單。 */
+    /**
+     * 一張已付款、mapping 齊全(enabled)、開關開啟的訂單。
+     *
+     * ⛔ direct action seam:直接 factory Paid＋呼叫 Prepare,適合逐分支
+     * 測試;真正跨付款事件的證據見 cross-seam 測試區。
+     */
     private function readyFulfillment(string $providerServiceId = '4501'): FulfillmentOrder
     {
         $variant = ServiceVariant::factory()->create();
@@ -363,6 +372,159 @@ class TheMostPanelDispatchAdapterTest extends TestCase
         foreach (DB::table('fulfillment_events')->get() as $event) {
             $this->assertStringNotContainsString('Some Future State', json_encode((array) $event));
         }
+    }
+
+    // ==================================== R1:blocked 四分法
+
+    /** ⛔ 0 request 的設定問題 → configuration_pending,不是 failed。 */
+    public function test_a_pre_network_block_converges_to_configuration_pending(): void
+    {
+        Http::fake();
+
+        $fulfillment = $this->readyFulfillment();
+        // claim 之後 endpoint 設定消失:adapter 網路前 blocked。
+        config()->set('integrations.endpoints.themostpanel.testing', '');
+
+        $result = $this->submit($fulfillment);
+
+        $this->assertSame(FulfillmentStatus::ConfigurationPending, $result->status);
+        Http::assertNothingSent();
+    }
+
+    /** ⛔ credential source 意外 throw:仍是 request 前 → configuration_pending,訊息不落地。 */
+    public function test_a_throwing_credential_source_converges_to_configuration_pending(): void
+    {
+        Http::fake();
+
+        $this->app->bind(
+            TheMostPanelDispatchCredentialSource::class,
+            fn () => new class implements TheMostPanelDispatchCredentialSource
+            {
+                public function apiKey(): ?string
+                {
+                    throw new \RuntimeException('SECRET-EXCEPTION-MARKER-133731');
+                }
+            },
+        );
+        $this->app->forgetInstance(FulfillmentGateway::class);
+
+        $result = $this->submit($this->readyFulfillment());
+
+        $this->assertSame(FulfillmentStatus::ConfigurationPending, $result->status);
+        Http::assertNothingSent();
+
+        foreach (DB::table('fulfillment_events')->get() as $event) {
+            $this->assertStringNotContainsString('SECRET-EXCEPTION-MARKER-133731', json_encode((array) $event));
+        }
+    }
+
+    /** 四分法一次並列:blocked／rejected／unknown／accepted 各收斂到正確狀態。 */
+    public function test_the_four_outcome_semantics_map_to_four_states(): void
+    {
+        // ⛔ 同測試多回應必用 fakeSequence(fake 疊加時第一個 stub 永遠贏)。
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['order' => 61001])
+            ->push(['error' => 'fictional'])
+            ->push('not-json{');
+
+        // accepted → submitted
+        $this->assertSame(FulfillmentStatus::Submitted, $this->submit($this->readyFulfillment())->status);
+
+        // provider rejected → failed
+        $this->assertSame(FulfillmentStatus::Failed, $this->submit($this->readyFulfillment())->status);
+
+        // ambiguous → submission_unknown
+        $this->assertSame(FulfillmentStatus::SubmissionUnknown, $this->submit($this->readyFulfillment())->status);
+
+        // blocked → configuration_pending(sequence 已空:再有 request 會炸,本身就是 0-request 證明)
+        $row = $this->readyFulfillment();
+        config()->set('integrations.endpoints.themostpanel.testing', '');
+        $this->assertSame(FulfillmentStatus::ConfigurationPending, $this->submit($row)->status);
+        config()->set('integrations.endpoints.themostpanel.testing', self::ENDPOINT);
+        Http::assertSentCount(3);
+    }
+
+    // ==================================== R1:真正 cross-seam(付款事件 → queue)
+
+    /** pending_payment 訂單＋付款嘗試;⛔ 不以 factory 直接冒充 Paid。 */
+    private function pendingOrderWithAttempt(): array
+    {
+        $variant = ServiceVariant::factory()->create();
+
+        FulfillmentMapping::factory()->create([
+            'service_variant_id' => $variant->id,
+            'provider_service_id' => '4501',
+            'is_enabled' => true,
+        ]);
+
+        $order = Order::factory()->create();
+
+        OrderItem::factory()->create([
+            'order_id' => $order->id,
+            'service_variant_id' => $variant->id,
+            'target_value' => self::TARGET,
+            'quantity' => 1000,
+        ]);
+
+        $attempt = PaymentAttempt::factory()->create(['order_id' => $order->id]);
+
+        return [$order, $attempt];
+    }
+
+    /**
+     * ⛔ 完整 seam:可信付款成功 → OrderPaid(after commit)→ queue listener
+     * → prepare → claim → 恰一次 add → 只保存 provider order ID。
+     */
+    public function test_a_trusted_payment_success_drives_one_add_through_the_event_and_queue_seam(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['order' => 23501])]);
+
+        [$order, $attempt] = $this->pendingOrderWithAttempt();
+
+        // 付款成功前:fulfillment 0、HTTP 0。
+        $this->assertSame(0, FulfillmentOrder::query()->count());
+        Http::assertNothingSent();
+
+        app(RecordPaymentResult::class)
+            ->handle($attempt, PaymentStatus::Succeeded, 'TXN-E2E-OK');
+
+        // sync queue＋after-commit event 已把整條 seam 跑完。
+        $row = FulfillmentOrder::query()->sole();
+        $this->assertSame(FulfillmentStatus::Submitted, $row->status);
+        $this->assertSame('23501', $row->provider_order_id);
+        Http::assertSentCount(1);
+    }
+
+    /** ⛔ 同一可信成功重播:不得第二次 add。 */
+    public function test_a_replayed_payment_success_never_sends_a_second_add(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['order' => 23501])]);
+
+        [$order, $attempt] = $this->pendingOrderWithAttempt();
+
+        $action = app(RecordPaymentResult::class);
+        $action->handle($attempt, PaymentStatus::Succeeded, 'TXN-E2E-DUP');
+        $action->handle($attempt->fresh(), PaymentStatus::Succeeded, 'TXN-E2E-DUP');
+
+        $this->assertSame(1, FulfillmentOrder::query()->count());
+        $this->assertSame('23501', FulfillmentOrder::query()->sole()->provider_order_id);
+        Http::assertSentCount(1);
+    }
+
+    /** 失敗／取消付款:不產生 fulfillment,不碰網路。 */
+    public function test_a_failed_or_canceled_payment_produces_no_fulfillment_and_no_http(): void
+    {
+        Http::fake();
+
+        foreach ([PaymentStatus::Failed, PaymentStatus::Canceled] as $status) {
+            [$order, $attempt] = $this->pendingOrderWithAttempt();
+
+            app(RecordPaymentResult::class)
+                ->handle($attempt, $status, 'TXN-E2E-'.$status->value);
+        }
+
+        $this->assertSame(0, FulfillmentOrder::query()->count());
+        Http::assertNothingSent();
     }
 
     /** terminal 狀態不再查詢。 */

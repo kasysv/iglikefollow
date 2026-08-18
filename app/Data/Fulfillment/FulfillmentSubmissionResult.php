@@ -53,6 +53,21 @@ final class FulfillmentSubmissionResult
         return new self('accepted', $id);
     }
 
+    /**
+     * Blocked before any network I/O — provably nothing was sent.
+     *
+     * ⛔ R1 semantics: a configuration problem (no endpoint, no capability,
+     * no credential, bad local payload) is not a provider refusal and must
+     * not become a terminal `failed`. The caller records it as
+     * `configuration_pending`, safe to reprocess once fixed. The reason is
+     * always a local allowlist value.
+     */
+    public static function blocked(
+        FulfillmentAttentionReason $reason = FulfillmentAttentionReason::DispatchDisabled,
+    ): self {
+        return new self('blocked', reason: $reason);
+    }
+
     /** 對方明確拒絕，且確定沒有成立。 */
     public static function rejected(
         FulfillmentAttentionReason $reason = FulfillmentAttentionReason::ProviderRejected,
@@ -65,6 +80,11 @@ final class FulfillmentSubmissionResult
         FulfillmentAttentionReason $reason = FulfillmentAttentionReason::Unknown,
     ): self {
         return new self('unknown', reason: $reason);
+    }
+
+    public function isBlocked(): bool
+    {
+        return $this->outcome === 'blocked';
     }
 
     public function isAccepted(): bool

@@ -211,40 +211,41 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
 
     // ==================================== add:網路前 fail closed
 
-    public function test_a_wrong_endpoint_config_refuses_before_any_network(): void
+    /** ⛔ R1:網路前的阻擋是 blocked(設定問題),不是 rejected(provider 拒絕)。 */
+    public function test_a_wrong_endpoint_config_blocks_before_any_network(): void
     {
         config()->set('integrations.endpoints.themostpanel.testing', 'https://evil.invalid/api');
         Http::fake();
 
         $result = $this->gateway()->submit($this->submission());
 
-        $this->assertTrue($result->isRejected());
+        $this->assertTrue($result->isBlocked());
         $this->assertSame(FulfillmentAttentionReason::DispatchDisabled, $result->reason);
         Http::assertNothingSent();
     }
 
-    public function test_a_runtime_without_the_transport_cap_refuses_before_any_network(): void
+    public function test_a_runtime_without_the_transport_cap_blocks_before_any_network(): void
     {
         Http::fake();
 
         $result = $this->gateway(capable: false)->submit($this->submission());
 
-        $this->assertTrue($result->isRejected());
+        $this->assertTrue($result->isBlocked());
         Http::assertNothingSent();
     }
 
-    public function test_a_missing_credential_refuses_before_any_network(): void
+    public function test_a_missing_credential_blocks_before_any_network(): void
     {
         Http::fake();
 
         $result = $this->gateway(key: null)->submit($this->submission());
 
-        $this->assertTrue($result->isRejected());
+        $this->assertTrue($result->isBlocked());
         $this->assertSame(FulfillmentAttentionReason::DispatchDisabled, $result->reason);
         Http::assertNothingSent();
     }
 
-    public function test_an_invalid_submission_refuses_before_any_network(): void
+    public function test_an_invalid_submission_blocks_before_any_network(): void
     {
         Http::fake();
 
@@ -256,10 +257,39 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
         ] as $bad) {
             $result = $this->gateway()->submit($bad);
 
-            $this->assertTrue($result->isRejected());
+            $this->assertTrue($result->isBlocked());
             $this->assertSame(FulfillmentAttentionReason::UnsupportedPayload, $result->reason);
         }
 
+        Http::assertNothingSent();
+    }
+
+    /** ⛔ credential source 意外 throw:request 前 → blocked;訊息不外洩;sync 同題 unrecognised。 */
+    public function test_a_throwing_credential_source_blocks_without_leaking(): void
+    {
+        Http::fake();
+
+        $throwing = new class implements TheMostPanelDispatchCredentialSource
+        {
+            public function apiKey(): ?string
+            {
+                throw new \RuntimeException('SECRET-EXCEPTION-MARKER-133731');
+            }
+        };
+
+        $gateway = new TheMostPanelFulfillmentGateway($throwing, TheMostPanelCurlCapability::supported());
+
+        $result = $gateway->submit($this->submission());
+
+        $this->assertTrue($result->isBlocked());
+        $this->assertSame(FulfillmentAttentionReason::DispatchDisabled, $result->reason);
+        // ⛔ result 是 typed object,exception 訊息無處可去——序列化反證。
+        $this->assertStringNotContainsString(
+            'SECRET-EXCEPTION-MARKER-133731',
+            json_encode([$result->outcome, $result->reason?->value, $result->providerOrderId])
+        );
+
+        $this->assertFalse($gateway->sync('23501')->isRecognised());
         Http::assertNothingSent();
     }
 
