@@ -358,6 +358,8 @@ class FulfillmentMappingUiTest extends TestCase
                 'service_variant_id' => $variant->id,
                 'provider_service_id' => '81011',
                 'is_enabled' => true,
+                // M2B:create 預設開啟「套用上下限」;此測試專測啟用路徑,明確關閉套用。
+                'apply_provider_bounds' => false,
             ])
             ->call('create')
             ->assertHasNoFormErrors();
@@ -470,6 +472,8 @@ class FulfillmentMappingUiTest extends TestCase
                 'service_variant_id' => $variant->id,
                 'provider_service_id' => '85055',
                 'is_enabled' => true,
+                // M2B:create 預設開啟「套用上下限」;此測試專測啟用路徑,明確關閉套用。
+                'apply_provider_bounds' => false,
             ])
             ->call('create')
             ->assertHasNoFormErrors();

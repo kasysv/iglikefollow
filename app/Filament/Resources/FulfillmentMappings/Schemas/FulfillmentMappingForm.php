@@ -8,6 +8,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Rules\AvailableProviderService;
+use App\Support\ProviderBoundsTarget;
 use App\Support\QuantityCompatibility;
 use Closure;
 use Filament\Forms\Components\Placeholder;
@@ -124,6 +125,49 @@ class FulfillmentMappingForm
                         ->columnSpanFull()
                         ->content(function (Get $get): string {
                             return self::compatibilitySummary(
+                                $get('service_variant_id'),
+                                $get('provider_service_id'),
+                            );
+                        }),
+
+                    Toggle::make('apply_provider_bounds')
+                        ->label('套用 API 上下限為商品預設')
+                        /*
+                         * ⛔ 非持久化選項:不是 mapping 欄位,只是這一次提交
+                         * 的 Owner 決定。create 預設開啟;edit 由 page 的
+                         * mutateFormDataBeforeFill 固定為關閉,只有 Owner
+                         * 明確勾選才套用。值在 page 端取出後即從 $data 移除。
+                         */
+                        ->default(true)
+                        ->live()
+                        ->columnSpanFull()
+                        ->helperText('套用「最近一次已存入本機目錄」的供應商 min/max 作為本站商品上下限預設。'
+                            .'供應商最低量為 0 時,本站最低購買量會設為 1。數量間隔(step)不會被改動。'
+                            .'⛔ 套用時這筆對應必須保持停用;不能在同一次提交同時套用並啟用。')
+                        /*
+                         * ⛔ 套用與 enable 不得同送:套用是「以 API 範圍當
+                         * 預設」的草稿動作,mapping 必須維持 disabled,讓
+                         * Owner 分兩步確認。server-side rule,不信任 UI。
+                         */
+                        ->rules(fn (Get $get): array => [
+                            function (string $attribute, mixed $value, Closure $fail) use ($get): void {
+                                if ($value === true && $get('is_enabled') === true) {
+                                    $fail('不能在同一次提交中同時套用上下限並啟用對應;請先套用(保持停用),確認後再另行啟用。');
+                                }
+                            },
+                        ]),
+
+                    /*
+                     * Owner 決策預覽:套用會把款式改成什麼。⛔ 純文字
+                     * Placeholder(escaped 渲染),只陳述事實;非 Owner 根本
+                     * 進不了這個 resource(policy 擋)。
+                     */
+                    Placeholder::make('provider_bounds_preview')
+                        ->label('套用預覽')
+                        ->columnSpanFull()
+                        ->visible(fn (Get $get): bool => $get('apply_provider_bounds') === true)
+                        ->content(function (Get $get): string {
+                            return self::boundsPreview(
                                 $get('service_variant_id'),
                                 $get('provider_service_id'),
                             );
@@ -253,5 +297,62 @@ class FulfillmentMappingForm
         return $site.PHP_EOL.$provider.PHP_EOL
             .$assessment->label()
             .($availability === '' ? '' : PHP_EOL.$availability);
+    }
+
+    /**
+     * 套用預覽:本站現值 → 目標值,純文字事實陳述。
+     *
+     * ⛔ 只是畫面預覽;實際套用時 ApplyProviderBoundsToVariant 會依
+     * provider、service ID、available=true 重查再算一次,不信任這裡。
+     */
+    private static function boundsPreview(mixed $variantId, mixed $serviceId): string
+    {
+        $variant = (is_int($variantId) || (is_string($variantId) && preg_match('/\A[1-9][0-9]*\z/', (string) $variantId) === 1))
+            ? ServiceVariant::query()->find($variantId)
+            : null;
+
+        // 顯示層正規化:同 compatibilitySummary,數字字串 key 會被 cast 成 int。
+        if (is_int($serviceId)) {
+            $serviceId = (string) $serviceId;
+        }
+
+        $service = is_string($serviceId) && $serviceId !== ''
+            ? ProviderService::query()
+                ->where('provider', IntegrationProvider::TheMostPanel->value)
+                ->where('provider_service_id', $serviceId)
+                ->where('is_available', true)
+                ->first()
+            : null;
+
+        if ($variant === null || $service === null) {
+            return '請先選擇商品款式與「可用」的供應商服務,這裡會預覽套用後的上下限。';
+        }
+
+        $target = ProviderBoundsTarget::compute($variant, $service);
+
+        $current = '本站現值:min '.(int) $variant->min_quantity
+            .'／max '.(int) $variant->max_quantity
+            .'／預設 '.(int) $variant->default_quantity
+            .'／間隔 '.(int) $variant->step_quantity.'。';
+
+        $api = 'API 目錄:min '.$service->minimum_quantity_raw
+            .'／max '.$service->maximum_quantity_raw
+            .'(最後觀察 '.($service->last_seen_at ?? '未記錄').')。';
+
+        if (! $target->ok) {
+            return $current.PHP_EOL.$api.PHP_EOL.$target->label();
+        }
+
+        $plan = '套用後目標:min '.$target->targetMin
+            .'／max '.$target->targetMax
+            .'／預設 '.$target->targetDefault
+            .($target->defaultAdjusted ? '(原預設不符新範圍或間隔,調整為範圍內第一個合法間隔倍數)' : '(保留原預設)')
+            .'。';
+
+        $notes = '⚠ 數量間隔(step)不會被改動。'
+            .($target->minZeroLifted ? ' ⚠ 供應商最低量為 0,本站最低購買量設為 1。' : '')
+            .' ⚠ 套用時這筆對應保持停用。';
+
+        return $current.PHP_EOL.$api.PHP_EOL.$plan.PHP_EOL.$notes;
     }
 }

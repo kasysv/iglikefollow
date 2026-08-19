@@ -77,7 +77,11 @@
                         @php $isOpen = $platform->status === 'published' && $platform->services->isNotEmpty(); @endphp
                         <article class="surface flex flex-col p-6 transition-shadow duration-200 hover:shadow-[0_28px_70px_rgba(16,17,15,0.11)] sm:p-7">
                             <div class="flex items-center justify-between gap-3">
-                                <h3 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform->name }}</h3>
+                                <div class="flex min-w-0 items-center gap-3">
+                                    {{-- ⛔ 純裝飾品牌標誌(allowlist 本機 SVG);準備中的平台照樣顯示,availability 不變。 --}}
+                                    <x-platform-brand-icon :slug="$platform->slug" />
+                                    <h3 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform->name }}</h3>
+                                </div>
                                 @unless ($isOpen)
                                     <span class="shrink-0 rounded-full bg-mist px-3 py-1 text-xs font-bold text-black/55">準備中</span>
                                 @endunless
