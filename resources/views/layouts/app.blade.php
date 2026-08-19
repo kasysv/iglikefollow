@@ -13,9 +13,12 @@
     <header class="border-b border-black/10 bg-paper/95">
         <div class="mx-auto flex min-h-20 max-w-[1220px] items-center justify-between gap-6 px-5 sm:px-8">
             {{-- Logo 是圖片，公司名稱仍須以可存取名稱保留，⛔ 不可只剩一張沒有名字的圖。 --}}
-            <a href="{{ route('home') }}" aria-label="{{ $siteName }} 首頁">
+            <a href="{{ route('home') }}" aria-label="{{ $siteName }} 首頁" class="flex min-w-0 items-center gap-3">
+                {{-- 品牌方形標誌:裝飾性(名稱由 wordmark 的 alt 提供),固定尺寸避免 CLS。 --}}
+                <img src="{{ asset('images/iglikefollow-mark.png') }}" alt=""
+                     class="h-11 w-11 shrink-0 rounded-xl sm:h-12 sm:w-12" width="361" height="361">
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName }}"
-                     class="h-auto w-44 sm:w-52" width="715" height="143">
+                     class="h-auto w-40 sm:w-52" width="715" height="143">
             </a>
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
                 @foreach ($navPlatforms as $navPlatform)
