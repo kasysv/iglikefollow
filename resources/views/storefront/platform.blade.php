@@ -111,7 +111,7 @@
                 <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">選擇服務</h2>
 
                 @if ($featured)
-                    <a href="{{ route('service', [$platform->slug, $featured->slug]) }}"
+                    <a href="{{ $featured->primaryUrl() }}"
                        class="service-card service-card--featured mt-7">
                         <div class="flex flex-wrap items-start justify-between gap-5">
                             <div class="max-w-xl">
@@ -133,7 +133,7 @@
 
                 <div class="mt-4 grid gap-4 sm:grid-cols-2">
                     @foreach ($rest as $service)
-                        <a href="{{ route('service', [$platform->slug, $service->slug]) }}" class="service-card">
+                        <a href="{{ $service->primaryUrl() }}" class="service-card">
                             @if ($service->card_image_path)
                                 <img src="{{ \Illuminate\Support\Facades\Storage::url($service->card_image_path) }}"
                                      alt="{{ $service->card_image_alt }}"
@@ -172,7 +172,7 @@
                                 <ul class="mt-3 space-y-2 text-sm">
                                     @foreach ($goalServices as $service)
                                         <li>
-                                            <a href="{{ route('service', [$platform->slug, $service->slug]) }}"
+                                            <a href="{{ $service->primaryUrl() }}"
                                                class="inline-flex min-h-11 items-center text-black/65 transition-colors duration-200 hover:text-ink hover:underline">
                                                 {{ str($service->name)->after($platform->name . ' ')->toString() ?: $service->name }}
                                             </a>
@@ -204,7 +204,7 @@
                             @foreach ($services as $service)
                                 <tr class="border-b border-black/10 align-top">
                                     <th scope="row" class="py-4 pr-4 font-semibold">
-                                        <a href="{{ route('service', [$platform->slug, $service->slug]) }}"
+                                        <a href="{{ $service->primaryUrl() }}"
                                            class="hover:text-trust hover:underline">
                                             {{ str($service->name)->after($platform->name . ' ')->toString() ?: $service->name }}
                                         </a>

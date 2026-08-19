@@ -23,7 +23,7 @@ class PreviewAction
             ->label('在前台預覽')
             ->icon('heroicon-o-eye')
             ->color('gray')
-            ->url(fn (Model $record): string => self::url($record).'?preview=1')
+            ->url(fn (Model $record): string => self::url($record))
             ->openUrlInNewTab()
             // 沒有網址代碼（或平台被刪掉）時無法組出網址，⛔ 不顯示會壞掉的連結。
             ->visible(fn (Model $record): bool => self::url($record) !== '');
@@ -32,12 +32,21 @@ class PreviewAction
     private static function url(Model $record): string
     {
         if ($record instanceof Platform) {
-            return filled($record->slug) ? route('platform', $record->slug) : '';
+            return filled($record->slug) ? route('platform', $record->slug).'?preview=1' : '';
         }
 
         if ($record instanceof Service) {
+            /*
+             * M2-C(D-103):published 且已有 product slug 的服務,後台預覽
+             * 直接開唯一 canonical /product/ 頁;draft 或尚無 slug 才走
+             * 商品級 /services/...?preview=1(guest 404、noindex)。
+             */
+            if ($record->status === 'published' && filled($record->product_slug)) {
+                return $record->primaryUrl();
+            }
+
             return filled($record->slug) && filled($record->platform?->slug)
-                ? route('service', [$record->platform->slug, $record->slug])
+                ? route('service', [$record->platform->slug, $record->slug]).'?preview=1'
                 : '';
         }
 

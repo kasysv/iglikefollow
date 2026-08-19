@@ -152,7 +152,8 @@ class HomePlatformBrandIconsTest extends TestCase
         $this->assertSame(1, substr_count($html, '<h1'));
         $this->assertStringContainsString('<title>社群成長服務｜Instagram、Facebook｜IGLIKEFOLLOW</title>', $html);
         $this->assertStringContainsString('IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。先選擇平台，再選擇需要的服務類型，最後挑選數量方案並免會員結帳。', $html);
-        $this->assertStringNotContainsString('rel="canonical"', $html);
+        // M2-C:首頁輸出自我 canonical(尾斜線根形式);noindex 不變。
+        $this->assertStringContainsString('<link rel="canonical" href="'.url('/').'/">', $html);
         $response->assertHeader('X-Robots-Tag', 'noindex, nofollow');
         $response->assertSee('<meta name="robots" content="noindex, nofollow">', false);
     }

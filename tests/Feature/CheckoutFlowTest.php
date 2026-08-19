@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\MockCheckoutController;
+use App\Models\Service;
 use App\Models\ServiceVariant;
 use App\Support\CheckoutSession;
 use Database\Seeders\CatalogSeeder;
@@ -146,7 +147,7 @@ class CheckoutFlowTest extends TestCase
         $variant->update(['min_quantity' => 5000, 'default_quantity' => 5000]);
 
         $this->get('/checkout')->assertRedirect(
-            route('service', ['instagram', $variant->service->slug])
+            $variant->service->fresh()->primaryUrl()
         );
     }
 
@@ -167,11 +168,11 @@ class CheckoutFlowTest extends TestCase
         $this->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 300]);
 
         $this->post('/checkout/return')->assertRedirect(
-            route('service', ['instagram', 'followers']).'#checkout'
+            Service::query()->where('product_slug', 'ig買粉絲')->firstOrFail()->primaryUrl().'#checkout'
         );
 
         // 「返回修改」不得要求客人重新挑一次。
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
 
         $this->assertStringContainsString("variant: '{$taiwan->id}'", $html);
         $this->assertStringContainsString('quantity: 300', $html);
@@ -186,11 +187,11 @@ class CheckoutFlowTest extends TestCase
         $this->post('/checkout/return');
 
         // 第一次：恢復原選擇。
-        $this->get('/services/instagram/followers')->assertOk()
+        $this->get('/product/ig買粉絲/')->assertOk()
             ->assertSee("variant: '{$taiwan->id}'", false);
 
         // 重新整理同一個乾淨網址：⛔ marker 已用掉，回到預設項目。
-        $this->get('/services/instagram/followers')->assertOk()
+        $this->get('/product/ig買粉絲/')->assertOk()
             ->assertSee("variant: '{$featured->id}'", false)
             ->assertDontSee("variant: '{$taiwan->id}'", false);
     }
@@ -219,7 +220,7 @@ class CheckoutFlowTest extends TestCase
         ])->headers->get('Location');
 
         $this->assertSame(
-            route('service', ['instagram', 'followers']).'#checkout',
+            Service::query()->where('product_slug', 'ig買粉絲')->firstOrFail()->primaryUrl().'#checkout',
             $location
         );
     }
@@ -240,7 +241,7 @@ class CheckoutFlowTest extends TestCase
 
         // ⛔ 一般瀏覽（重新整理、從導覽再進來）必須回到預設項目，
         // 不能一直停在上次選的那張卡片。
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
 
         $this->assertStringContainsString("variant: '{$featured->id}'", $html);
         $this->assertStringNotContainsString("variant: '{$taiwan->id}'", $html);
@@ -251,7 +252,7 @@ class CheckoutFlowTest extends TestCase
     {
         $featured = $this->variant('ig-followers-standard');
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
 
         // 第一張卡片必須帶 checked，⛔ 否則沒有任何卡片顯示為選中。
         $this->assertMatchesRegularExpression(
@@ -274,7 +275,7 @@ class CheckoutFlowTest extends TestCase
 
     public function test_the_service_form_has_no_duplicate_hidden_variant_field(): void
     {
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
 
         // radio 已用 form="checkout-form" 關聯，⛔ 再放 hidden 會送出重複 key。
         $this->assertStringNotContainsString('type="hidden" name="variant"', $html);
@@ -298,11 +299,11 @@ class CheckoutFlowTest extends TestCase
     {
         $taiwan = $this->variant('ig-followers-taiwan');
 
-        $this->from('/services/instagram/followers')
+        $this->from('/product/ig買粉絲/')
             ->post('/checkout/start', ['variant' => $taiwan->id, 'quantity' => 7])
             ->assertSessionHasErrors('quantity');
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
 
         // 數量被擋不該連帶把選好的服務項目也丟掉。
         $this->assertStringContainsString("variant: '{$taiwan->id}'", $html);
@@ -312,11 +313,11 @@ class CheckoutFlowTest extends TestCase
     {
         $featured = $this->variant('ig-followers-standard');
 
-        $this->from('/services/instagram/followers')
+        $this->from('/product/ig買粉絲/')
             ->post('/checkout/start', ['variant' => 999999, 'quantity' => 7])
             ->assertSessionHasErrors();
 
-        $this->get('/services/instagram/followers')->assertOk()
+        $this->get('/product/ig買粉絲/')->assertOk()
             ->assertSee("variant: '{$featured->id}'", false);
     }
 
@@ -326,11 +327,11 @@ class CheckoutFlowTest extends TestCase
         $real->update(['status' => 'draft']);
         $featured = $this->variant('ig-followers-standard');
 
-        $this->from('/services/instagram/followers')
+        $this->from('/product/ig買粉絲/')
             ->post('/checkout/start', ['variant' => $real->id, 'quantity' => 7])
             ->assertSessionHasErrors();
 
-        $this->get('/services/instagram/followers')->assertOk()
+        $this->get('/product/ig買粉絲/')->assertOk()
             ->assertSee("variant: '{$featured->id}'", false);
     }
 
@@ -339,12 +340,12 @@ class CheckoutFlowTest extends TestCase
         $other = $this->variant('ig-post-likes-standard');
         $featured = $this->variant('ig-followers-standard');
 
-        $this->from('/services/instagram/followers')
+        $this->from('/product/ig買粉絲/')
             ->post('/checkout/start', ['variant' => $other->id, 'quantity' => 7])
             ->assertSessionHasErrors('quantity');
 
         // ⛔ 別的服務的 old input 不得跨頁顯示。
-        $this->get('/services/instagram/followers')->assertOk()
+        $this->get('/product/ig買粉絲/')->assertOk()
             ->assertSee("variant: '{$featured->id}'", false);
     }
 

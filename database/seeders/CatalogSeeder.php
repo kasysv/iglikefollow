@@ -7,6 +7,7 @@ use App\Models\Platform;
 use App\Models\Service;
 use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
+use App\Support\ProductSlugMap;
 use Illuminate\Database\Seeder;
 
 /**
@@ -86,6 +87,8 @@ class CatalogSeeder extends Seeder
                     'input_label' => $serviceData['input_label'],
                     'input_hint' => $serviceData['input_hint'],
                     'delivery_summary' => $serviceData['delivery'],
+                    // M2-C(D-103):固定 mapping 之 product slug;不在表內=null。
+                    'product_slug' => ProductSlugMap::for($platform->slug, $serviceData['slug']),
                     'seo_title' => $serviceData['name'].'｜IGLIKEFOLLOW',
                     'meta_description' => $serviceData['summary'],
                     'is_featured' => ! empty($serviceData['featured_service']),

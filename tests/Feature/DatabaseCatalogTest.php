@@ -53,9 +53,10 @@ class DatabaseCatalogTest extends TestCase
 
         $this->get('/services/instagram/new-service')->assertNotFound();
 
-        $service->update(['status' => 'published', 'first_published_at' => now()]);
+        // M2-C(D-103):公開頁=有 product slug 的 /product/ canonical。
+        $service->update(['status' => 'published', 'first_published_at' => now(), 'product_slug' => 'new-service']);
 
-        $this->get('/services/instagram/new-service')->assertOk()->assertSee('New Service');
+        $this->get('/product/new-service/')->assertOk()->assertSee('New Service');
     }
 
     public function test_guests_cannot_use_the_preview_flag_to_see_drafts(): void
@@ -123,6 +124,7 @@ class DatabaseCatalogTest extends TestCase
         $service = Service::factory()->published()->create([
             'platform_id' => $platform->id,
             'slug' => 'xss',
+            'product_slug' => 'test-xss',
             'name' => 'XSS Probe',
         ]);
 
@@ -134,7 +136,7 @@ class DatabaseCatalogTest extends TestCase
             'sort_order' => 0,
         ]);
 
-        $html = $this->get('/services/instagram/xss')->assertOk()->getContent();
+        $html = $this->get('/product/test-xss/')->assertOk()->getContent();
 
         // ⛔ 後台內容不得以 raw HTML／script 輸出到前台。
         $this->assertStringNotContainsString('<script>alert(1)</script>', $html);

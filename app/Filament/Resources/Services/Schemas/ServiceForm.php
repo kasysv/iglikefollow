@@ -53,6 +53,30 @@ class ServiceForm
                             || ! Auth::user()?->isOwner())
                         ->dehydrated(),
 
+                    TextInput::make('product_slug')
+                        ->label('正式商品網址代碼(product slug)')
+                        /*
+                         * ⛔ M2-C(D-103):受控技術 SEO 欄位。公開商品頁的唯一
+                         * canonical 是 /product/{product_slug}/;只有擁有者可改,
+                         * Editor 唯讀。正式發布後要改網址必須走 SEO migration
+                         * (逐 URL redirect 計畫),不得在後台直接換。
+                         */
+                        ->helperText(fn (?Service $record): string => '完整網址預覽:'
+                            .(filled($record?->product_slug)
+                                ? url('/product/'.rawurlencode($record->product_slug)).'/'
+                                : '(尚未設定,前台不會出現這個服務)')
+                            .' ⚠ 正式發布後改網址須走 SEO migration。')
+                        ->maxLength(255)
+                        ->rule(fn (): \Closure => function (string $attribute, mixed $value, \Closure $fail): void {
+                            if ($value !== null && $value !== '' && ! Service::isValidProductSlug((string) $value)) {
+                                $fail('只能用中文、小寫英文、數字與連字號;不可含 /、?、#、.、空白。');
+                            }
+                        })
+                        ->unique(ignoreRecord: true)
+                        ->validationMessages(['unique' => '這個商品網址代碼已被其他服務使用。'])
+                        ->disabled(fn (): bool => ! Auth::user()?->isOwner())
+                        ->dehydrated(fn (): bool => (bool) Auth::user()?->isOwner()),
+
                     TextInput::make('summary')
                         ->label('一句話說明')
                         ->helperText('顯示在服務頁標題下方，說明這個服務在做什麼。')

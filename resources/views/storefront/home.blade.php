@@ -1,7 +1,9 @@
 @extends('layouts.app', [
-    'title' => '社群成長服務｜Instagram、Facebook｜IGLIKEFOLLOW',
-    'description' => $settings?->home_intro
-        ?: 'IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。選擇平台與服務後即可快速結帳。',
+    {{-- M2-C:首頁 SEO 由後台欄位驅動;無值才用既有 fallback。 --}}
+    'title' => $settings?->seo_title ?: '社群成長服務｜Instagram、Facebook｜IGLIKEFOLLOW',
+    'description' => $settings?->meta_description
+        ?: ($settings?->home_intro
+            ?: 'IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。選擇平台與服務後即可快速結帳。'),
 ])
 
 @section('content')

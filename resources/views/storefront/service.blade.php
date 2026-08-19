@@ -123,7 +123,8 @@
 
                 {{-- 服務項目導航：真實 radio，關閉 JS 仍可選 --}}
                 <aside aria-labelledby="variant-title" class="mt-8">
-                    <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">選擇服務項目</h2>
+                    {{-- M2-C:選購區標題由後台 cta_label 驅動;無值 fallback「選擇數量方案」。 --}}
+                    <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">{{ $service->cta_label ?: '選擇數量方案' }}</h2>
                     <p class="mt-2 text-sm leading-6 text-black/55">不同服務項目的來源與單價不同。</p>
                     <div class="mt-5 grid gap-2 sm:grid-cols-2">
                         @foreach ($variants as $variant)
@@ -321,10 +322,10 @@
         <div class="mx-auto max-w-[1320px] px-5 py-14 sm:px-8">
             <h2 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform->name }} 其他服務</h2>
             <ul class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                @foreach ($platform->services()->published()->orderBy('sort_order')->get() as $other)
+                @foreach ($platform->services()->published()->whereNotNull('product_slug')->orderBy('sort_order')->get() as $other)
                     @if ($other->id !== $service->id)
                         <li>
-                            <a href="{{ route('service', [$platform->slug, $other->slug]) }}"
+                            <a href="{{ $other->primaryUrl() }}"
                                class="flex min-h-20 flex-col justify-center rounded-2xl border border-black/10 bg-white px-5 py-4 transition-colors duration-200 hover:border-ink">
                                 <span class="font-bold">{{ $other->name }}</span>
                                 <span class="mt-1 text-sm text-black/55">{{ $other->summary }}</span>

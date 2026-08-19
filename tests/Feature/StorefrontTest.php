@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\PaymentAttempt;
 use App\Models\Service;
 use App\Models\ServiceVariant;
+use App\Models\User;
 use Database\Seeders\CatalogSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -93,8 +94,10 @@ class StorefrontTest extends TestCase
             ->assertOk()
             ->assertSee('粉絲')
             ->assertSee('單篇貼文讚')
-            ->assertSee('自動貼文讚')
-            ->assertSee('貼文留言');
+            // M2-C(D-103):auto-likes/comments 無 product slug=不在公開列表
+            // (published 但無 canonical 的服務列出=壞連結)。
+            ->assertDontSee('自動貼文讚')
+            ->assertDontSee('貼文留言');
 
         $this->assertSame(1, substr_count($response->getContent(), '<h1'));
     }
@@ -115,7 +118,7 @@ class StorefrontTest extends TestCase
 
     public function test_service_page_shows_variants_and_correct_input_label(): void
     {
-        $this->get('/services/instagram/post-likes')
+        $this->get('/product/ig買like/')
             ->assertOk()
             ->assertSee('單篇貼文讚')
             ->assertSee('Instagram 貼文網址');
@@ -123,9 +126,9 @@ class StorefrontTest extends TestCase
 
     public function test_followers_page_offers_every_variant_in_initial_html(): void
     {
-        $this->get('/services/instagram/followers')
+        $this->get('/product/ig買粉絲/')
             ->assertOk()
-            ->assertSee('選擇服務項目')
+            ->assertSee('選擇數量方案')
             ->assertSee('一般粉絲')
             ->assertSee('真人粉絲')
             ->assertSee('台灣粉絲');
@@ -133,7 +136,7 @@ class StorefrontTest extends TestCase
 
     public function test_service_page_uses_free_quantity_input_not_fixed_tiers(): void
     {
-        $this->get('/services/instagram/followers')
+        $this->get('/product/ig買粉絲/')
             ->assertOk()
             ->assertSee('name="quantity"', false)
             ->assertSee('type="number"', false)
@@ -151,7 +154,7 @@ class StorefrontTest extends TestCase
     {
         // 單位改由 Alpine 隨服務項目切換，初始 HTML 仍必須帶著預設單位；
         // ⛔ 原本的缺陷是這裡渲染成「輸入數量（）」。
-        $this->get('/services/instagram/followers')
+        $this->get('/product/ig買粉絲/')
             ->assertOk()
             ->assertSee('輸入數量（<span x-text="b.unit">個</span>）', false)
             ->assertDontSee('輸入數量（）');
@@ -188,14 +191,34 @@ class StorefrontTest extends TestCase
             ->published()
             ->pluck('slug');
 
-        foreach ($slugs as $slug) {
-            $response->assertSee('/services/instagram/'.$slug, false);
+        // M2-C(D-103):hub 內鏈直達 /product/ canonical,商品級 /services 內鏈=0。
+        $services = Service::query()
+            ->whereHas('platform', fn ($q) => $q->where('slug', 'instagram'))
+            ->published()
+            ->whereNotNull('product_slug')
+            ->get();
+
+        $this->assertNotEmpty($services);
+
+        foreach ($services as $service) {
+            $response->assertSee($service->primaryUrl(), false);
         }
+
+        $this->assertDoesNotMatchRegularExpression('#href="[^"]*/services/instagram/[^"]#', $response->getContent());
     }
 
     public function test_auto_likes_page_explains_prepaid_delivery(): void
     {
-        $this->get('/services/instagram/auto-likes')
+        /*
+         * M2-C(D-103):auto-likes 無 product slug=無 guest 頁(404),
+         * 內容只能由授權 preview 驗證;預付說明文案本身不得消失。
+         */
+        $this->get('/services/instagram/auto-likes')->assertNotFound();
+
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        $this->actingAs($owner)
+            ->get('/services/instagram/auto-likes?preview=1')
             ->assertOk()
             ->assertSee('預付')
             ->assertSee('公開帳號', false);

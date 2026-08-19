@@ -67,6 +67,8 @@ class M2aR3Test extends TestCase
     {
         $service = Service::factory()->create([
             'platform_id' => $platform->id, 'slug' => $slug, 'status' => 'draft',
+            // M2-C(D-103):公開頁需要 product slug。
+            'product_slug' => 'test-'.$slug,
         ]);
         $service->update(['status' => 'published']);
 
@@ -350,8 +352,8 @@ class M2aR3Test extends TestCase
             ->fillForm(['platform_id' => $facebook->id])
             ->call('save');
 
-        // 舊網址仍然 200，新組合不得存在。
-        $this->get('/services/instagram/followers')->assertOk();
+        // canonical 商品頁仍然 200(平台未被改走),新平台組合不得存在。
+        $this->get('/product/test-followers/')->assertOk();
         $this->get('/services/facebook/followers')->assertNotFound();
     }
 
@@ -364,7 +366,7 @@ class M2aR3Test extends TestCase
         $service->update(['slug' => 'renamed']);
 
         $this->assertSame('followers', $service->fresh()->slug);
-        $this->get('/services/instagram/followers')->assertOk();
+        $this->get('/product/test-followers/')->assertOk();
     }
 
     // ============================================ 6. Owner 既有流程不退步

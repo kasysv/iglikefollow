@@ -54,7 +54,7 @@ class CheckoutSession
             'variant_id' => $variant->id,
             'quantity' => $quantity,
             // 回到商品頁用；⛔ 存 URL 而非個資。
-            'return_url' => route('service', [$service->platform->slug, $service->slug]),
+            'return_url' => $service->primaryUrl(),
             /*
              * 這一次選購的識別碼，用來防止重複建單。
              *
@@ -127,10 +127,7 @@ class CheckoutSession
         $stored = $stored['return_url'] ?? null;
 
         // ⛔ 只接受本站 route 產生的 URL，不讓 session 值變成開放轉址。
-        $expected = route('service', [
-            $variant->service->platform->slug,
-            $variant->service->slug,
-        ]);
+        $expected = $variant->service->primaryUrl();
 
         return is_string($stored) && $stored === $expected ? $stored : $expected;
     }

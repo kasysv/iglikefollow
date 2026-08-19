@@ -7,6 +7,7 @@ use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\View\View;
@@ -26,6 +27,8 @@ class StorefrontController extends Controller
             'platforms' => $this->catalog->navigablePlatforms(),
             'faqs' => $this->catalog->globalFaqs(),
             'settings' => $settings,
+            // M2-C:首頁 self-canonical(全站仍 noindex,canonical 只是宣告主形式)。
+            'canonical' => url('/').'/',
             // CTA 目的地由設定的固定目標決定，⛔ 不再取「排序第一個」而隨排序漂移。
             'ctaUrl' => $settings?->ctaUrl() ?? route('home').'#platforms',
         ]);
@@ -45,21 +48,74 @@ class StorefrontController extends Controller
             'platform' => $record,
             'faqs' => $this->catalog->platformFaqs($record),
             'isPreview' => $preview,
+            // ⛔ preview 不輸出可索引 canonical。
+            'canonical' => $preview ? null : route('platform', $record->slug),
         ]);
 
         return $preview ? $this->noindex($view) : $view;
     }
 
-    public function service(Request $request, string $platform, string $service): View|Response
+    /**
+     * D-103 canonical 商品頁:`/product/{slug}/`。
+     *
+     * ⛔ 唯一一致形式=尾斜線;非尾斜線請求在本機以 302 收斂到主形式
+     * (正式 301 屬 M5,不在本輪)。slug shape 不合 allowlist 一律 404。
+     */
+    public function product(Request $request, string $product): View|Response|RedirectResponse
     {
-        $preview = $this->wantsPreview($request);
-
-        $record = $preview
-            ? $this->catalog->findServiceForPreview($platform, $service)
-            : $this->catalog->findService($platform, $service);
+        $record = $this->catalog->findServiceByProductSlug($product);
 
         abort_if($record === null, 404);
 
+        $canonical = $record->primaryUrl();
+
+        $path = (string) parse_url($request->getRequestUri(), PHP_URL_PATH);
+
+        /*
+         * ⛔ 測試 client 的 prepareUrlForRequest 會剝掉尾斜線,永遠送出
+         * 非尾斜線 URI;在 unit test runtime 跳過此收斂以免自我迴圈。
+         * 真實 HTTP(Apache/PHPStudy)行為由 local smoke 驗證:非尾斜線
+         * 302 → 尾斜線 canonical。
+         */
+        if (! app()->runningUnitTests() && ! str_ends_with($path, '/')) {
+            return redirect()->to($canonical, 302);
+        }
+
+        return $this->renderServicePage($request, $record, preview: false, canonical: $canonical);
+    }
+
+    public function service(Request $request, string $platform, string $service): View|Response|RedirectResponse
+    {
+        $preview = $this->wantsPreview($request);
+
+        if ($preview) {
+            $record = $this->catalog->findServiceForPreview($platform, $service);
+
+            abort_if($record === null, 404);
+
+            return $this->renderServicePage($request, $record, preview: true, canonical: null);
+        }
+
+        $record = $this->catalog->findService($platform, $service);
+
+        /*
+         * ⛔ D-103:商品級 /services/... 不得形成可索引第二頁。published
+         * 且已有 product slug 的 guest request 以單次 302 收斂到唯一
+         * canonical;沒有 product slug(draft 已由 findService 排除;
+         * 過渡期尚未指派 slug 的 published 服務)且非授權 preview 回 404。
+         */
+        abort_if($record === null, 404);
+
+        if (filled($record->product_slug)) {
+            return redirect()->to($record->primaryUrl(), 302);
+        }
+
+        abort(404);
+    }
+
+    /** 商品頁共用渲染;product canonical 與 authenticated preview 都走這裡。 */
+    private function renderServicePage(Request $request, Service $record, bool $preview, ?string $canonical): View|Response
+    {
         $resumed = $this->resumedSelection($request, $record)
             ?? $this->selectionFromOldInput($record);
 
@@ -67,6 +123,7 @@ class StorefrontController extends Controller
             'service' => $record,
             'platform' => $record->platform,
             'isPreview' => $preview,
+            'canonical' => $canonical,
             'resumedVariantId' => $resumed['variant']->id ?? null,
             'resumedQuantity' => $resumed['quantity'] ?? null,
         ]);

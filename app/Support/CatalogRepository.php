@@ -52,7 +52,12 @@ class CatalogRepository
         return Platform::query()
             ->published()
             ->where('slug', $slug)
-            ->with(['services' => fn ($q) => $q->published()->orderBy('sort_order')
+            /*
+             * ⛔ M2-C(D-103):公開列表只列有 product_slug 的服務——published
+             * 但尚無 slug(如 auto-likes 過渡期)沒有可指的 guest 頁,列出
+             * 就是壞連結,也違反「公開 HTML 商品內鏈 0 個 /services/...」。
+             */
+            ->with(['services' => fn ($q) => $q->published()->whereNotNull('product_slug')->orderBy('sort_order')
                 ->with(['variants' => fn ($v) => $v->published()->orderBy('sort_order')])])
             ->first();
     }
@@ -80,6 +85,30 @@ class CatalogRepository
             ->published()
             ->where('platform_id', $platform->id)
             ->where('slug', $serviceSlug)
+            ->with([
+                'platform',
+                'variants' => fn ($q) => $q->published()->orderBy('sort_order'),
+                'contentSections' => fn ($q) => $q->published()->orderBy('sort_order'),
+                'faqs' => fn ($q) => $q->published()->orderBy('sort_order'),
+            ])
+            ->first();
+    }
+
+    /**
+     * D-103 `/product/{slug}/` canonical 查找:published service+published
+     * platform,只認 `product_slug`。⛔ shape 不合 allowlist 直接 null,
+     * 不進 DB 查詢。
+     */
+    public function findServiceByProductSlug(string $productSlug): ?Service
+    {
+        if (! Service::isValidProductSlug($productSlug)) {
+            return null;
+        }
+
+        return Service::query()
+            ->published()
+            ->where('product_slug', $productSlug)
+            ->whereHas('platform', fn ($p) => $p->published())
             ->with([
                 'platform',
                 'variants' => fn ($q) => $q->published()->orderBy('sort_order'),

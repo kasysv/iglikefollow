@@ -110,7 +110,7 @@ class CatalogCorrectionTest extends TestCase
         $variant = $this->variant('ig-followers-standard');
         $variant->forceFill(['status' => 'draft'])->save();
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/ig買粉絲/')
             ->assertOk()
             ->assertDontSee($variant->label);
     }
@@ -285,13 +285,18 @@ class CatalogCorrectionTest extends TestCase
 
     // ============================================ 4. 下架不得讓服務頁消失
 
-    public function test_the_facebook_comments_page_survives_its_variant_being_drafted(): void
+    public function test_a_published_page_survives_its_only_variant_being_drafted(): void
     {
-        $variant = $this->variant('fb-comments-standard');
+        /*
+         * M2-C(D-103):comments 無 product slug、無 guest 頁;本測試的
+         * 原意「下架唯一 variant 不得讓已發布服務頁 404」改由有 canonical
+         * 的 FB followers 驗證。
+         */
+        $variant = $this->variant('fb-followers-standard');
         $variant->forceFill(['status' => 'draft'])->save();
 
         // 服務本身仍已發布，⛔ 不得因為沒有可售方案就 404。
-        $this->get('/services/facebook/comments')->assertOk();
+        $this->get('/product/fb買粉絲/')->assertOk();
     }
 
     public function test_other_facebook_services_keep_their_published_variants(): void

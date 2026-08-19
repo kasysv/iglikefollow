@@ -796,12 +796,12 @@ class M2aR2Test extends TestCase
 
         // 3. 發布服務。
         Livewire::test(EditService::class, ['record' => $service->getRouteKey()])
-            ->fillForm(['status' => 'published'])
+            ->fillForm(['status' => 'published', 'product_slug' => 'lifecycle-followers'])
             ->call('save')
             ->assertHasNoFormErrors();
 
-        // 4. 前台初始 HTML 就要看得到，⛔ 不依賴 JavaScript 補畫。
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        // 4. 前台初始 HTML 就要看得到，⛔ 不依賴 JavaScript 補畫(D-103:/product/ canonical)。
+        $html = $this->get('/product/lifecycle-followers/')->assertOk()->getContent();
 
         $this->assertStringContainsString('Instagram 粉絲', $html);
         $this->assertStringContainsString('一般粉絲', $html);
@@ -822,9 +822,10 @@ class M2aR2Test extends TestCase
 
         $this->get('/services/instagram')->assertOk()->assertDontSee('/services/instagram/followers', false);
 
-        $service->update(['status' => 'published']);
+        $service->update(['status' => 'published', 'product_slug' => 'hub-followers']);
 
-        $this->get('/services/instagram')->assertOk()->assertSee('/services/instagram/followers', false);
+        // D-103:hub 內鏈直達 /product/ canonical。
+        $this->get('/services/instagram')->assertOk()->assertSee($service->fresh()->primaryUrl(), false);
     }
 
     /**

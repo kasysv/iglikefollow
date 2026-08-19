@@ -51,4 +51,32 @@ class Service extends Model
     {
         return $this->first_published_at !== null;
     }
+
+    /**
+     * product slug allowlist:Unicode 中文、ASCII 小寫字母、數字與 `-`。
+     *
+     * ⛔ 禁止 `/`、`?`、`#`、`.`、空白、控制字元與編碼繞過;這是 D-103
+     * `/product/` canonical 的 request validation 半邊(另半邊是 DB unique)。
+     */
+    public static function isValidProductSlug(string $slug): bool
+    {
+        return $slug !== '' && preg_match('/\A[\p{Han}a-z0-9-]+\z/u', $slug) === 1;
+    }
+
+    /**
+     * The single primary public URL for this service.
+     *
+     * ⛔ D-103:有 `product_slug` 的商品,唯一主要形式是尾斜線的
+     * `/product/{slug}/`;canonical、內鏈與 route 產生一律用這一個形式。
+     * 尚無 product slug(draft/comments/auto-likes)才退回商品級
+     * `/services/...` 路由(僅供預覽,不對 guest 成頁)。
+     */
+    public function primaryUrl(): string
+    {
+        if (filled($this->product_slug)) {
+            return route('product', ['product' => $this->product_slug]).'/';
+        }
+
+        return route('service', [$this->platform->slug, $this->slug]);
+    }
 }

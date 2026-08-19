@@ -14,6 +14,8 @@
     RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
 
     # Redirect Trailing Slashes If Not A Folder...
+    # M2-C(D-103):/product/ 的 canonical 形式「就是」尾斜線,不得被剝除。
+    RewriteCond %{REQUEST_URI} !^/product/
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} (.+)/$
     RewriteRule ^ %1 [L,R=301]

@@ -131,7 +131,7 @@ class CheckoutController extends Controller
             : null;
 
         $target = $variant !== null
-            ? route('service', [$variant->service->platform->slug, $variant->service->slug])
+            ? $variant->service->primaryUrl()
             : route('home').'#platforms';
 
         return redirect()->to($target)

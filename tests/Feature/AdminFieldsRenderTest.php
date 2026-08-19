@@ -36,6 +36,8 @@ class AdminFieldsRenderTest extends TestCase
             'platform_id' => $platform->id,
             'slug' => 'followers',
             'name' => 'Instagram 粉絲',
+            // M2-C(D-103):published 服務要有 product slug 才有公開頁。
+            'product_slug' => 'test-followers',
         ], $attributes));
 
         ServiceVariant::factory()->published()->create(['service_id' => $service->id]);
@@ -48,7 +50,7 @@ class AdminFieldsRenderTest extends TestCase
         $platform = $this->platform();
         $this->service($platform, ['intro' => '這是服務的詳細介紹內容。']);
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/test-followers/')
             ->assertOk()
             ->assertSee('這是服務的詳細介紹內容。');
     }
@@ -65,7 +67,7 @@ class AdminFieldsRenderTest extends TestCase
             'sort_order' => 0,
         ]);
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/test-followers/')
             ->assertOk()
             ->assertSee('服務詳細介紹。')
             ->assertSee('購買前須知')
@@ -78,7 +80,7 @@ class AdminFieldsRenderTest extends TestCase
         $this->service($platform, ['intro' => null]);
 
         // 沒填就不該留下空區塊。
-        $this->get('/services/instagram/followers')->assertOk();
+        $this->get('/product/test-followers/')->assertOk();
     }
 
     public function test_multi_line_intro_keeps_its_paragraph_breaks(): void
@@ -86,7 +88,7 @@ class AdminFieldsRenderTest extends TestCase
         $platform = $this->platform();
         $this->service($platform, ['intro' => "第一段。\n第二段。"]);
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/test-followers/')
             ->assertOk()
             // whitespace-pre-line 讓後台的換行在前台保留。
             ->assertSee('whitespace-pre-line', false)
@@ -159,13 +161,14 @@ class AdminFieldsRenderTest extends TestCase
         $this->service($platform, ['intro' => '<script>alert(2)</script>']);
 
         $this->get('/services/instagram')->assertOk()->assertDontSee('<script>alert(1)</script>', false);
-        $this->get('/services/instagram/followers')->assertOk()->assertDontSee('<script>alert(2)</script>', false);
+        $this->get('/product/test-followers/')->assertOk()->assertDontSee('<script>alert(2)</script>', false);
     }
 
     public function test_the_variant_summary_box_renders_the_default_variant_without_javascript(): void
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
 
@@ -181,7 +184,7 @@ class AdminFieldsRenderTest extends TestCase
             'description' => '來源為真實活躍帳號。',
         ]);
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/test-followers/')->assertOk()->getContent();
 
         // 初始 HTML 就要有預設服務項目的簡介，⛔ 不可只靠 Alpine 補畫。
         $this->assertStringContainsString('服務項目簡介', $html);
@@ -198,6 +201,7 @@ class AdminFieldsRenderTest extends TestCase
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
         ServiceVariant::factory()->published()->create([
@@ -207,7 +211,7 @@ class AdminFieldsRenderTest extends TestCase
             'is_featured' => true,
         ]);
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/test-followers/')->assertOk()->getContent();
 
         // x-data 的 bounds JSON 也帶著同一段文字供切換使用，那不是顯示出來的內容，
         // 因此只計算可見區域：把 x-data 屬性整段移除後再數。
@@ -225,6 +229,7 @@ class AdminFieldsRenderTest extends TestCase
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
 
@@ -236,7 +241,7 @@ class AdminFieldsRenderTest extends TestCase
             'is_featured' => true,
         ]);
 
-        $html = $this->get('/services/instagram/followers')->assertOk()->getContent();
+        $html = $this->get('/product/test-followers/')->assertOk()->getContent();
 
         // ⛔ 沒有 whitespace-pre-line 時 HTML 會把後台輸入的換行折成一整段。
         $this->assertMatchesRegularExpression(
@@ -253,6 +258,7 @@ class AdminFieldsRenderTest extends TestCase
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
 
@@ -273,6 +279,7 @@ class AdminFieldsRenderTest extends TestCase
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
         ServiceVariant::factory()->published()->create([
@@ -280,13 +287,14 @@ class AdminFieldsRenderTest extends TestCase
         ]);
 
         // 沒有任何說明時不該留下空框。
-        $this->get('/services/instagram/followers')->assertOk()->assertDontSee('服務項目簡介');
+        $this->get('/product/test-followers/')->assertOk()->assertDontSee('服務項目簡介');
     }
 
     public function test_a_variant_description_is_escaped_not_executed(): void
     {
         $platform = $this->platform();
         $service = Service::factory()->published()->create([
+            'product_slug' => 'test-followers',
             'platform_id' => $platform->id, 'slug' => 'followers',
         ]);
         ServiceVariant::factory()->published()->create([
@@ -295,7 +303,7 @@ class AdminFieldsRenderTest extends TestCase
             'is_featured' => true,
         ]);
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/test-followers/')
             ->assertOk()
             ->assertDontSee('<script>alert(3)</script>', false);
     }
@@ -306,7 +314,7 @@ class AdminFieldsRenderTest extends TestCase
         $this->service($platform, ['intro' => '服務介紹']);
 
         // 使用者決定統一用「服務項目」，⛔ 前台不得再出現舊詞「款式」。
-        foreach (['/', '/services/instagram', '/services/instagram/followers'] as $url) {
+        foreach (['/', '/services/instagram', '/product/test-followers/'] as $url) {
             $this->get($url)->assertOk()->assertDontSee('款式');
         }
     }
@@ -348,7 +356,7 @@ class AdminFieldsRenderTest extends TestCase
             $hub->assertSee($value);
         }
 
-        $page = $this->get('/services/instagram/followers')->assertOk();
+        $page = $this->get('/product/test-followers/')->assertOk();
         foreach (['SERVICE-H1-値', 'SUMMARY-値', 'SERVICE-INTRO-値', 'INPUT-LABEL-値', 'FAQ-QUESTION-値', 'FAQ-ANSWER-値'] as $value) {
             $page->assertSee($value, false);
         }

@@ -1,0 +1,488 @@
+[
+    {
+        "record_type": "site_setting",
+        "record_key": "home.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "社群成長服務｜Instagram、Facebook、Threads｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "site_setting",
+        "record_key": "home.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "IGLIKEFOLLOW 提供 Instagram、Facebook 與 Threads 的粉絲、貼文按讚與影片觀看服務。先選擇平台,再挑選數量方案,免會員快速結帳。"
+    },
+    {
+        "record_type": "site_setting",
+        "record_key": "home.home_h1",
+        "field_name": "home_h1",
+        "draft_value": "多平台社群成長服務"
+    },
+    {
+        "record_type": "site_setting",
+        "record_key": "home.home_intro",
+        "field_name": "home_intro",
+        "draft_value": "從 Instagram、Facebook 到 Threads:選擇平台與服務,挑選數量方案,免會員直接下單,完成付款後依方案交付。"
+    },
+    {
+        "record_type": "site_setting",
+        "record_key": "home.primary_cta_label",
+        "field_name": "primary_cta_label",
+        "draft_value": "選擇平台開始"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "instagram.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Instagram 服務總覽｜粉絲、貼文讚、影片觀看｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "instagram.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "一頁看懂 IGLIKEFOLLOW 的 Instagram 服務:粉絲增加、貼文按讚與影片觀看。比較服務內容後選擇數量方案,免會員快速結帳。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "instagram.tagline",
+        "field_name": "tagline",
+        "draft_value": "粉絲、貼文讚、影片觀看,依你的目標選擇。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "instagram.intro",
+        "field_name": "intro",
+        "draft_value": "想先壯大粉絲、衝高單篇貼文的讚數,還是提升影片觀看?先選擇服務類型,再進入方案頁挑選數量與等級。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "facebook.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Facebook 服務總覽｜粉絲、貼文讚、影片觀看｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "facebook.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "IGLIKEFOLLOW 的 Facebook 服務:粉專/個人/社團粉絲、貼文按讚與影片觀看。選好服務與數量方案,免會員快速結帳。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "facebook.tagline",
+        "field_name": "tagline",
+        "draft_value": "粉專、個人與社團都能用的 Facebook 成長服務。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "facebook.intro",
+        "field_name": "intro",
+        "draft_value": "粉絲、按讚或影片觀看?先選擇服務類型,再進入方案頁挑選數量。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "threads.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Threads 服務總覽｜粉絲、貼文讚、貼文曝光｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "threads.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "IGLIKEFOLLOW 的 Threads 服務:粉絲增加、貼文按讚,以及貼文的瀏覽、轉發與分享。選擇數量方案,免會員快速結帳。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "threads.tagline",
+        "field_name": "tagline",
+        "draft_value": "台灣 Threads 帳號的粉絲、按讚與貼文曝光服務。"
+    },
+    {
+        "record_type": "platform",
+        "record_key": "threads.intro",
+        "field_name": "intro",
+        "draft_value": "Threads 粉絲怎麼增加?從粉絲、貼文讚到貼文的瀏覽/轉發/分享,選擇服務類型後挑選數量方案即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "IG買粉絲｜台灣 Instagram 粉絲增加方案｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "IG 買粉絲:台灣、頂級、真人與港澳台粉絲方案,部分方案可指定性別。挑選數量、貼上帳號連結,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.h1",
+        "field_name": "h1",
+        "draft_value": "IG 買粉絲"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.summary",
+        "field_name": "summary",
+        "draft_value": "提升 Instagram 帳號的粉絲數:提供台灣、頂級、真人與港澳台粉絲方案,依需求選擇數量與等級,免會員直接下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.intro",
+        "field_name": "intro",
+        "draft_value": "粉絲數是帳號給人的第一眼指標。這裡提供多種 Instagram 粉絲方案——台灣粉絲、外觀擬真的頂級粉絲、由台灣真實用戶組成的真人粉絲,以及港澳台粉絲;頂級與真人方案還可指定男性或女性。選好數量、貼上你的帳號連結即可完成訂單,全程不需註冊會員。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-followers.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "IG買讚｜Instagram 貼文按讚增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "IG 買讚:為指定貼文增加按讚數,提供台灣、頂級、真人與港澳台方案,部分可指定性別。貼上貼文連結、選擇數量,免會員快速結帳。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.h1",
+        "field_name": "h1",
+        "draft_value": "IG 買讚"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.summary",
+        "field_name": "summary",
+        "draft_value": "為你指定的 Instagram 貼文增加按讚數:台灣、頂級、真人與港澳台方案任選,一篇一單、數量自選。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.intro",
+        "field_name": "intro",
+        "draft_value": "貼文的讚數會直接影響它給人的印象。選擇要加讚的貼文,挑選等級與數量——從台灣貼文讚、擬真的頂級讚,到台灣真實用戶的真人讚——貼上貼文連結即可下單,不需註冊會員。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-post-likes.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Instagram Reel／IGTV 影片觀看數增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "增加 Instagram Reel 或 IGTV 影片的觀看數。貼上影片連結、選擇數量,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.h1",
+        "field_name": "h1",
+        "draft_value": "Instagram 影片觀看數增加"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.summary",
+        "field_name": "summary",
+        "draft_value": "為 Reel 或 IGTV 影片增加觀看數,讓內容更容易被看見。選擇數量後貼上影片連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.intro",
+        "field_name": "intro",
+        "draft_value": "影片觀看數是內容熱度的直接訊號。選擇要提升的 Reel 或 IGTV 影片,挑選觀看數量,免會員完成結帳後依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "instagram-video-views.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "FB買粉絲｜Facebook 粉專／個人／社團粉絲增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "FB 買粉絲:粉絲專頁、個人帳號與社團都適用。挑選數量、貼上連結,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.h1",
+        "field_name": "h1",
+        "draft_value": "FB 買粉絲"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.summary",
+        "field_name": "summary",
+        "draft_value": "增加 Facebook 粉絲專頁、個人帳號或社團的粉絲數。選擇數量方案,貼上連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.intro",
+        "field_name": "intro",
+        "draft_value": "無論是粉專、個人帳號還是社團,粉絲規模都影響到第一印象與觸及。挑選需要的粉絲數量、貼上你的頁面連結,免會員完成結帳後依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-followers.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "FB買讚｜Facebook 貼文按讚增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "FB 買讚:為指定的 Facebook 貼文增加按讚數。貼上貼文連結、選擇數量,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.h1",
+        "field_name": "h1",
+        "draft_value": "FB 買讚"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.summary",
+        "field_name": "summary",
+        "draft_value": "為你指定的 Facebook 貼文增加按讚數,一篇一單、數量自選,貼上貼文連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.intro",
+        "field_name": "intro",
+        "draft_value": "貼文讚數影響貼文在讀者眼中的份量。選擇要加讚的 Facebook 貼文與數量,免會員完成結帳後依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-post-likes.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Facebook Reel／影片觀看數增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "增加 Facebook Reel 或影片的觀看數。貼上影片連結、選擇數量,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.h1",
+        "field_name": "h1",
+        "draft_value": "Facebook 影片觀看數增加"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.summary",
+        "field_name": "summary",
+        "draft_value": "為 Facebook 影片增加觀看數,讓內容獲得更多注意。選擇數量後貼上影片連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.intro",
+        "field_name": "intro",
+        "draft_value": "影片觀看數是內容表現的基本指標。選擇要提升的 Facebook 影片與觀看數量,免會員完成結帳後依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "facebook-video-views.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Threads買粉絲｜台灣 Threads 粉絲增加方案｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "Threads 買粉絲:台灣、頂級與真人粉絲方案。挑選數量、貼上帳號連結,免會員快速結帳,依方案交付。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.h1",
+        "field_name": "h1",
+        "draft_value": "Threads 買粉絲"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.summary",
+        "field_name": "summary",
+        "draft_value": "增加 Threads 帳號的粉絲數:台灣、頂級與真人方案任選,依需求挑選數量,免會員直接下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.intro",
+        "field_name": "intro",
+        "draft_value": "Threads 上的粉絲數同樣決定帳號的第一印象。提供台灣粉絲、外觀擬真的頂級粉絲,以及由台灣真實用戶組成的真人粉絲;選好數量、貼上帳號連結即可完成訂單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-followers.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Threads 貼文按讚增加｜台灣方案｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "為指定的 Threads 貼文增加按讚數:提供慢速、快速、頂級與真人方案。貼上貼文連結、選擇數量,免會員快速結帳。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.h1",
+        "field_name": "h1",
+        "draft_value": "Threads 貼文讚"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.summary",
+        "field_name": "summary",
+        "draft_value": "為你的 Threads 貼文增加按讚數:慢速、快速、頂級與真人方案任選,一篇一單、數量自選。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.intro",
+        "field_name": "intro",
+        "draft_value": "選擇要加讚的 Threads 貼文,依需求挑選交付速度與等級——慢速或快速的台灣貼文讚、擬真的頂級讚、台灣真實用戶的真人讚——貼上貼文連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-likes.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.seo_title",
+        "field_name": "seo_title",
+        "draft_value": "Threads 貼文曝光｜瀏覽、轉發、分享次數增加｜IGLIKEFOLLOW"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.meta_description",
+        "field_name": "meta_description",
+        "draft_value": "提升 Threads 貼文的曝光:可分別增加貼文的瀏覽次數、轉發次數與分享次數。貼上貼文連結、選擇數量,免會員快速結帳。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.h1",
+        "field_name": "h1",
+        "draft_value": "Threads 貼文曝光"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.summary",
+        "field_name": "summary",
+        "draft_value": "讓 Threads 貼文被更多人看到:瀏覽次數、轉發次數與分享次數三種方案,依目標分別選購。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.intro",
+        "field_name": "intro",
+        "draft_value": "這項服務交付的是貼文中的瀏覽、轉發與分享:想衝瀏覽量、增加轉發還是提高分享,分別挑選對應方案與數量,貼上貼文連結即可下單。"
+    },
+    {
+        "record_type": "service",
+        "record_key": "threads-post-boost.cta_label",
+        "field_name": "cta_label",
+        "draft_value": "選擇數量方案"
+    },
+    {
+        "record_type": "variant_tier_description",
+        "record_key": "tier.real",
+        "field_name": "description",
+        "draft_value": "真人:台灣本地真實用戶,帳號主以學生與上班族為主。提供兩種選擇——互動粉除了追蹤,還會實際為你的貼文按讚、互動;純追蹤粉則單純增加追蹤人數,安靜壯大你的粉絲規模。"
+    },
+    {
+        "record_type": "variant_tier_description",
+        "record_key": "tier.top",
+        "field_name": "description",
+        "draft_value": "頂級:人工逐一註冊的最高階擬真帳號,個人資料、粉絲與貼文完整齊全,帳號外觀足以比美真人。台灣市場唯一可指定全男或全女的頂級粉絲,適合對粉絲名單外觀要求最高的帳號。"
+    },
+    {
+        "record_type": "variant_tier_description",
+        "record_key": "tier.advanced",
+        "field_name": "description",
+        "draft_value": "高級:人工註冊的擬真帳號,資料、粉絲與貼文一應俱全,穩定度極高。帳號素質遠優於市面普通級數,價格卻與普通級相同,是高 CP 值之選。"
+    },
+    {
+        "record_type": "variant_tier_description",
+        "record_key": "tier.standard",
+        "field_name": "description",
+        "draft_value": "普通:人工註冊的擬真帳號,資料、粉絲與貼文齊全,是市面上最常見的入門級數,適合以預算為優先的需求。"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.account-lock.question",
+        "field_name": "question",
+        "draft_value": "買粉絲會導致帳號被鎖嗎?"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.account-lock.answer",
+        "field_name": "answer",
+        "draft_value": "買粉絲不會導致帳號被鎖。帳號被鎖的主要原因,是帳號本身在短時間內過度主動地去追蹤、按讚或留言他人;單純「被別人追蹤」並不會造成帳號被鎖。"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.tiers.question",
+        "field_name": "question",
+        "draft_value": "真人、頂級、高級與普通粉絲有什麼差別?"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.tiers.answer",
+        "field_name": "answer",
+        "draft_value": "真人是台灣本地真實用戶(分互動粉與純追蹤粉);頂級是最高階的人工擬真帳號,可指定全男或全女;高級同為擬真帳號、素質更高但價格與普通相同;普通則是資料齊全、市面最常見的入門級數。各方案頁的選項會標明對應等級。"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.password.question",
+        "field_name": "question",
+        "draft_value": "購買時需要提供帳號密碼嗎?"
+    },
+    {
+        "record_type": "faq",
+        "record_key": "faq.password.answer",
+        "field_name": "answer",
+        "draft_value": "不需要。下單只需提供公開的帳號或貼文連結,全程不會要求任何密碼。"
+    }
+]

@@ -84,7 +84,7 @@ class CheckoutInvoiceTest extends TestCase
 
     private function serviceHtml(): string
     {
-        return $this->get('/services/instagram/followers')->assertOk()->getContent();
+        return $this->get('/product/ig買粉絲/')->assertOk()->getContent();
     }
 
     // ------------------------------------------------------------ 初始 HTML

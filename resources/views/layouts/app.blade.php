@@ -7,6 +7,10 @@
     <meta name="robots" content="{{ (! empty($isPreview) || ! app(\App\Support\IndexingPolicy::class)->allows(request())) ? 'noindex, nofollow' : 'index, follow' }}">
     <meta name="description" content="{{ $description ?? 'IGLIKEFOLLOW Instagram 社群服務本機開發預覽。' }}">
     <title>{{ $title ?? $siteName }}</title>
+    {{-- M2-C:自我 canonical(僅在頁面明確提供時輸出;preview 頁不輸出)。 --}}
+    @if (! empty($canonical))
+        <link rel="canonical" href="{{ $canonical }}">
+    @endif
     {{-- Favicon:由品牌方形標誌產生的本機資產,無外部來源。 --}}
     <link rel="icon" href="{{ asset('favicon.ico') }}" sizes="32x32">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('images/favicon-32.png') }}">
@@ -45,14 +49,15 @@
                     <div>
                         <p class="text-sm font-bold">{{ $footerPlatform->name }}</p>
                         @php $footerServices = $footerPlatform->status === 'published'
-                            ? $footerPlatform->services()->published()->orderBy('sort_order')->get()
+                            ? $footerPlatform->services()->published()->whereNotNull('product_slug')->orderBy('sort_order')->get()
                             : collect(); @endphp
                         @if ($footerServices->isNotEmpty())
                             <ul class="mt-3 space-y-2 text-sm text-black/60">
                                 @foreach ($footerServices as $footerService)
                                     <li>
+                                        {{-- D-103:公開內鏈一律直達 /product/ canonical。 --}}
                                         <a class="hover:text-ink hover:underline"
-                                           href="{{ route('service', [$footerPlatform->slug, $footerService->slug]) }}">
+                                           href="{{ $footerService->primaryUrl() }}">
                                             {{ $footerService->name }}
                                         </a>
                                     </li>

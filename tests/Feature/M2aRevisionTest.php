@@ -146,6 +146,7 @@ class M2aRevisionTest extends TestCase
         Service::factory()->published()->create([
             'platform_id' => $platform->id,
             'slug' => 'followers',
+            'product_slug' => 'test-card-followers',
             'card_image_path' => $path,
             'card_image_alt' => '服務卡片圖',
         ]);
@@ -168,6 +169,7 @@ class M2aRevisionTest extends TestCase
         $service = Service::factory()->published()->create([
             'platform_id' => $platform->id,
             'slug' => 'followers',
+            'product_slug' => 'test-followers',
         ]);
         ServiceVariant::factory()->published()->create([
             'service_id' => $service->id,
@@ -175,7 +177,7 @@ class M2aRevisionTest extends TestCase
             'image_alt' => '服務項目圖片',
         ]);
 
-        $this->get('/services/instagram/followers')
+        $this->get('/product/test-followers/')
             ->assertOk()
             ->assertSee($path, false)
             ->assertSee('服務項目圖片', false);

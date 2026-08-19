@@ -98,7 +98,7 @@ class SiteSetting extends Model
             $service = $this->ctaService;
 
             return ($service?->status === 'published' && $service->platform?->status === 'published')
-                ? route('service', [$service->platform->slug, $service->slug])
+                ? $service->primaryUrl()
                 : $anchor;
         }
 

@@ -20,6 +20,11 @@ class ProviderServicePersistenceTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** ⛔ rollback 一律指名 migration 檔,不依賴「最後 N 個」的全域順序。 */
+    private const CREATE_MIGRATION = 'database/migrations/2026_08_17_400000_create_provider_services_table.php';
+
+    private const TEMPORAL_MIGRATION = 'database/migrations/2026_08_17_400001_add_provider_services_temporal_guards.php';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -178,7 +183,8 @@ class ProviderServicePersistenceTest extends TestCase
     {
         $this->assertSame(0, DB::table('provider_services')->count());
 
-        Artisan::call('migrate:rollback', ['--step' => 2]);
+        Artisan::call('migrate:rollback', ['--path' => self::TEMPORAL_MIGRATION]);
+        Artisan::call('migrate:rollback', ['--path' => self::CREATE_MIGRATION]);
 
         $this->assertFalse(Schema::hasTable('provider_services'));
 
@@ -210,8 +216,10 @@ class ProviderServicePersistenceTest extends TestCase
 
         $refusal = null;
 
+        Artisan::call('migrate:rollback', ['--path' => self::TEMPORAL_MIGRATION]);
+
         try {
-            Artisan::call('migrate:rollback', ['--step' => 2]);
+            Artisan::call('migrate:rollback', ['--path' => self::CREATE_MIGRATION]);
         } catch (\Throwable $e) {
             $refusal = $e;
         }
@@ -241,7 +249,7 @@ class ProviderServicePersistenceTest extends TestCase
     {
         ProviderService::factory()->create();
 
-        Artisan::call('migrate:rollback', ['--step' => 1]);
+        Artisan::call('migrate:rollback', ['--path' => self::TEMPORAL_MIGRATION]);
 
         $this->assertTrue(Schema::hasTable('provider_services'));
         $this->assertSame(1, DB::table('provider_services')->count());
@@ -265,7 +273,7 @@ class ProviderServicePersistenceTest extends TestCase
     public function test_the_temporal_migration_refuses_to_install_over_incoherent_rows(): void
     {
         // 先移除 temporal guard，才能製造出它要拒絕的狀態。
-        Artisan::call('migrate:rollback', ['--step' => 1]);
+        Artisan::call('migrate:rollback', ['--path' => self::TEMPORAL_MIGRATION]);
 
         DB::table('provider_services')->insert(self::validRow([
             'first_seen_at' => '2026-08-18 12:00:00',
