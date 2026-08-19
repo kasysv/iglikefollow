@@ -6,6 +6,10 @@
     {{-- 結帳頁永遠 noindex；⛔ 不得因全站開放索引而讓訂單表單進入搜尋結果。 --}}
     <meta name="robots" content="noindex, nofollow">
     <title>{{ $title ?? '結帳' }}｜{{ $siteName ?? 'IGLIKEFOLLOW' }}</title>
+    {{-- Favicon:由品牌方形標誌產生的本機資產,無外部來源。 --}}
+    <link rel="icon" href="{{ asset('favicon.ico') }}" sizes="32x32">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('images/favicon-32.png') }}">
+    <link rel="apple-touch-icon" href="{{ asset('images/apple-touch-icon.png') }}">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body>
