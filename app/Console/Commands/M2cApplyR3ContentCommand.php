@@ -655,6 +655,9 @@ class M2cApplyR3ContentCommand extends Command
     }
 
     /**
+     * v2 schema 完全閉合:exact key 集合、fixture hash 實證、expected 與
+     * versioned fixture 逐欄一致、created keys 由集合關係證明。
+     *
      * @param  array<string, mixed>  $snapshot
      * @return array<string, mixed>
      */
@@ -662,49 +665,90 @@ class M2cApplyR3ContentCommand extends Command
     {
         $allowedTop = ['schema_version', 'created_at', 'fixture', 'fixture_sha256', 'site', 'platforms', 'services', 'expected', 'managed_faqs_before', 'managed_sections_before', 'created_faq_keys', 'created_section_keys', 'removed_faqs'];
 
-        foreach (array_keys($snapshot) as $key) {
-            if (! in_array($key, $allowedTop, true)) {
-                throw new RuntimeException("快照含未知 top-level key:{$key}");
-            }
+        $this->exactKeys(array_keys($snapshot), $allowedTop, 'snapshot top-level');
+
+        // ⛔ fixture 識別與 hash 必須實際對得上現行 versioned fixture。
+        if (($snapshot['fixture'] ?? null) !== 'database/fixtures/m2c-r3-content.json') {
+            throw new RuntimeException('快照 fixture 識別不符。');
         }
 
-        foreach ($allowedTop as $key) {
-            if (! array_key_exists($key, $snapshot)) {
-                throw new RuntimeException("快照缺少 key:{$key}");
-            }
+        $currentHash = hash_file('sha256', database_path('fixtures/m2c-r3-content.json'));
+
+        if (! is_string($snapshot['fixture_sha256'] ?? null) || ! hash_equals($currentHash, $snapshot['fixture_sha256'])) {
+            throw new RuntimeException('快照 fixture hash 與現行 fixture 不符。');
         }
 
+        $fixture = $this->loadFixture();
+        $siteFields = array_merge(self::SITE_FIELDS, self::HIGHLIGHT_FIELDS);
+        $serviceSlugs = array_values(ProductSlugMap::MAP);
+
+        // before:site 恰 11 欄;platforms 恰 3 slug×5 欄;services 恰 9 slug×8 欄。
         $before = [
-            'site' => $this->allowlistFields((array) $snapshot['site'], array_merge(self::SITE_FIELDS, self::HIGHLIGHT_FIELDS), 'site'),
-            'platforms' => $this->allowlistSlugged((array) $snapshot['platforms'], self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'platform'),
-            'services' => $this->allowlistSlugged((array) $snapshot['services'], array_values(ProductSlugMap::MAP), self::SERVICE_FIELDS, 'service'),
+            'site' => $this->exactFieldMap((array) $snapshot['site'], $siteFields, 'site'),
+            'platforms' => $this->exactSluggedMap((array) $snapshot['platforms'], self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'platform'),
+            'services' => $this->exactSluggedMap((array) $snapshot['services'], $serviceSlugs, self::SERVICE_FIELDS, 'service'),
         ];
+
+        // expected:top-level 恰為 site/platforms/services/managed,且逐欄=fixture。
+        $expectedRaw = (array) $snapshot['expected'];
+        $this->exactKeys(array_keys($expectedRaw), ['site', 'platforms', 'services', 'managed'], 'expected top-level');
 
         $expected = [
-            'site' => $this->allowlistFields((array) ($snapshot['expected']['site'] ?? []), array_merge(self::SITE_FIELDS, self::HIGHLIGHT_FIELDS), 'expected.site'),
-            'platforms' => $this->allowlistSlugged((array) ($snapshot['expected']['platforms'] ?? []), self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'expected.platform'),
-            'services' => $this->allowlistSlugged((array) ($snapshot['expected']['services'] ?? []), array_values(ProductSlugMap::MAP), self::SERVICE_FIELDS, 'expected.service'),
-            'managed' => (array) ($snapshot['expected']['managed'] ?? []),
+            'site' => $this->exactFieldMap((array) $expectedRaw['site'], $siteFields, 'expected.site'),
+            'platforms' => $this->exactSluggedMap((array) $expectedRaw['platforms'], self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'expected.platform'),
+            'services' => $this->exactSluggedMap((array) $expectedRaw['services'], $serviceSlugs, self::SERVICE_FIELDS, 'expected.service'),
+            'managed' => $this->validateExpectedManaged((array) $expectedRaw['managed'], $fixture),
         ];
 
+        $fixtureExpected = $this->expectedFromFixture($fixture);
+
+        foreach (['site', 'platforms', 'services', 'managed'] as $bucket) {
+            if ($expected[$bucket] != $fixtureExpected[$bucket]) {
+                // ⛔ expected-applied 不能只把 snapshot 內容原樣當真。
+                throw new RuntimeException("快照 expected.{$bucket} 與 versioned fixture 不一致。");
+            }
+        }
+
+        // rows:exact schema+型別+unique id/key。
+        $beforeFaqRows = $this->exactFaqRows((array) $snapshot['managed_faqs_before'], 'managed_faqs_before', requireManagedKey: true);
+        $beforeSectionRows = $this->exactSectionRows((array) $snapshot['managed_sections_before'], 'managed_sections_before');
+        $removedRows = $this->exactFaqRows((array) $snapshot['removed_faqs'], 'removed_faqs', requireManagedKey: false);
+
+        // before keys 只能是對應 type 的 fixture keys。
+        $fixtureFaqKeys = array_merge(
+            array_column($fixture['faqs']['global'], 'managed_key'),
+            array_column($fixture['faqs']['service'], 'managed_key'),
+        );
+        $fixtureSectionKeys = array_column($fixture['content_sections'], 'managed_key');
+
+        $beforeFaqKeys = array_column($beforeFaqRows, 'managed_key');
+        $beforeSectionKeys = array_column($beforeSectionRows, 'managed_key');
+
+        foreach ($beforeFaqKeys as $key) {
+            if (! in_array($key, $fixtureFaqKeys, true)) {
+                throw new RuntimeException('managed_faqs_before 含非 fixture FAQ key。');
+            }
+        }
+
+        foreach ($beforeSectionKeys as $key) {
+            if (! in_array($key, $fixtureSectionKeys, true)) {
+                throw new RuntimeException('managed_sections_before 含非 fixture section key。');
+            }
+        }
+
+        // ⛔ created keys 必須恰等於 fixture keys − before keys(集合相等)。
         $createdFaqKeys = array_values((array) $snapshot['created_faq_keys']);
         $createdSectionKeys = array_values((array) $snapshot['created_section_keys']);
 
-        $allKeys = array_merge(
-            $createdFaqKeys,
-            $createdSectionKeys,
-            array_column((array) $snapshot['managed_faqs_before'], 'managed_key'),
-            array_column((array) $snapshot['managed_sections_before'], 'managed_key'),
-        );
+        $expectedCreatedFaq = array_values(array_diff($fixtureFaqKeys, $beforeFaqKeys));
+        $expectedCreatedSection = array_values(array_diff($fixtureSectionKeys, $beforeSectionKeys));
 
-        if (count($allKeys) !== count(array_unique($allKeys))) {
-            throw new RuntimeException('快照 managed key 重複。');
+        if ($this->sortedList($createdFaqKeys) !== $this->sortedList($expectedCreatedFaq)
+            || $this->sortedList($createdSectionKeys) !== $this->sortedList($expectedCreatedSection)) {
+            throw new RuntimeException('快照 created keys 與 fixture−before 集合關係不符。');
         }
 
-        $ids = array_merge(
-            array_column((array) $snapshot['managed_faqs_before'], 'id'),
-            array_column((array) $snapshot['removed_faqs'], 'id'),
-        );
+        $ids = array_merge(array_column($beforeFaqRows, 'id'), array_column($removedRows, 'id'));
 
         if (count($ids) !== count(array_unique($ids))) {
             throw new RuntimeException('快照 FAQ id 重複。');
@@ -715,9 +759,9 @@ class M2cApplyR3ContentCommand extends Command
             'expected' => $expected,
             'created_faq_keys' => $createdFaqKeys,
             'created_section_keys' => $createdSectionKeys,
-            'managed_faqs_before' => $this->rows((array) $snapshot['managed_faqs_before'], self::FAQ_ROW_FIELDS, 'managed_faqs_before'),
-            'managed_sections_before' => $this->rows((array) $snapshot['managed_sections_before'], self::SECTION_ROW_FIELDS, 'managed_sections_before'),
-            'removed_faqs' => $this->rows((array) $snapshot['removed_faqs'], self::FAQ_ROW_FIELDS, 'removed_faqs'),
+            'managed_faqs_before' => $beforeFaqRows,
+            'managed_sections_before' => $beforeSectionRows,
+            'removed_faqs' => $removedRows,
         ];
     }
 
@@ -730,15 +774,18 @@ class M2cApplyR3ContentCommand extends Command
         // v1 沒有 expected/created keys:以現行 R3 fixture exact 值閉合。
         $fixture = $this->loadFixture();
         $expected = $this->expectedFromFixture($fixture);
+        $siteFields = array_merge(self::SITE_FIELDS, self::HIGHLIGHT_FIELDS);
+        $serviceSlugs = array_values(ProductSlugMap::MAP);
 
         $before = [
-            'site' => $this->allowlistFields((array) $snapshot['site'], array_merge(self::SITE_FIELDS, self::HIGHLIGHT_FIELDS), 'site'),
-            'platforms' => $this->allowlistSlugged((array) $snapshot['platforms'], self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'platform'),
-            'services' => $this->allowlistSlugged((array) $snapshot['services'], array_values(ProductSlugMap::MAP), self::SERVICE_FIELDS, 'service'),
+            'site' => $this->exactFieldMap((array) $snapshot['site'], $siteFields, 'site'),
+            'platforms' => $this->exactSluggedMap((array) $snapshot['platforms'], self::PLATFORM_SLUGS, self::PLATFORM_FIELDS, 'platform'),
+            'services' => $this->exactSluggedMap((array) $snapshot['services'], $serviceSlugs, self::SERVICE_FIELDS, 'service'),
         ];
 
-        $beforeFaqKeys = array_column((array) $snapshot['managed_faqs_before'], 'managed_key');
-        $beforeSectionKeys = array_column((array) $snapshot['managed_sections_before'], 'managed_key');
+        $beforeFaqRows = $this->exactFaqRows((array) $snapshot['managed_faqs_before'], 'managed_faqs_before', requireManagedKey: true);
+        $beforeSectionRows = $this->exactSectionRows((array) $snapshot['managed_sections_before'], 'managed_sections_before');
+        $removedRows = $this->exactFaqRows((array) $snapshot['removed_faqs'], 'removed_faqs', requireManagedKey: false);
 
         $fixtureFaqKeys = array_merge(
             array_column($fixture['faqs']['global'], 'managed_key'),
@@ -749,17 +796,85 @@ class M2cApplyR3ContentCommand extends Command
         return [
             'before' => $before,
             'expected' => $expected,
-            'created_faq_keys' => array_values(array_diff($fixtureFaqKeys, $beforeFaqKeys)),
-            'created_section_keys' => array_values(array_diff($fixtureSectionKeys, $beforeSectionKeys)),
-            'managed_faqs_before' => $this->rows((array) $snapshot['managed_faqs_before'], self::FAQ_ROW_FIELDS, 'managed_faqs_before'),
-            'managed_sections_before' => $this->rows((array) $snapshot['managed_sections_before'], self::SECTION_ROW_FIELDS, 'managed_sections_before'),
-            'removed_faqs' => $this->rows((array) $snapshot['removed_faqs'], self::FAQ_ROW_FIELDS, 'removed_faqs'),
+            'created_faq_keys' => array_values(array_diff($fixtureFaqKeys, array_column($beforeFaqRows, 'managed_key'))),
+            'created_section_keys' => array_values(array_diff($fixtureSectionKeys, array_column($beforeSectionRows, 'managed_key'))),
+            'managed_faqs_before' => $beforeFaqRows,
+            'managed_sections_before' => $beforeSectionRows,
+            'removed_faqs' => $removedRows,
         ];
     }
 
     /**
+     * expected.managed 每列依 type 檢查 exact required fields;FAQ 與
+     * section 的 key 集合必須各自等於 fixture managed keys。
+     *
+     * @param  array<string, mixed>  $managed
+     * @param  array<string, mixed>  $fixture
+     * @return array<string, mixed>
+     */
+    private function validateExpectedManaged(array $managed, array $fixture): array
+    {
+        $faqFields = ['type', 'scope', 'product_slug', 'question', 'answer', 'status', 'sort_order'];
+        $sectionFields = ['type', 'product_slug', 'heading', 'body', 'status', 'sort_order'];
+        $serviceSlugs = array_values(ProductSlugMap::MAP);
+
+        $faqKeys = [];
+        $sectionKeys = [];
+
+        foreach ($managed as $key => $row) {
+            if (! is_array($row)) {
+                throw new RuntimeException("expected.managed.{$key} 不是物件。");
+            }
+
+            $type = $row['type'] ?? null;
+
+            if ($type === 'faq') {
+                $this->exactKeys(array_keys($row), $faqFields, "expected.managed.{$key}");
+
+                if (! in_array($row['scope'], ['global', 'service'], true)) {
+                    throw new RuntimeException("expected.managed.{$key} scope 不合法。");
+                }
+
+                if ($row['scope'] === 'global' && $row['product_slug'] !== null) {
+                    throw new RuntimeException("expected.managed.{$key} global scope 不得帶 product slug。");
+                }
+
+                if ($row['scope'] === 'service' && ! in_array($row['product_slug'], $serviceSlugs, true)) {
+                    throw new RuntimeException("expected.managed.{$key} 指向未知 product slug。");
+                }
+
+                $faqKeys[] = $key;
+            } elseif ($type === 'section') {
+                $this->exactKeys(array_keys($row), $sectionFields, "expected.managed.{$key}");
+
+                if (! in_array($row['product_slug'], $serviceSlugs, true)) {
+                    throw new RuntimeException("expected.managed.{$key} 指向未知 product slug。");
+                }
+
+                $sectionKeys[] = $key;
+            } else {
+                throw new RuntimeException("expected.managed.{$key} type 未知。");
+            }
+        }
+
+        $fixtureFaqKeys = array_merge(
+            array_column($fixture['faqs']['global'], 'managed_key'),
+            array_column($fixture['faqs']['service'], 'managed_key'),
+        );
+        $fixtureSectionKeys = array_column($fixture['content_sections'], 'managed_key');
+
+        if ($this->sortedList($faqKeys) !== $this->sortedList($fixtureFaqKeys)
+            || $this->sortedList($sectionKeys) !== $this->sortedList($fixtureSectionKeys)) {
+            throw new RuntimeException('expected.managed key 集合與 fixture 不一致。');
+        }
+
+        return $managed;
+    }
+
+    /**
      * ⛔ current state 必須等於 expected-applied state,否則整批停止。
-     * conflict identifier 只含欄位/key 識別,不含任何文案內容。
+     * 覆蓋所有將被覆寫/刪除/forceFill 的欄位;conflict identifier 只含
+     * 欄位/key 識別,不含任何文案內容。
      *
      * @param  array<string, mixed>  $plan
      */
@@ -797,33 +912,55 @@ class M2cApplyR3ContentCommand extends Command
 
         foreach ($plan['expected']['managed'] as $key => $expected) {
             if (($expected['type'] ?? null) === 'section') {
+                $expectedServiceId = Service::query()->where('product_slug', $expected['product_slug'])->value('id');
                 $row = ServiceContentSection::query()->where('managed_key', $key)->first();
 
                 if ($row === null
+                    || (int) $row->service_id !== (int) $expectedServiceId
                     || (string) $row->heading !== (string) $expected['heading']
                     || (string) $row->body !== (string) $expected['body']
-                    || (string) $row->status !== (string) $expected['status']) {
+                    || (string) $row->status !== (string) $expected['status']
+                    || (int) $row->sort_order !== (int) $expected['sort_order']) {
                     $conflicts[] = 'section.'.$key;
                 }
 
                 continue;
             }
 
+            $expectedServiceId = $expected['product_slug'] !== null
+                ? Service::query()->where('product_slug', $expected['product_slug'])->value('id')
+                : null;
             $row = Faq::query()->where('managed_key', $key)->first();
 
             if ($row === null
+                || (string) $row->scope !== (string) $expected['scope']
+                || $row->platform_id !== null
+                || ($row->service_id === null ? null : (int) $row->service_id) !== ($expectedServiceId === null ? null : (int) $expectedServiceId)
                 || (string) $row->question !== (string) $expected['question']
                 || (string) $row->answer !== (string) $expected['answer']
-                || (string) $row->status !== (string) $expected['status']) {
+                || (string) $row->status !== (string) $expected['status']
+                || (int) $row->sort_order !== (int) $expected['sort_order']) {
                 $conflicts[] = 'faq.'.$key;
             }
         }
 
-        // 被移除列必須仍處於移除狀態(被手動復原=狀態已被人為改動)。
+        /*
+         * 被移除列會被 restore+forceFill:trashed row 必須仍存在、仍為
+         * deleted,且所有將 forceFill 的欄位仍等於 apply 後預期狀態
+         * (=移除當下快照值)。Owner 在 trashed row 上的任何修改 → 整批停止。
+         */
         foreach ($plan['removed_faqs'] as $row) {
             $faq = Faq::withTrashed()->find($row['id']);
 
-            if ($faq === null || $faq->deleted_at === null) {
+            if ($faq === null || $faq->deleted_at === null
+                || (string) $faq->scope !== (string) $row['scope']
+                || ($faq->platform_id === null ? null : (int) $faq->platform_id) !== ($row['platform_id'] === null ? null : (int) $row['platform_id'])
+                || ($faq->service_id === null ? null : (int) $faq->service_id) !== ($row['service_id'] === null ? null : (int) $row['service_id'])
+                || (string) $faq->question !== (string) $row['question']
+                || (string) $faq->answer !== (string) $row['answer']
+                || (string) $faq->status !== (string) $row['status']
+                || (int) $faq->sort_order !== (int) $row['sort_order']
+                || $faq->managed_key !== null) {
                 $conflicts[] = 'removed-faq.'.$row['id'];
             }
         }
@@ -833,52 +970,165 @@ class M2cApplyR3ContentCommand extends Command
         }
     }
 
+    // ------------------------------------------------------------------
+    // 閉合驗證 helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * ⛔ key 集合必須「恰好等於」allowlist:多一欄、少一欄都拒絕。
+     *
+     * @param  array<int, mixed>  $keys
+     * @param  list<string>  $required
+     */
+    private function exactKeys(array $keys, array $required, string $where): void
+    {
+        $keys = array_map('strval', $keys);
+
+        if ($this->sortedList($keys) !== $this->sortedList($required)) {
+            throw new RuntimeException("快照 {$where} key 集合不完整或含未知 key。");
+        }
+    }
+
     /**
      * @param  array<string, mixed>  $fields
-     * @param  list<string>  $allowed
+     * @param  list<string>  $required
      * @return array<string, mixed>
      */
-    private function allowlistFields(array $fields, array $allowed, string $where): array
+    private function exactFieldMap(array $fields, array $required, string $where): array
     {
-        foreach (array_keys($fields) as $field) {
-            if (! in_array($field, $allowed, true)) {
-                throw new RuntimeException("快照含未知欄位:{$where}.{$field}");
-            }
-        }
+        $this->exactKeys(array_keys($fields), $required, $where);
 
         return $fields;
     }
 
     /**
      * @param  array<string, mixed>  $slugged
-     * @param  list<string>  $allowedSlugs
-     * @param  list<string>  $allowedFields
+     * @param  list<string>  $requiredSlugs
+     * @param  list<string>  $requiredFields
      * @return array<string, array<string, mixed>>
      */
-    private function allowlistSlugged(array $slugged, array $allowedSlugs, array $allowedFields, string $where): array
+    private function exactSluggedMap(array $slugged, array $requiredSlugs, array $requiredFields, string $where): array
     {
-        foreach ($slugged as $slug => $fields) {
-            if (! in_array($slug, $allowedSlugs, true)) {
-                throw new RuntimeException("快照含未知 slug:{$where}.{$slug}");
-            }
+        $this->exactKeys(array_keys($slugged), $requiredSlugs, $where);
 
-            $this->allowlistFields((array) $fields, $allowedFields, $where.'.'.$slug);
+        foreach ($slugged as $slug => $fields) {
+            $this->exactFieldMap((array) $fields, $requiredFields, $where.'.'.$slug);
         }
 
         return $slugged;
     }
 
     /**
+     * FAQ row 的 exact schema+型別:positive unique id、合法 scope、
+     * 非空字串內容;managed rows 要非空 unique managed_key,
+     * removed rows 的 managed_key 必須為 null。
+     *
      * @param  array<int, mixed>  $rows
-     * @param  list<string>  $allowedFields
      * @return array<int, array<string, mixed>>
      */
-    private function rows(array $rows, array $allowedFields, string $where): array
+    private function exactFaqRows(array $rows, string $where, bool $requireManagedKey): array
     {
+        $ids = [];
+        $keys = [];
+
         foreach ($rows as $row) {
-            $this->allowlistFields((array) $row, $allowedFields, $where);
+            if (! is_array($row)) {
+                throw new RuntimeException("快照 {$where} 列不是物件。");
+            }
+
+            $this->exactKeys(array_keys($row), self::FAQ_ROW_FIELDS, $where);
+
+            if (! is_int($row['id']) || $row['id'] <= 0 || in_array($row['id'], $ids, true)) {
+                throw new RuntimeException("快照 {$where} id 非 positive unique int。");
+            }
+            $ids[] = $row['id'];
+
+            if (! in_array($row['scope'], ['global', 'platform', 'service'], true)) {
+                throw new RuntimeException("快照 {$where} scope 不合法。");
+            }
+
+            foreach (['question', 'answer', 'status'] as $field) {
+                if (! is_string($row[$field]) || trim($row[$field]) === '') {
+                    throw new RuntimeException("快照 {$where}.{$field} 非有效字串。");
+                }
+            }
+
+            if (! is_int($row['sort_order'])) {
+                throw new RuntimeException("快照 {$where}.sort_order 非整數。");
+            }
+
+            foreach (['platform_id', 'service_id'] as $field) {
+                if ($row[$field] !== null && (! is_int($row[$field]) || $row[$field] <= 0)) {
+                    throw new RuntimeException("快照 {$where}.{$field} 非 null/positive int。");
+                }
+            }
+
+            if ($requireManagedKey) {
+                if (! is_string($row['managed_key']) || trim($row['managed_key']) === '' || in_array($row['managed_key'], $keys, true)) {
+                    throw new RuntimeException("快照 {$where}.managed_key 非非空 unique 字串。");
+                }
+                $keys[] = $row['managed_key'];
+            } elseif ($row['managed_key'] !== null) {
+                throw new RuntimeException("快照 {$where} 被移除列不得帶 managed_key。");
+            }
         }
 
         return $rows;
+    }
+
+    /**
+     * @param  array<int, mixed>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function exactSectionRows(array $rows, string $where): array
+    {
+        $ids = [];
+        $keys = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                throw new RuntimeException("快照 {$where} 列不是物件。");
+            }
+
+            $this->exactKeys(array_keys($row), self::SECTION_ROW_FIELDS, $where);
+
+            if (! is_int($row['id']) || $row['id'] <= 0 || in_array($row['id'], $ids, true)) {
+                throw new RuntimeException("快照 {$where} id 非 positive unique int。");
+            }
+            $ids[] = $row['id'];
+
+            if (! is_int($row['service_id']) || $row['service_id'] <= 0) {
+                throw new RuntimeException("快照 {$where}.service_id 非 positive int。");
+            }
+
+            foreach (['heading', 'body', 'status'] as $field) {
+                if (! is_string($row[$field]) || trim($row[$field]) === '') {
+                    throw new RuntimeException("快照 {$where}.{$field} 非有效字串。");
+                }
+            }
+
+            if (! is_int($row['sort_order'])) {
+                throw new RuntimeException("快照 {$where}.sort_order 非整數。");
+            }
+
+            if (! is_string($row['managed_key']) || trim($row['managed_key']) === '' || in_array($row['managed_key'], $keys, true)) {
+                throw new RuntimeException("快照 {$where}.managed_key 非非空 unique 字串。");
+            }
+            $keys[] = $row['managed_key'];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<string>  $list
+     * @return list<string>
+     */
+    private function sortedList(array $list): array
+    {
+        $list = array_values(array_map('strval', $list));
+        sort($list);
+
+        return $list;
     }
 }
