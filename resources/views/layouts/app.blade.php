@@ -28,14 +28,25 @@
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName }}"
                      class="h-auto w-40 sm:w-52" width="715" height="143">
             </a>
+            @php $onFaq = request()->routeIs('faq'); @endphp
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
                 @foreach ($navPlatforms as $navPlatform)
                     <a href="{{ route('platform', $navPlatform->slug) }}" class="hover:opacity-60">{{ $navPlatform->name }}</a>
                 @endforeach
+                {{-- R5:可爬的真實連結;⛔ 不用 JS-only click、query 或 fragment 當主形式。 --}}
+                <a href="{{ route('faq') }}"
+                   @if ($onFaq) aria-current="page" @endif
+                   class="hover:opacity-60 {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
                 <a href="{{ route('home') }}#platforms" class="rounded-full bg-ink px-5 py-3 text-white">選擇服務</a>
             </nav>
-            <a href="{{ route('home') }}#platforms"
-               class="flex min-h-11 items-center rounded-full bg-ink px-4 text-sm font-bold text-white md:hidden">選擇服務</a>
+            {{-- Mobile:同一組目的地;min-h-11(44px)符合 tap target。 --}}
+            <div class="flex items-center gap-2 md:hidden">
+                <a href="{{ route('faq') }}"
+                   @if ($onFaq) aria-current="page" @endif
+                   class="flex min-h-11 items-center px-2 text-sm font-semibold {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
+                <a href="{{ route('home') }}#platforms"
+                   class="flex min-h-11 items-center rounded-full bg-ink px-4 text-sm font-bold text-white">選擇服務</a>
+            </div>
         </div>
     </header>
 

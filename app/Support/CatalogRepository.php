@@ -183,6 +183,30 @@ class CatalogRepository
             ->get();
     }
 
+    /**
+     * R5:首頁精選的共通 FAQ。
+     *
+     * 首頁只重複 `/faq` 的核准精選題;⛔ 精選以 exact managed key 指定,
+     * 不用 take(n) 這類會隨排序漂移的取法。published() 仍是唯一 gate,
+     * draft(如未上線的訂單查詢題)不會因為被列入精選而浮上公開頁。
+     *
+     * @param  list<string>  $managedKeys
+     * @return Collection<int, Faq>
+     */
+    public function featuredGlobalFaqs(array $managedKeys): Collection
+    {
+        if ($managedKeys === []) {
+            return collect();
+        }
+
+        return Faq::query()
+            ->published()
+            ->where('scope', 'global')
+            ->whereIn('managed_key', $managedKeys)
+            ->orderBy('sort_order')
+            ->get();
+    }
+
     /** @return Collection<int, Faq> */
     public function platformFaqs(Platform $platform): Collection
     {

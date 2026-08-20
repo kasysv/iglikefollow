@@ -1,0 +1,199 @@
+{
+    "_meta": {
+        "source": "10-Projects/新站重建/M2-C-R5-GEO-AEO-FAQ-EXTRACTION-REWRITE.md",
+        "note": "M2-C R5 GEO／AEO FAQ。9 題 global（/faq 為唯一完整 owner，首頁只精選 3 題）、3 題 platform（各自 Hub）、9 題 service（各自 canonical 商品頁）。同題既有 R3 global FAQ 以精確 managed key 就地更新，⛔ 不建立平行重複列；訂單查詢題維持 draft，功能驗收前不得公開。",
+        "approved_at": "2026-08-20",
+        "published_count": 21,
+        "draft_count": 1,
+        "reused_r3_keys": [
+            "r3.global.membership",
+            "r3.global.prepare",
+            "r3.global.price"
+        ]
+    },
+    "page": {
+        "seo_title": "常見問題｜付款、電子發票與訂單說明｜IGLIKEFOLLOW",
+        "meta_description": "選購 Instagram、Facebook、Threads 粉絲、貼文讚、影片觀看與瀏覽服務前，快速了解免會員下單、帳號或網址填寫、付款方式、電子發票、處理時間、重複下單與異常訂單處理。",
+        "h1": "IGLIKEFOLLOW 購買與訂單常見問題",
+        "intro": "整理購買 IG 粉絲、買讚、影片觀看與 Threads 瀏覽等服務前最常見的問題。從下單資料、付款與電子發票，到同一連結重複下單與異常訂單處理，都可在此快速找到答案。",
+        "home_featured_keys": [
+            "r3.global.membership",
+            "r5.global.password",
+            "r5.global.processing-start"
+        ]
+    },
+    "faqs": {
+        "global": [
+            {
+                "managed_key": "r3.global.membership",
+                "question": "IGLIKEFOLLOW需要註冊會員嗎？",
+                "answer": "不需要。選好服務、款式與數量後即可直接結帳，不必建立會員帳號。",
+                "status": "published",
+                "sort_order": 1
+            },
+            {
+                "managed_key": "r5.global.password",
+                "question": "購買IG、Facebook或Threads服務需要提供密碼嗎？",
+                "answer": "不需要。粉絲方案只需公開帳號或個人頁面網址；貼文讚、影片觀看及Threads貼文服務只需指定內容網址。IGLIKEFOLLOW不會要求登入密碼或驗證碼。",
+                "status": "published",
+                "sort_order": 2
+            },
+            {
+                "managed_key": "r3.global.prepare",
+                "question": "下單前需要準備哪些資料？",
+                "answer": "先準備方案對應的公開帳號、貼文或影片網址。結帳時再填寫聯絡資料、付款方式及電子發票資料。",
+                "status": "published",
+                "sort_order": 3
+            },
+            {
+                "managed_key": "r3.global.price",
+                "question": "如何查看方案價格？",
+                "answer": "每個商品頁都會顯示目前可選款式與單價；輸入數量後，頁面會立即顯示試算金額。",
+                "status": "published",
+                "sort_order": 4
+            },
+            {
+                "managed_key": "r5.global.payment-methods",
+                "question": "IGLIKEFOLLOW支援哪些付款方式？",
+                "answer": "目前支援LINE Pay與綠界付款。實際可選方式以結帳頁當下顯示為準。",
+                "status": "published",
+                "sort_order": 5
+            },
+            {
+                "managed_key": "r5.global.invoice",
+                "question": "可以開個人或公司電子發票嗎？",
+                "answer": "可以。結帳時可選個人或公司電子發票；公司發票需填寫公司名稱與統一編號。電子發票寄送至結帳Email，不提供紙本與郵寄。",
+                "status": "published",
+                "sort_order": 6
+            },
+            {
+                "managed_key": "r5.global.processing-start",
+                "question": "付款成功後什麼時候開始處理？",
+                "answer": "付款成功後系統會自動開始處理。實際開始與完成時間會依平台、服務款式、訂購數量及當時狀態不同，不承諾固定時間。",
+                "status": "published",
+                "sort_order": 7
+            },
+            {
+                "managed_key": "r5.global.concurrent-orders",
+                "question": "同一個帳號或貼文可以同時購買多個服務嗎？",
+                "answer": "可以同時購買不同服務，例如同一帳號分別購買粉絲、貼文讚或影片觀看。請勿對同一目標同時送出多筆相同或相近服務；平行處理可能使起始數量與最終數量難以判定，造成顯示數量不準確，並可能不適用該方案的保固或補量。",
+                "status": "published",
+                "sort_order": 8
+            },
+            {
+                "managed_key": "r5.global.order-issues",
+                "question": "訂單想取消、只完成部分數量或網址填錯怎麼辦？",
+                "answer": "請立即聯絡客服並提供訂單編號、原提交網址及正確資料。錯誤連結屬於顧客提交資料錯誤；客服會依當時處理進度確認仍可更正的內容，不能先保證一定能取消或完整修改。",
+                "status": "published",
+                "sort_order": 9
+            },
+            {
+                "managed_key": "r5.global.order-lookup",
+                "question": "下單後如何查詢訂單進度？",
+                "answer": "IGLIKEFOLLOW將提供公開訂單查詢入口，顧客可使用訂單編號查看目前狀態。",
+                "status": "draft",
+                "sort_order": 10
+            }
+        ],
+        "platform": [
+            {
+                "managed_key": "r5.instagram.choose-service",
+                "platform_slug": "instagram",
+                "question": "IG粉絲、IG買讚和影片觀看要怎麼選？",
+                "answer": "要增加帳號顯示的粉絲數，選擇IG粉絲；要增加指定單篇貼文的按讚數，選擇IG買讚；要增加指定Reel或影片的觀看次數，選擇IG影片觀看。三種服務使用的目標網址不同，請從對應商品頁下單。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.facebook.choose-service",
+                "platform_slug": "facebook",
+                "question": "FB粉絲、FB買讚和影片觀看要怎麼選？",
+                "answer": "要增加粉專、個人檔案或社團的粉絲數，選擇FB粉絲；要增加指定貼文的按讚數，選擇FB買讚；要增加指定Reel或影片的觀看次數，選擇Facebook影片觀看。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.threads.choose-service",
+                "platform_slug": "threads",
+                "question": "Threads粉絲、貼文讚、瀏覽、轉發與分享有什麼差別？",
+                "answer": "Threads粉絲是增加帳號粉絲數；Threads買讚是增加指定貼文按讚數；瀏覽、轉發與分享則是三個不同的貼文服務。請先確認想增加的數字，再選擇對應款式與貼文網址。",
+                "status": "published",
+                "sort_order": 20
+            }
+        ],
+        "service": [
+            {
+                "managed_key": "r5.ig買粉絲.tiers",
+                "product_slug": "ig買粉絲",
+                "question": "不同IG粉絲方案有什麼差別？",
+                "answer": "普通粉絲適合以數量與預算為主要考量；頂級粉絲適合重視帳號外觀完整度；真人粉絲適合重視真人帳號來源；港澳台或男女指定方案適合對粉絲顯示條件有明確需求。實際單價、可購數量與方案內容以頁面當下款式說明為準。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.ig買粉絲.follower-review",
+                "product_slug": "ig買粉絲",
+                "question": "購買IG粉絲前需要檢查粉絲審查功能嗎？",
+                "answer": "建議先確認Instagram帳號為公開狀態，並檢查是否開啟粉絲審查功能。開啟時，部分新追蹤者可能先進入審查區而沒有直接顯示；設定名稱與位置可能隨Instagram版本調整。",
+                "status": "published",
+                "sort_order": 21
+            },
+            {
+                "managed_key": "r5.ig買粉絲.versus-ads",
+                "product_slug": "ig買粉絲",
+                "question": "買IG粉絲和投放廣告有什麼不同？",
+                "answer": "兩者用途不同。IG粉絲方案用來增加帳號顯示的粉絲數與初始門面；廣告則用來付費觸及指定受眾。粉絲方案不能取代內容經營、產品服務或廣告投放。",
+                "status": "published",
+                "sort_order": 22
+            },
+            {
+                "managed_key": "r5.ig影片觀看.url",
+                "product_slug": "ig影片觀看",
+                "question": "IG影片觀看需要提供哪個網址？",
+                "answer": "請提供要增加觀看次數的指定Instagram Reel或影片網址，不要填Instagram帳號首頁。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.ig影片觀看.versus-likes",
+                "product_slug": "ig影片觀看",
+                "question": "IG影片觀看和IG買讚有什麼不同？",
+                "answer": "IG影片觀看增加的是指定影片的觀看次數；IG買讚增加的是指定貼文的按讚數。請依想增加的數字選擇商品。",
+                "status": "published",
+                "sort_order": 21
+            },
+            {
+                "managed_key": "r5.fb影片觀看.url",
+                "product_slug": "fb影片觀看",
+                "question": "Facebook影片觀看需要提供哪個網址？",
+                "answer": "請提供要增加觀看次數的指定Facebook Reel或影片網址，不要填粉專或個人檔案首頁。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.fb影片觀看.versus-likes",
+                "product_slug": "fb影片觀看",
+                "question": "Facebook影片觀看和FB買讚有什麼不同？",
+                "answer": "Facebook影片觀看增加的是指定影片的觀看次數；FB買讚增加的是指定貼文的按讚數。請依想增加的數字選擇商品。",
+                "status": "published",
+                "sort_order": 21
+            },
+            {
+                "managed_key": "r5.threads貼文瀏覽.inputs",
+                "product_slug": "threads貼文瀏覽",
+                "question": "Threads瀏覽、轉發或分享需要提供什麼？",
+                "answer": "請提供要處理的指定Threads貼文網址，並分別選擇瀏覽、轉發或分享款式；三者不是同一個服務。",
+                "status": "published",
+                "sort_order": 20
+            },
+            {
+                "managed_key": "r5.threads貼文瀏覽.versus-likes",
+                "product_slug": "threads貼文瀏覽",
+                "question": "Threads瀏覽次數和Threads買讚有什麼不同？",
+                "answer": "Threads瀏覽服務增加指定貼文的瀏覽次數；Threads買讚增加指定貼文的按讚數。兩者可以指向同一篇貼文，但需要分別選購。",
+                "status": "published",
+                "sort_order": 21
+            }
+        ]
+    }
+}

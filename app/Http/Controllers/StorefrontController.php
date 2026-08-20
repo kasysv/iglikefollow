@@ -7,6 +7,7 @@ use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
+use App\Support\FaqPageContent;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -19,13 +20,35 @@ class StorefrontController extends Controller
         private readonly CheckoutSession $checkout,
     ) {}
 
-    public function home(): View
+    /**
+     * R5:共通 FAQ 頁(`/faq`)。
+     *
+     * global FAQ 的唯一完整 owner:9 題 published 全文只在此頁。⛔ draft
+     * (訂單查詢功能尚未驗收)與 soft-deleted 列由 published() 擋掉;
+     * 平台／商品專屬 12 題不在這裡複製全文,只給描述性導覽內鏈。
+     */
+    public function faq(FaqPageContent $content): View
+    {
+        return view('storefront.faq', [
+            'faqs' => $this->catalog->globalFaqs(),
+            'platforms' => $this->catalog->navigablePlatforms(),
+            'title' => $content->seoTitle(),
+            'description' => $content->metaDescription(),
+            'h1' => $content->h1(),
+            'intro' => $content->intro(),
+            // self-canonical:依 APP_URL 產生乾淨 /faq,⛔ 不帶 query／fragment。
+            'canonical' => route('faq'),
+        ]);
+    }
+
+    public function home(FaqPageContent $content): View
     {
         $settings = SiteSetting::current();
 
         return view('storefront.home', [
             'platforms' => $this->catalog->navigablePlatforms(),
-            'faqs' => $this->catalog->globalFaqs(),
+            // R5:首頁只重複核准的精選題;完整 9 題以 /faq 為唯一 owner。
+            'faqs' => $this->catalog->featuredGlobalFaqs($content->homeFeaturedKeys()),
             'settings' => $settings,
             // M2-C:首頁 self-canonical(全站仍 noindex,canonical 只是宣告主形式)。
             'canonical' => url('/').'/',

@@ -9,6 +9,12 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [StorefrontController::class, 'home'])->name('home');
 
+/*
+ * R5:共通 FAQ 頁。indexable 且為 global FAQ 的唯一完整 owner;
+ * ⛔ 主導覽連結一律指向這個乾淨路徑,不用 query／fragment 當主形式。
+ */
+Route::get('/faq', [StorefrontController::class, 'faq'])->name('faq');
+
 Route::get('/services/{platform}', [StorefrontController::class, 'platform'])
     ->name('platform');
 

@@ -266,11 +266,25 @@ class M2cR3ContentTest extends TestCase
             $this->assertStringContainsString('單價', $html, $slug);
         }
 
-        // 全站 FAQ:R3 三題在首頁。
+        /*
+         * 全站 FAQ:R5 起 global FAQ 的唯一完整 owner 是 `/faq`,首頁只顯示
+         * 核准的 3 題精選並以可爬連結指向 `/faq`。⛔ 這裡只驗「R3 三題的
+         * 內容仍可在初始 HTML 讀到」,不再要求全部擠在首頁。
+         */
+        $faqPage = $this->get('/faq')->assertOk()->getContent();
+
         foreach ($this->r3['faqs']['global'] as $faq) {
-            $this->assertStringContainsString($faq['question'], $home);
-            $this->assertStringContainsString($faq['answer'], $home);
+            $this->assertTrue(
+                str_contains($home, $faq['question']) || str_contains($faqPage, $faq['question']),
+                $faq['managed_key'].' 的問題應出現在首頁精選或 /faq',
+            );
+            $this->assertTrue(
+                str_contains($home, $faq['answer']) || str_contains($faqPage, $faq['answer']),
+                $faq['managed_key'].' 的答案應出現在首頁精選或 /faq',
+            );
         }
+
+        $this->assertStringContainsString('查看全部常見問題', $home);
     }
 
     public function test_internal_link_matrix_home_one_hop_and_hub_three_each(): void

@@ -64,7 +64,13 @@ class StorefrontTest extends TestCase
             ->assertSee('多平台社群服務', false)
             ->assertSee('Instagram')
             ->assertSee('Facebook')
-            ->assertSee('購買前常見問題')
+            /*
+             * R5:首頁 FAQ 區塊只在有「核准精選題」時才輸出(精選以 managed
+             * key 指定,本測試未套 R5 內容故為空)。⛔ 常見問題入口仍必須永遠
+             * 存在於主導覽,否則 /faq 會變成沒有內鏈的孤島頁。
+             */
+            ->assertSee('常見問題')
+            ->assertSee('href="'.route('faq').'"', false)
             // Threads 仍是草稿；⛔ 導覽不得連到會 404 的頁面。
             ->assertDontSee('/services/threads', false);
     }

@@ -306,10 +306,13 @@
         <section class="border-t border-black/10 bg-paper">
             <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8">
                 <h2 class="text-2xl font-bold tracking-[-0.035em]">常見問題</h2>
+                {{-- R5:問題以 h3 可讀 heading;收合後答案仍在初始 HTML。 --}}
                 <div class="mt-6 divide-y divide-black/10 border-y border-black/10">
                     @foreach ($service->faqs as $faq)
                         <details class="group py-5">
-                            <summary class="min-h-11 cursor-pointer list-none text-base font-bold">{{ $faq->question }}</summary>
+                            <summary class="min-h-11 cursor-pointer list-none">
+                                <h3 class="text-base font-bold">{{ $faq->question }}</h3>
+                            </summary>
                             <p class="mt-3 leading-7 text-black/60">{{ $faq->answer }}</p>
                         </details>
                     @endforeach
