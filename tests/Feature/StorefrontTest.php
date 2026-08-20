@@ -249,10 +249,11 @@ class StorefrontTest extends TestCase
         $this->startCheckout();
 
         // M3A 起會真的建立本站訂單；⛔ 但仍不扣款、不呼叫任何金流。
+        // R4:結果頁為顧客語氣,狀態由真實儲存值顯示;⛔ 不再有 MOCK 字樣。
         $this->post('/checkout/mock', $this->checkoutPayload())
             ->assertOk()
-            ->assertSee('本機 MOCK')
-            ->assertSee('沒有扣款、沒有呼叫任何金流或履約服務')
+            ->assertSee('訂單已建立')
+            ->assertDontSee('本機 MOCK')
             ->assertSee('example_account');
     }
 

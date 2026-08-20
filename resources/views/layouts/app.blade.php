@@ -71,8 +71,7 @@
             </nav>
             <p class="mt-10 border-t border-black/10 pt-6 text-xs leading-6 text-black/50">
                 <span class="font-semibold text-black/70">{{ $siteName }}</span>
-                {{-- R3:誠實維持「未開放」狀態,但不使用內部技術字眼(mock/後端)。 --}}
-                本站目前為預覽版本，尚未開放正式下單。
+
             </p>
         </div>
     </footer>

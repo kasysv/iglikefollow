@@ -1,6 +1,6 @@
 {{-- 用 checkout layout：它的 robots meta 是無條件 noindex，
      ⛔ layouts.app 會依 IndexingPolicy 判斷，開放索引後就會變成 index, follow。 --}}
-@extends('layouts.checkout', ['title' => 'Mock 訂單結果'])
+@extends('layouts.checkout', ['title' => '訂單結果'])
 
 @php
     $item = $order->items->first();
@@ -10,12 +10,10 @@
 @section('content')
 <main class="mx-auto max-w-3xl px-5 py-12 sm:px-8 lg:py-16">
     <div class="surface p-7 sm:p-10">
-        <span class="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</span>
-
-        <p class="eyebrow mt-8">Order created</p>
+        <p class="eyebrow mt-8">Order result</p>
         <h1 class="mt-4 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">訂單已建立。</h1>
         <p class="mt-5 leading-8 text-black/60">
-            結帳資料已通過後端驗證並建立本站訂單。付款結果由下方付款紀錄呈現。
+            訂單已建立，實際付款結果請以下方「付款狀態」與付款紀錄為準。
         </p>
 
         <div class="mt-8 rounded-2xl bg-paper p-5">
@@ -53,7 +51,7 @@
                 </div>
             @endif
             <div class="flex justify-between gap-6 py-4">
-                <dt class="text-black/50">應付金額（後端重算）</dt>
+                <dt class="text-black/50">應付金額</dt>
                 <dd class="font-bold tabular-nums">NT${{ number_format($order->total_amount) }}</dd>
             </div>
             {{-- ⛔ 只顯示遮罩後的聯絡資料與發票類型。 --}}
@@ -87,9 +85,9 @@
             </ul>
         @endif
 
+        {{-- R4:顧客語氣;付款狀態一律以儲存值顯示,未知/錯誤不會顯示成功。 --}}
         <p class="mt-8 rounded-2xl bg-paper p-5 text-sm leading-7 text-black/60">
-            這是本機測試結果：<strong class="text-ink">沒有扣款、沒有呼叫任何金流或履約服務，也不會開立任何發票。</strong>
-            付款狀態由 Fake 結果模擬，⛔ 不代表真實付款。聯絡資料僅以遮罩顯示。
+            聯絡資料僅以遮罩顯示；如需查詢或協助，請保留上方訂單編號。
         </p>
 
         <a href="{{ route('home') }}#platforms"

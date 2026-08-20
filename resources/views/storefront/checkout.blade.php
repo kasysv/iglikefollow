@@ -207,11 +207,11 @@
                 </div>
                 <p class="mt-2 text-xs leading-5 text-black/50">金額由伺服器依目前單價重新計算。</p>
 
-                {{-- ⛔ 按鈕文案不得寫成已可真實付款。 --}}
-                <button type="submit" class="primary-button mt-5">測試前往付款</button>
+                {{-- R4:顧客語氣;本機不會真實扣款由既有 flags/mock gate 保證,⛔ 不靠文案。 --}}
+                <button type="submit" class="primary-button mt-5">前往付款</button>
 
                 <p class="mt-4 text-xs leading-6 text-black/55">
-                    本機 MOCK：不會扣款、不會建立真實訂單，也不會開立任何發票。
+                    支援 LINE Pay、綠界付款；付款成功後自動處理，並開立電子發票。
                 </p>
             </div>
         </form>

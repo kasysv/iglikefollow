@@ -187,8 +187,7 @@
                             <p class="eyebrow">Estimate</p>
                             <h2 id="estimate-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">方案試算</h2>
                         </div>
-                        {{-- R3:公開頁不得出現內部技術字眼;誠實標示未開放即可。 --}}
-                        <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">預覽版本</span>
+
                     </div>
 
                     {{-- 服務項目的 radio 在左欄，⛔ 這裡不重複第二組 selector。 --}}
@@ -248,8 +247,7 @@
                         <button type="submit" class="primary-button mt-6">繼續結帳</button>
 
                         <p class="mt-4 text-xs leading-5 text-black/55">
-                            下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。<br>
-                            目前為預覽版本，尚未開放正式下單。
+                            下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。
                         </p>
                     </form>
                 </section>

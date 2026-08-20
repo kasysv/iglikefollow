@@ -20,7 +20,7 @@
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName ?? 'IGLIKEFOLLOW' }}"
                      class="h-auto w-36 sm:w-44" width="715" height="143">
             </a>
-            <p class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</p>
+
         </div>
     </header>
 
@@ -29,7 +29,8 @@
     <footer class="border-t border-black/10 bg-white">
         <div class="mx-auto max-w-[1120px] px-5 py-8 sm:px-8">
             <p class="text-xs leading-6 text-black/50">
-                本頁為本機開發預覽，不會扣款、不會建立真實訂單，也不會開立發票。
+{{-- R4:顧客語氣;真正的安全由 payment/dispatch flags 擋,不靠文案。 --}}
+                付款成功後自動處理，並開立電子發票。
             </p>
         </div>
     </footer>

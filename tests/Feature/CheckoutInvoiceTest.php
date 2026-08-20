@@ -160,14 +160,18 @@ class CheckoutInvoiceTest extends TestCase
         $this->assertStringNotContainsString('列印發票', $html);
     }
 
-    public function test_the_mock_cta_does_not_claim_real_payment(): void
+    public function test_the_checkout_cta_is_customer_voice_without_test_wording(): void
     {
+        /*
+         * R4:公開 checkout 使用顧客語氣;⛔ 不會真實扣款由 payment/
+         * dispatch flags 與 mock gate 保證,不再靠「測試/本機 MOCK」文案。
+         */
         $html = $this->checkoutHtml();
 
-        $this->assertStringContainsString('測試前往付款', $html);
-        $this->assertStringContainsString('本機 MOCK', $html);
-        $this->assertStringContainsString('不會扣款', $html);
-        $this->assertStringContainsString('不會開立任何發票', $html);
+        $this->assertStringContainsString('前往付款', $html);
+        $this->assertStringContainsString('支援 LINE Pay、綠界付款', $html);
+        $this->assertStringNotContainsString('測試前往付款', $html);
+        $this->assertStringNotContainsString('本機 MOCK', $html);
     }
 
     public function test_the_service_page_still_has_exactly_one_h1(): void
@@ -410,11 +414,17 @@ class CheckoutInvoiceTest extends TestCase
         ])->assertOk()->assertDontSee('12345678');
     }
 
-    public function test_the_mock_states_that_no_invoice_is_issued(): void
+    public function test_the_result_page_shows_invoice_type_without_claiming_issuance(): void
     {
+        /*
+         * R4:顧客語氣結果頁只顯示發票「類型」;⛔ 不宣稱已開立——
+         * 本機不開票由 sandbox gates 保證,不再靠免責文案。
+         */
         $this->submit()
             ->assertOk()
-            ->assertSee('不會開立任何發票');
+            ->assertSee('發票類型')
+            ->assertDontSee('已開立發票')
+            ->assertDontSee('不會開立任何發票');
     }
 
     // ------------------------------------------------------------ 後端仍是唯一權威

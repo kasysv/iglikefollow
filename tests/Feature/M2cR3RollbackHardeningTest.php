@@ -65,17 +65,17 @@ class M2cR3RollbackHardeningTest extends TestCase
         $this->assertStringNotContainsString('十年', $fixtureRaw);
         $this->assertStringNotContainsString('獨家', $fixtureRaw);
 
-        // 三項 safe highlights 逐字存在於 fixture。
-        foreach (['免會員結帳', '不需註冊即可下單', '價格清楚', '選擇數量即顯示試算金額', '服務分類清楚', '依平台與服務類型選擇'] as $text) {
+        // 三項 safe highlights(R4 Owner 核准版)逐字存在於 fixture。
+        foreach (['多種台灣方案', '普通、頂級、真人，部分方案可指定男女', '不需帳號密碼', '只需公開帳號、貼文或影片網址', '自動處理與電子發票', '付款成功後自動處理，可填個人或公司電子發票'] as $text) {
             $this->assertStringContainsString($text, $fixtureRaw);
         }
 
         Artisan::call('m2c:apply-r3');
 
-        // 13 頁 HTML 0 命中未授權宣稱;首頁三項 safe highlights 逐字可見。
+        // 13 頁 HTML 0 命中未授權宣稱;首頁三項 safe highlights(R4 版)逐字可見。
         $home = $this->get('/')->assertOk()->getContent();
 
-        foreach (['免會員結帳', '不需註冊即可下單', '價格清楚', '選擇數量即顯示試算金額', '服務分類清楚', '依平台與服務類型選擇'] as $text) {
+        foreach (['多種台灣方案', '普通、頂級、真人，部分方案可指定男女', '不需帳號密碼', '只需公開帳號、貼文或影片網址', '自動處理與電子發票', '付款成功後自動處理，可填個人或公司電子發票'] as $text) {
             $this->assertStringContainsString($text, $home);
         }
 
