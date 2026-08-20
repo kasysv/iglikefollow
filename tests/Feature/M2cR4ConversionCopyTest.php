@@ -11,6 +11,7 @@ use Database\Seeders\CatalogSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\IsolatesSnapshotStorage;
 use Tests\Concerns\SeedsThreadsCatalog;
 use Tests\TestCase;
 
@@ -23,6 +24,7 @@ use Tests\TestCase;
  */
 class M2cR4ConversionCopyTest extends TestCase
 {
+    use IsolatesSnapshotStorage;
     use RefreshDatabase;
     use SeedsThreadsCatalog;
 
@@ -62,6 +64,9 @@ class M2cR4ConversionCopyTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // ⛔ 快照寫進拋棄式目錄;不得污染 Owner 的真實還原資產。
+        $this->isolateSnapshotStorage();
 
         Http::preventStrayRequests();
 
@@ -268,5 +273,12 @@ class M2cR4ConversionCopyTest extends TestCase
         $this->assertFalse((bool) config('services.line_pay.live', false));
         $this->get('/api/health')->assertOk()->assertJsonPath('indexing', false);
         // Http::preventStrayRequests 已在 setUp 全程生效=外部 HTTP 0。
+    }
+
+    protected function tearDown(): void
+    {
+        $this->tearDownIsolatedSnapshotStorage();
+
+        parent::tearDown();
     }
 }

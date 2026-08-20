@@ -77,6 +77,12 @@ class M2cApplyR5FaqCommand extends Command
             $stats = ['created' => 0, 'updated' => 0, 'unchanged' => 0];
             $snapshotPath = null;
 
+            /*
+             * ⛔ 衝突必須在「產生快照之前」就擋掉:否則被拒絕的 apply 仍會
+             * 在 private snapshot 目錄留下垃圾檔。
+             */
+            $this->assertNoApplyConflicts($fixture);
+
             if (! $dry) {
                 $snapshotPath = $this->writeSnapshot($fixture);
             }
@@ -91,6 +97,13 @@ class M2cApplyR5FaqCommand extends Command
                 });
             } catch (RuntimeException $e) {
                 if ($e->getMessage() !== '__R5_DRY_RUN_ROLLBACK__') {
+                    /*
+                     * 快照已寫出但 apply 失敗(含快照與寫入之間的狀態漂移)
+                     * → 只刪掉「本次剛建立、且位於固定快照目錄內」的那一個檔,
+                     * ⛔ 絕不碰既有快照。
+                     */
+                    $this->discardSnapshot($snapshotPath);
+
                     throw $e;
                 }
             }
@@ -240,6 +253,9 @@ class M2cApplyR5FaqCommand extends Command
     /** @param array<string, mixed> $fixture @param array<string, mixed> $stats */
     private function applyFaqs(array $fixture, array &$stats): void
     {
+        // ⛔ 先整批驗證再寫入:任一列狀態不合法 → 0 writes。
+        $this->assertNoApplyConflicts($fixture);
+
         foreach ($this->expectedFromFixture($fixture) as $key => $expected) {
             $attributes = [
                 'scope' => $expected['scope'],
@@ -274,6 +290,129 @@ class M2cApplyR5FaqCommand extends Command
                 $stats['unchanged']++;
             }
         }
+    }
+
+    /**
+     * Owner conflict guard:apply 前逐列 fail closed。
+     *
+     * 合法的既有狀態只有三種:
+     * 1. row 不存在(本輪新建);
+     * 2. row 逐欄已等於 R5 expected(冪等重跑);
+     * 3. 3 個可重用 R3 key 逐欄等於「未被修改的 R3 fixture baseline」。
+     *
+     * ⛔ 其他任何狀態——question／answer／status／sort_order／scope／
+     * platform 或 service owner 被後台改過、列被 soft delete——都以固定
+     * `R5-APPLY-CONFLICT:faq.<key>` 拒絕整批,且 ⛔ 沒有 `--force` 可以繞過。
+     * Owner 真要覆寫必須先處理衝突或另案批准。錯誤訊息只帶 key,不帶文案。
+     *
+     * @param  array<string, mixed>  $fixture
+     */
+    private function assertNoApplyConflicts(array $fixture): void
+    {
+        $expectedAll = $this->expectedFromFixture($fixture);
+        $r3Baseline = $this->reusableR3Baseline();
+        $conflicts = [];
+
+        foreach ($expectedAll as $key => $expected) {
+            // withTrashed:被 soft delete 的受控列也算衝突,不可靜默復活覆寫。
+            $row = Faq::withTrashed()->where('managed_key', $key)->first();
+
+            if ($row === null) {
+                continue;
+            }
+
+            if ($row->deleted_at !== null) {
+                $conflicts[] = $key;
+
+                continue;
+            }
+
+            if ($this->rowMatches($row, $expected)) {
+                continue;
+            }
+
+            if (isset($r3Baseline[$key]) && $this->rowMatches($row, $r3Baseline[$key])) {
+                continue;
+            }
+
+            $conflicts[] = $key;
+        }
+
+        if ($conflicts !== []) {
+            sort($conflicts);
+
+            throw new RuntimeException('R5-APPLY-CONFLICT:'.implode(',', array_map(
+                static fn (string $key) => 'faq.'.$key,
+                $conflicts,
+            )));
+        }
+    }
+
+    /**
+     * 3 個可重用 R3 key 的「未被修改」基準值,取自現行 R3 fixture。
+     *
+     * R3 global FAQ 一律 scope=global、status=published、無 platform／service
+     * owner;fixture 只帶 question／answer／sort_order,其餘由 R3 importer 的
+     * 固定語意補齊。
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function reusableR3Baseline(): array
+    {
+        $path = database_path('fixtures/m2c-r3-content.json');
+
+        if (! is_file($path)) {
+            return [];
+        }
+
+        $r3 = json_decode((string) file_get_contents($path), true);
+
+        if (! is_array($r3) || ! is_array($r3['faqs']['global'] ?? null)) {
+            return [];
+        }
+
+        $baseline = [];
+
+        foreach ($r3['faqs']['global'] as $item) {
+            $key = $item['managed_key'] ?? null;
+
+            if (! is_string($key) || ! in_array($key, self::REUSABLE_R3_KEYS, true)) {
+                continue;
+            }
+
+            $baseline[$key] = [
+                'scope' => 'global', 'platform_slug' => null, 'product_slug' => null,
+                'question' => (string) $item['question'],
+                'answer' => (string) $item['answer'],
+                'status' => 'published',
+                'sort_order' => (int) $item['sort_order'],
+            ];
+        }
+
+        return $baseline;
+    }
+
+    /**
+     * 逐欄比對一列與某個允許狀態(含 platform／service owner 解析)。
+     *
+     * @param  array<string, mixed>  $expected
+     */
+    private function rowMatches(Faq $row, array $expected): bool
+    {
+        $expectedPlatformId = $expected['platform_slug'] !== null
+            ? Platform::query()->where('slug', $expected['platform_slug'])->value('id')
+            : null;
+        $expectedServiceId = $expected['product_slug'] !== null
+            ? Service::query()->where('product_slug', $expected['product_slug'])->value('id')
+            : null;
+
+        return (string) $row->scope === (string) $expected['scope']
+            && ($row->platform_id === null ? null : (int) $row->platform_id) === ($expectedPlatformId === null ? null : (int) $expectedPlatformId)
+            && ($row->service_id === null ? null : (int) $row->service_id) === ($expectedServiceId === null ? null : (int) $expectedServiceId)
+            && (string) $row->question === (string) $expected['question']
+            && (string) $row->answer === (string) $expected['answer']
+            && (string) $row->status === (string) $expected['status']
+            && (int) $row->sort_order === (int) $expected['sort_order'];
     }
 
     /**
@@ -369,6 +508,31 @@ class M2cApplyR5FaqCommand extends Command
         file_put_contents($path, json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 
         return $path;
+    }
+
+    /**
+     * 只刪除「本次剛建立且位於固定快照目錄內」的檔案。
+     *
+     * ⛔ 路徑必須 realpath 解析後仍在允許目錄內(擋目錄外／symlink 逃逸),
+     * 且檔名符合本 command 的產生規則;既有快照一律不碰。
+     */
+    private function discardSnapshot(?string $path): void
+    {
+        if ($path === null) {
+            return;
+        }
+
+        $dir = realpath(storage_path('app/private/m2c-snapshots'));
+        $real = realpath($path);
+
+        if ($dir === false || $real === false || ! is_file($real)
+            || ! str_starts_with($real, $dir.DIRECTORY_SEPARATOR)
+            || ! str_starts_with(basename($real), 'r5-faq-')
+            || ! str_ends_with($real, '.json')) {
+            return;
+        }
+
+        @unlink($real);
     }
 
     /** @return array<string, mixed> */

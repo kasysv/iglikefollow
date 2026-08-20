@@ -10,6 +10,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\IsolatesSnapshotStorage;
 use Tests\Concerns\SeedsThreadsCatalog;
 use Tests\TestCase;
 
@@ -22,12 +23,16 @@ use Tests\TestCase;
  */
 class M2cR3RollbackClosureTest extends TestCase
 {
+    use IsolatesSnapshotStorage;
     use RefreshDatabase;
     use SeedsThreadsCatalog;
 
     protected function setUp(): void
     {
         parent::setUp();
+
+        // ⛔ 快照寫進拋棄式目錄;不得污染 Owner 的真實還原資產。
+        $this->isolateSnapshotStorage();
 
         Http::preventStrayRequests();
 
@@ -249,5 +254,12 @@ class M2cR3RollbackClosureTest extends TestCase
         } finally {
             @exec('cmd /c rmdir '.escapeshellarg($junction));
         }
+    }
+
+    protected function tearDown(): void
+    {
+        $this->tearDownIsolatedSnapshotStorage();
+
+        parent::tearDown();
     }
 }

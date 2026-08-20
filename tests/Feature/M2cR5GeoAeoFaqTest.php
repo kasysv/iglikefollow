@@ -13,6 +13,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\IsolatesSnapshotStorage;
 use Tests\Concerns\SeedsThreadsCatalog;
 use Tests\TestCase;
 
@@ -28,6 +30,7 @@ use Tests\TestCase;
  */
 class M2cR5GeoAeoFaqTest extends TestCase
 {
+    use IsolatesSnapshotStorage;
     use RefreshDatabase;
     use SeedsThreadsCatalog;
 
@@ -53,9 +56,19 @@ class M2cR5GeoAeoFaqTest extends TestCase
         Http::preventStrayRequests();
         FaqPageContent::flush();
 
+        // ⛔ 快照一律寫進拋棄式目錄,不得污染 Owner 的真實還原資產。
+        $this->isolateSnapshotStorage();
+
         $this->seed(CatalogSeeder::class);
         $this->seedThreadsCatalog();
         Artisan::call('m2c:apply-copy');
+    }
+
+    protected function tearDown(): void
+    {
+        $this->tearDownIsolatedSnapshotStorage();
+
+        parent::tearDown();
     }
 
     /** @return array<string, mixed> */
@@ -89,6 +102,35 @@ class M2cR5GeoAeoFaqTest extends TestCase
     private function managedRowCount(): int
     {
         return Faq::withTrashed()->whereIn('managed_key', $this->managedKeys())->count();
+    }
+
+    /** 受控列的逐欄指紋,用來證明衝突時 0 writes。 @return array<int, mixed> */
+    private function managedRowsFingerprint(): array
+    {
+        return Faq::withTrashed()->whereIn('managed_key', $this->managedKeys())->orderBy('id')
+            ->get()
+            ->map
+            ->only(['managed_key', 'scope', 'platform_id', 'service_id', 'question', 'answer', 'status', 'sort_order', 'deleted_at'])
+            ->toArray();
+    }
+
+    /**
+     * 隔離目錄內的快照檔案集合(檔名→sha256)。
+     *
+     * @return array<string, string>
+     */
+    private function snapshotFiles(): array
+    {
+        $files = glob($this->snapshotDirectory().'/*.json') ?: [];
+        $out = [];
+
+        foreach ($files as $file) {
+            $out[basename($file)] = (string) hash_file('sha256', $file);
+        }
+
+        ksort($out);
+
+        return $out;
     }
 
     /** 所有公開頁面(13 頁 + /faq)的 HTML。 @return array<string, string> */
@@ -230,7 +272,7 @@ class M2cR5GeoAeoFaqTest extends TestCase
     public function test_dry_run_writes_nothing_and_leaves_no_snapshot(): void
     {
         $before = Faq::query()->orderBy('id')->get()->toArray();
-        $snapshotsBefore = glob(storage_path('app/private/m2c-snapshots').'/r5-faq-*.json') ?: [];
+        $snapshotsBefore = $this->snapshotFiles();
 
         $this->assertSame(0, Artisan::call('m2c:apply-r5-faq', ['--dry-run' => true]));
         $this->assertStringContainsString('0 writes', Artisan::output());
@@ -239,7 +281,7 @@ class M2cR5GeoAeoFaqTest extends TestCase
         $this->assertEquals($before, Faq::query()->orderBy('id')->get()->toArray());
 
         // dry-run ⛔ 不得產生快照檔。
-        $this->assertSame($snapshotsBefore, glob(storage_path('app/private/m2c-snapshots').'/r5-faq-*.json') ?: []);
+        $this->assertSame($snapshotsBefore, $this->snapshotFiles());
     }
 
     public function test_apply_is_idempotent(): void
@@ -287,6 +329,123 @@ class M2cR5GeoAeoFaqTest extends TestCase
 
         $this->assertSame($before, $snapshot());
         $this->assertDatabaseHas('faqs', ['id' => $ownerFaq->id, 'answer' => 'Owner 自己寫的答案。']);
+    }
+
+    // ------------------------------------------------------------------
+    // 2b. Owner conflict guard(R1):受控列被後台改過即 fail closed
+    // ------------------------------------------------------------------
+
+    /**
+     * 每個受控欄位被 Owner 後改後,apply 都必須整批拒絕。
+     *
+     * ⛔ 這是 R5 首次交付的缺口:原本只用 exact key 定位後直接覆寫,
+     * Owner 在後台改過的答案會被靜默蓋掉。
+     *
+     * @return array<string, array{string, array<string, mixed>}>
+     */
+    public static function ownerEditProvider(): array
+    {
+        return [
+            // 既有 r5.* key。
+            'r5 key: answer' => ['r5.global.invoice', ['answer' => 'Owner 改寫的答案。']],
+            'r5 key: question' => ['r5.global.invoice', ['question' => 'Owner 改寫的問題？']],
+            'r5 key: status' => ['r5.global.invoice', ['status' => 'draft']],
+            'r5 key: sort_order' => ['r5.global.invoice', ['sort_order' => 77]],
+            'r5 key: scope' => ['r5.global.invoice', ['scope' => 'platform']],
+            'r5 key: owner' => ['r5.ig買粉絲.tiers', ['service_id' => null]],
+            // 可重用的 R3 key(同題就地更新對象)。
+            'reused r3 key: answer' => ['r3.global.price', ['answer' => 'Owner 改寫的價格說明。']],
+            'reused r3 key: status' => ['r3.global.price', ['status' => 'draft']],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $edit
+     */
+    #[DataProvider('ownerEditProvider')]
+    public function test_apply_fails_closed_when_a_managed_row_was_edited_by_the_owner(string $key, array $edit): void
+    {
+        $this->apply();
+
+        $before = $this->managedRowsFingerprint();
+        $snapshotsBefore = $this->snapshotFiles();
+
+        Faq::query()->where('managed_key', $key)->firstOrFail()->forceFill($edit)->saveQuietly();
+
+        $afterEdit = $this->managedRowsFingerprint();
+
+        $this->assertSame(1, Artisan::call('m2c:apply-r5-faq'));
+        $output = Artisan::output();
+
+        // 固定 conflict identifier,⛔ 不得帶文案內容。
+        $this->assertStringContainsString('R5-APPLY-CONFLICT:faq.'.$key, $output);
+
+        foreach ($edit as $value) {
+            if (is_string($value)) {
+                $this->assertStringNotContainsString($value, $output);
+            }
+        }
+
+        // 0 writes:Owner 的修改原封不動,其他受控列也沒被動。
+        $this->assertSame($afterEdit, $this->managedRowsFingerprint());
+        $this->assertNotSame($before, $afterEdit);
+
+        // ⛔ 0 新 snapshot。
+        $this->assertSame($snapshotsBefore, $this->snapshotFiles());
+    }
+
+    public function test_apply_fails_closed_when_a_managed_row_was_soft_deleted(): void
+    {
+        $this->apply();
+
+        $snapshotsBefore = $this->snapshotFiles();
+        Faq::query()->where('managed_key', 'r5.global.password')->firstOrFail()->delete();
+
+        $this->assertSame(1, Artisan::call('m2c:apply-r5-faq'));
+        $this->assertStringContainsString('R5-APPLY-CONFLICT:faq.r5.global.password', Artisan::output());
+
+        // ⛔ 不得靜默復活並覆寫。
+        $this->assertSoftDeleted('faqs', ['managed_key' => 'r5.global.password']);
+        $this->assertSame($snapshotsBefore, $this->snapshotFiles());
+    }
+
+    public function test_apply_still_upgrades_a_clean_r3_baseline_and_stays_idempotent(): void
+    {
+        // 乾淨 R3 baseline(3 個可重用 key 為未修改的 R3 值)可一次升級。
+        Artisan::call('m2c:apply-r3');
+
+        $this->assertSame(0, Artisan::call('m2c:apply-r5-faq'));
+        $this->assertStringContainsString('created=19', Artisan::output());
+
+        // 第二次:0 created／0 updated。
+        $this->assertSame(0, Artisan::call('m2c:apply-r5-faq'));
+        $output = Artisan::output();
+        $this->assertStringContainsString('created=0', $output);
+        $this->assertStringContainsString('updated=0', $output);
+        $this->assertStringContainsString('unchanged=22', $output);
+
+        $this->assertSame(22, $this->managedRowCount());
+    }
+
+    public function test_conflicting_apply_leaves_protected_tables_untouched(): void
+    {
+        $this->apply();
+
+        $protected = fn () => [
+            'services' => DB::table('services')->orderBy('id')->get()->toJson(),
+            'service_variants' => DB::table('service_variants')->orderBy('id')->get()->toJson(),
+            'platforms' => DB::table('platforms')->orderBy('id')->get()->toJson(),
+            'site_settings' => DB::table('site_settings')->orderBy('id')->get()->toJson(),
+            'orders' => DB::table('orders')->orderBy('id')->get()->toJson(),
+        ];
+
+        $before = $protected();
+
+        Faq::query()->where('managed_key', 'r5.global.password')
+            ->firstOrFail()->forceFill(['answer' => 'Owner 改。'])->saveQuietly();
+
+        $this->assertSame(1, Artisan::call('m2c:apply-r5-faq'));
+        $this->assertSame($before, $protected());
     }
 
     // ------------------------------------------------------------------
