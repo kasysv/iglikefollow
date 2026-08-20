@@ -58,7 +58,7 @@
                                         {{-- D-103:公開內鏈一律直達 /product/ canonical。 --}}
                                         <a class="hover:text-ink hover:underline"
                                            href="{{ $footerService->primaryUrl() }}">
-                                            {{ $footerService->name }}
+                                            {{ $footerService->card_title ?: $footerService->name }}
                                         </a>
                                     </li>
                                 @endforeach
@@ -71,7 +71,8 @@
             </nav>
             <p class="mt-10 border-t border-black/10 pt-6 text-xs leading-6 text-black/50">
                 <span class="font-semibold text-black/70">{{ $siteName }}</span>
-                本站目前為本機開發預覽，全站 noindex，價格與方案為 mock 資料，不會建立真實訂單。
+                {{-- R3:誠實維持「未開放」狀態,但不使用內部技術字眼(mock/後端)。 --}}
+                本站目前為預覽版本，尚未開放正式下單。
             </p>
         </div>
     </footer>

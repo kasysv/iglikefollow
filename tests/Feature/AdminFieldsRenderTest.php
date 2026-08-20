@@ -124,8 +124,8 @@ class AdminFieldsRenderTest extends TestCase
 
         $intro = strpos($html, 'PLATFORM-INTRO-値');
         $tagline = strpos($html, 'TAGLINE-値');
-        // 「選擇服務」在頁首導覽也是純文字，⛔ 必須比對 <h2> 標籤才是服務區塊本身。
-        $picker = strpos($html, '>選擇服務</h2>');
+        // R3 後 H2 為「選擇 {平台名} 服務」;比對 <h2> 結尾標籤定位服務區塊本身。
+        $picker = strpos($html, '>選擇 Instagram 服務</h2>');
 
         // 詳細介紹屬於頁首內容：接在一句話介紹之後、服務列表之前。
         // ⛔ 之前輸出在整頁約 79% 的位置，管理者填了會以為沒有生效。

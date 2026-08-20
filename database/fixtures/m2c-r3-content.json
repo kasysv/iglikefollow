@@ -1,0 +1,178 @@
+{
+  "_meta": {
+    "source": "10-Projects/新站重建/M2-C-FULL-PAGE-SEO-CONTENT-INTERNAL-LINK-R3.md (2026-08-20)",
+    "note": "R3 頁面內容唯一施工來源之 repo 版本化快照;FAQ 答案為依站內事實草擬之待 Owner 修改稿。"
+  },
+  "site": {
+    "seo_title": "買讚、粉絲與觀看｜IG、FB、Threads｜IGLIKEFOLLOW",
+    "meta_description": "想買讚、增加粉絲或影片觀看？提供 Instagram、Facebook、Threads 多種方案。選擇平台與數量，貼上帳號或貼文網址，免會員快速結帳。",
+    "home_h1": "選購 IG、Facebook、Threads 買讚、粉絲與觀看方案",
+    "home_intro": "想買讚、增加粉絲或觀看次數？先選 Instagram、Facebook 或 Threads，再比較服務、數量與價格，貼上帳號或內容網址即可免會員結帳。",
+    "primary_cta_label": "查看買讚、粉絲與觀看方案",
+    "highlights": [
+      {"title": "免會員結帳", "body": "不需註冊即可下單"},
+      {"title": "在地公司・開立發票", "body": "十年在地台灣企業，企業報帳"},
+      {"title": "專屬服務項目", "body": "獨家各類平台行銷服務"}
+    ]
+  },
+  "platforms": {
+    "instagram": {
+      "h1": "Instagram 粉絲、貼文讚與影片觀看服務",
+      "tagline": "依帳號、貼文或影片目標，選擇對應的 Instagram 服務。",
+      "intro": "想增加帳號粉絲，請選粉絲方案；指定單篇貼文增加按讚，請選貼文讚；指定 Reel 或影片增加觀看，請選影片觀看。每張卡片都直接連到對應商品與價格。",
+      "seo_title": "Instagram服務｜粉絲、貼文讚、影片觀看｜IGLIKEFOLLOW",
+      "meta_description": "查看 Instagram 粉絲、單篇貼文按讚與影片觀看方案，先比較服務類型，再選擇數量並前往免會員快速結帳。"
+    },
+    "facebook": {
+      "h1": "Facebook 粉絲、貼文讚與影片觀看服務",
+      "tagline": "依粉專、帳號、貼文或影片目標，選擇對應的 Facebook 服務。",
+      "intro": "需要粉絲數、指定貼文按讚或影片觀看，請分別進入對應方案頁；各頁會列出目前可購款式、數量與價格。",
+      "seo_title": "Facebook服務｜粉絲、貼文讚、影片觀看｜IGLIKEFOLLOW",
+      "meta_description": "查看 Facebook 粉絲、單篇貼文按讚與影片觀看方案，先選擇服務類型，再選數量並前往免會員快速結帳。"
+    },
+    "threads": {
+      "h1": "Threads 粉絲、貼文讚與瀏覽次數服務",
+      "tagline": "依帳號粉絲或貼文互動目標，選擇對應的 Threads 服務。",
+      "intro": "帳號粉絲、指定貼文按讚，以及貼文瀏覽、轉發或分享分成不同商品頁；先選服務，再比較數量與價格。",
+      "seo_title": "Threads服務｜粉絲、貼文讚、瀏覽次數｜IGLIKEFOLLOW",
+      "meta_description": "查看 Threads 粉絲、貼文按讚、瀏覽、轉發與分享方案，選擇服務與數量，貼上帳號或貼文網址後快速結帳。"
+    }
+  },
+  "services": {
+    "ig買粉絲": {
+      "seo_title": "IG買粉絲｜Instagram粉絲方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 IG 粉絲？比較不同粉絲類型、數量與價格，貼上公開 Instagram 帳號，免會員快速結帳。",
+      "h1": "IG買粉絲方案",
+      "card_title": "IG買粉絲方案",
+      "summary": "比較 IG 粉絲類型、數量與價格，貼上公開 Instagram 帳號即可前往免會員結帳。",
+      "intro": "IG買粉絲方案集中在同一頁，不因一般、真人或地區款式另外建立近似網址。先選目前上架的粉絲類型與數量，系統會顯示試算金額。",
+      "card_blurb": "比較 IG 粉絲類型、數量與價格，貼上公開 Instagram 帳號即可前往免會員結帳。",
+      "cta_label": "選擇數量方案"
+    },
+    "ig買like": {
+      "seo_title": "IG買讚｜Instagram貼文讚方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 IG 貼文讚？選擇按讚類型與數量，貼上指定 Instagram 貼文網址，查看價格後免會員快速結帳。",
+      "h1": "IG買讚方案",
+      "card_title": "IG買讚方案",
+      "summary": "為指定 Instagram 貼文選購按讚方案；比較類型、數量與價格後，貼上該篇貼文網址即可結帳。",
+      "intro": "本頁只處理指定單篇 Instagram 貼文按讚，不是帳號粉絲或自動貼文讚。選擇目前上架的按讚款式與數量後，即時查看試算金額。",
+      "card_blurb": "為指定 Instagram 貼文選購按讚方案；比較類型、數量與價格後，貼上該篇貼文網址即可結帳。",
+      "cta_label": "選擇數量方案"
+    },
+    "ig影片觀看": {
+      "seo_title": "IG影片觀看數｜Reel觀看方案｜IGLIKEFOLLOW",
+      "meta_description": "為 Instagram Reel 或影片增加觀看次數。選擇數量、貼上指定影片網址，查看方案價格後免會員快速結帳。",
+      "h1": "IG影片觀看數方案",
+      "card_title": "IG影片觀看方案",
+      "summary": "為指定 Instagram Reel 或影片選擇觀看數量，貼上影片網址並查看試算價格。",
+      "intro": "本頁提供 Instagram Reel 或影片觀看方案。先選目前上架的觀看款式與數量，再填入要交付的影片網址。",
+      "card_blurb": "為指定 Instagram Reel 或影片選擇觀看數量，貼上影片網址並查看試算價格。",
+      "cta_label": "選擇數量方案"
+    },
+    "fb買粉絲": {
+      "seo_title": "FB買粉絲｜Facebook粉絲方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 Facebook 粉絲？選擇粉專、個人帳號或社團適用方案與數量，貼上連結，查看價格後免會員快速結帳。",
+      "h1": "FB買粉絲方案",
+      "card_title": "FB買粉絲方案",
+      "summary": "選擇 Facebook 粉絲方案與數量，貼上方案要求的粉專、個人檔案或社團網址後結帳。",
+      "intro": "FB買粉絲頁集中顯示目前上架的 Facebook 粉絲款式、可購數量與價格。請依方案要求準備公開目標網址。",
+      "card_blurb": "選擇 Facebook 粉絲方案與數量，貼上方案要求的粉專、個人檔案或社團網址後結帳。",
+      "cta_label": "選擇數量方案"
+    },
+    "fb買like": {
+      "seo_title": "FB買讚｜Facebook貼文讚方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 Facebook 貼文讚？選擇按讚類型與數量，貼上指定貼文網址，查看價格後免會員快速結帳。",
+      "h1": "FB買讚方案",
+      "card_title": "FB買讚方案",
+      "summary": "為指定 Facebook 貼文選購按讚方案；選擇數量、貼上該篇貼文網址並查看價格。",
+      "intro": "本頁承接單篇 Facebook 貼文按讚，不與粉絲或留言商品混用。先選目前上架的按讚款式與數量，再進入結帳。",
+      "card_blurb": "為指定 Facebook 貼文選購按讚方案；選擇數量、貼上該篇貼文網址並查看價格。",
+      "cta_label": "選擇數量方案"
+    },
+    "fb影片觀看": {
+      "seo_title": "Facebook影片觀看數｜Reel觀看方案｜IGLIKEFOLLOW",
+      "meta_description": "為 Facebook Reel 或影片增加觀看次數。選擇數量、貼上指定影片網址，查看方案價格後免會員快速結帳。",
+      "h1": "Facebook影片觀看數方案",
+      "card_title": "Facebook影片觀看方案",
+      "summary": "為指定 Facebook Reel 或影片選擇觀看數量，貼上影片網址並查看試算價格。",
+      "intro": "本頁提供 Facebook Reel 或影片觀看方案。選擇目前上架的款式與數量，再填入要交付的影片網址。",
+      "card_blurb": "為指定 Facebook Reel 或影片選擇觀看數量，貼上影片網址並查看試算價格。",
+      "cta_label": "選擇數量方案"
+    },
+    "threads買粉絲": {
+      "seo_title": "Threads買粉絲｜粉絲方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 Threads 粉絲？選擇粉絲類型與數量，貼上公開 Threads 帳號，查看價格後免會員快速結帳。",
+      "h1": "Threads買粉絲方案",
+      "card_title": "Threads買粉絲方案",
+      "summary": "比較 Threads 粉絲類型、數量與價格，貼上公開 Threads 帳號即可前往結帳。",
+      "intro": "Threads買粉絲方案集中在同一頁。先比較目前上架的款式、可購數量與價格，再填寫公開 Threads 帳號。",
+      "card_blurb": "比較 Threads 粉絲類型、數量與價格，貼上公開 Threads 帳號即可前往結帳。",
+      "cta_label": "選擇數量方案"
+    },
+    "threads買讚": {
+      "seo_title": "Threads買讚｜貼文讚方案與價格｜IGLIKEFOLLOW",
+      "meta_description": "想買 Threads 貼文讚？選擇按讚類型與數量，貼上指定 Threads 貼文網址，查看價格後免會員快速結帳。",
+      "h1": "Threads買讚方案",
+      "card_title": "Threads買讚方案",
+      "summary": "為指定 Threads 貼文選購按讚方案；選擇類型與數量，貼上該篇貼文網址並查看價格。",
+      "intro": "本頁只處理指定 Threads 貼文按讚。選擇目前上架的款式與數量後，填入要交付的 Threads 貼文網址。",
+      "card_blurb": "為指定 Threads 貼文選購按讚方案；選擇類型與數量，貼上該篇貼文網址並查看價格。",
+      "cta_label": "選擇數量方案"
+    },
+    "threads貼文瀏覽": {
+      "seo_title": "Threads瀏覽次數｜瀏覽、轉發與分享方案｜IGLIKEFOLLOW",
+      "meta_description": "為指定 Threads 貼文增加瀏覽、轉發或分享次數。選擇服務與數量，貼上貼文網址，查看價格後免會員快速結帳。",
+      "h1": "Threads瀏覽次數、轉發與分享方案",
+      "card_title": "Threads瀏覽次數方案",
+      "summary": "為指定 Threads 貼文選擇瀏覽、轉發或分享方案與數量，貼上貼文網址後查看價格。",
+      "intro": "瀏覽、轉發與分享是不同方案，請依要處理的項目分別選擇款式與數量；本頁不把三者視為同一個交付項目。",
+      "card_blurb": "為指定 Threads 貼文選擇瀏覽、轉發或分享方案與數量，貼上貼文網址後查看價格。",
+      "cta_label": "選擇數量方案"
+    }
+  },
+  "content_sections": [
+    {"managed_key": "r3.ig買粉絲.how-to-choose", "product_slug": "ig買粉絲", "heading": "IG粉絲方案怎麼選", "body": "先比較每個已上架款式的名稱、說明、可購數量與單價，再依需求選擇。同一頁完成款式比較，不必在多個近似商品頁之間切換。", "sort_order": 10},
+    {"managed_key": "r3.ig買粉絲.prepare", "product_slug": "ig買粉絲", "heading": "購買IG粉絲前要準備什麼", "body": "準備公開的 Instagram 帳號或帳號網址。選好款式與數量後，下一步填寫目標帳號、聯絡資料、電子發票與付款方式。", "sort_order": 11},
+    {"managed_key": "r3.ig買like.how-to-choose", "product_slug": "ig買like", "heading": "IG買讚方案怎麼選", "body": "比較目前上架款式的名稱、說明、可購數量與單價；選擇後的金額會依數量顯示。", "sort_order": 10},
+    {"managed_key": "r3.ig買like.which-url", "product_slug": "ig買like", "heading": "購買IG貼文讚要貼哪個網址", "body": "請準備要增加按讚數的單篇 Instagram 貼文網址。帳號首頁或其他平台網址不是本商品的交付目標。", "sort_order": 11},
+    {"managed_key": "r3.ig影片觀看.how-to-order", "product_slug": "ig影片觀看", "heading": "IG影片觀看方案如何下單", "body": "選擇觀看數量、確認試算金額，再貼上指定 Instagram Reel 或影片網址完成後續結帳資料。", "sort_order": 10},
+    {"managed_key": "r3.fb買粉絲.how-to-choose", "product_slug": "fb買粉絲", "heading": "FB粉絲方案怎麼選", "body": "先確認方案適用目標，再比較可購數量與單價；選擇後查看試算總額。", "sort_order": 10},
+    {"managed_key": "r3.fb買粉絲.prepare", "product_slug": "fb買粉絲", "heading": "購買Facebook粉絲要準備什麼", "body": "準備方案要求的 Facebook 粉專、個人檔案或社團網址，結帳前再次確認連結指向正確目標。", "sort_order": 11},
+    {"managed_key": "r3.fb買like.how-to-choose", "product_slug": "fb買like", "heading": "FB買讚方案怎麼選", "body": "比較目前上架的款式、可購數量與單價；選擇數量後查看試算總額。", "sort_order": 10},
+    {"managed_key": "r3.fb買like.which-url", "product_slug": "fb買like", "heading": "購買Facebook貼文讚要貼哪個網址", "body": "請提供要增加按讚數的單篇 Facebook 貼文網址，而不是粉專首頁或其他平台連結。", "sort_order": 11},
+    {"managed_key": "r3.fb影片觀看.how-to-order", "product_slug": "fb影片觀看", "heading": "Facebook影片觀看方案如何下單", "body": "選擇觀看數量、確認試算金額，再貼上指定 Facebook Reel 或影片網址完成後續結帳資料。", "sort_order": 10},
+    {"managed_key": "r3.threads買粉絲.how-to-choose", "product_slug": "threads買粉絲", "heading": "Threads粉絲方案怎麼選", "body": "依目前上架款式的名稱、說明、數量與單價比較；同一頁完成選擇，不為相近款式另建重複頁。", "sort_order": 10},
+    {"managed_key": "r3.threads買粉絲.prepare", "product_slug": "threads買粉絲", "heading": "購買Threads粉絲要準備什麼", "body": "準備公開的 Threads 帳號或帳號網址，並在結帳前確認目標帳號正確。", "sort_order": 11},
+    {"managed_key": "r3.threads買讚.how-to-choose", "product_slug": "threads買讚", "heading": "Threads買讚方案怎麼選", "body": "比較目前上架款式的名稱、說明、數量與單價，再依要處理的單篇貼文選擇。", "sort_order": 10},
+    {"managed_key": "r3.threads買讚.which-url", "product_slug": "threads買讚", "heading": "購買Threads貼文讚要貼哪個網址", "body": "請提供指定 Threads 貼文網址，不要填帳號首頁或其他平台連結。", "sort_order": 11},
+    {"managed_key": "r3.threads貼文瀏覽.how-to-choose", "product_slug": "threads貼文瀏覽", "heading": "Threads瀏覽、轉發與分享怎麼選", "body": "先確認要增加的是瀏覽、轉發或分享，再選擇對應款式與數量；頁面會依選項顯示價格。", "sort_order": 10},
+    {"managed_key": "r3.threads貼文瀏覽.which-url", "product_slug": "threads貼文瀏覽", "heading": "購買Threads瀏覽次數要貼哪個網址", "body": "請提供指定 Threads 貼文網址，並在結帳前確認連結可正確開啟。", "sort_order": 11}
+  ],
+  "faqs": {
+    "global": [
+      {"managed_key": "r3.global.membership", "question": "需要註冊會員嗎？", "answer": "不需要。選好服務與數量後即可直接結帳，全程免會員。", "sort_order": 1},
+      {"managed_key": "r3.global.prepare", "question": "下單前要準備什麼？", "answer": "準備方案對應的公開目標：帳號網址，或指定的貼文、影片網址；結帳時再填寫聯絡資料與電子發票資訊。", "sort_order": 2},
+      {"managed_key": "r3.global.price", "question": "如何查看方案價格？", "answer": "每個商品頁都會列出目前上架款式與單價；選擇數量後，頁面會即時顯示試算金額。", "sort_order": 3}
+    ],
+    "service": [
+      {"managed_key": "r3.ig買粉絲.faq.data", "product_slug": "ig買粉絲", "question": "IG買粉絲需要提供哪些資料？", "answer": "只需要公開的 Instagram 帳號或帳號網址，以及結帳時的聯絡資料與電子發票資訊。", "sort_order": 10},
+      {"managed_key": "r3.ig買粉絲.faq.compare", "product_slug": "ig買粉絲", "question": "不同IG粉絲方案如何比較？", "answer": "每個款式都會列出名稱、說明、可購數量與單價；在同一頁選擇款式與數量，即可看到試算金額再決定。", "sort_order": 11},
+      {"managed_key": "r3.ig買粉絲.faq.password", "product_slug": "ig買粉絲", "question": "需要提供Instagram密碼嗎？", "answer": "不需要。下單只需提供公開帳號或帳號網址，不會要求任何密碼。", "sort_order": 12},
+      {"managed_key": "r3.ig買like.faq.url", "product_slug": "ig買like", "question": "IG買讚要提供帳號還是貼文網址？", "answer": "請提供要增加按讚數的單篇 Instagram 貼文網址；帳號首頁不是本商品的交付目標。", "sort_order": 10},
+      {"managed_key": "r3.ig買like.faq.scope", "product_slug": "ig買like", "question": "一筆IG貼文讚訂單對應哪篇內容？", "answer": "對應你下單時貼上的那一篇貼文；要處理多篇貼文請分別下單。", "sort_order": 11},
+      {"managed_key": "r3.fb買粉絲.faq.url", "product_slug": "fb買粉絲", "question": "FB買粉絲要貼哪一種Facebook網址？", "answer": "依所選方案提供對應的公開粉專、個人檔案或社團網址；結帳前請再次確認連結指向正確目標。", "sort_order": 10},
+      {"managed_key": "r3.fb買like.faq.url", "product_slug": "fb買like", "question": "FB買讚需要提供哪一篇貼文？", "answer": "請提供要增加按讚數的單篇 Facebook 貼文網址；粉專首頁不是本商品的交付目標。", "sort_order": 10},
+      {"managed_key": "r3.threads買粉絲.faq.target", "product_slug": "threads買粉絲", "question": "Threads買粉絲需要貼帳號還是貼文？", "answer": "請提供公開的 Threads 帳號或帳號網址；貼文網址屬於貼文讚與瀏覽類商品。", "sort_order": 10},
+      {"managed_key": "r3.threads買讚.faq.url", "product_slug": "threads買讚", "question": "Threads買讚要提供帳號還是貼文網址？", "answer": "請提供指定的 Threads 貼文網址；帳號首頁不是本商品的交付目標。", "sort_order": 10}
+    ]
+  },
+  "faq_removals": [
+    {"scope": "global", "product_slug": null, "question": "需要註冊會員嗎？", "reason": "由同題 managed 版本(r3.global.membership)取代,避免重複顯示"},
+    {"scope": "global", "product_slug": null, "question": "單篇貼文讚與自動貼文讚差在哪裡？", "reason": "公開頁不得說明自動讚內部商品流程(auto-likes 無 SEO owner)"},
+    {"scope": "global", "product_slug": null, "question": "付款後會立即建立訂單嗎？", "reason": "後端驗證/內部流程文案不得公開"},
+    {"scope": "global", "product_slug": null, "question": "現在可以真的付款嗎？", "reason": "本機 MOCK 說明不得公開"},
+    {"scope": "service", "product_slug": "ig買粉絲", "question": "買粉絲會導致帳號被鎖嗎?", "reason": "無證據保證,R3 裁定移除"},
+    {"scope": "service", "product_slug": "ig買粉絲", "question": "真人、頂級、高級與普通粉絲有什麼差別?", "reason": "由 R3「不同IG粉絲方案如何比較」與款式說明承接"},
+    {"scope": "service", "product_slug": "ig買粉絲", "question": "購買時需要提供帳號密碼嗎?", "reason": "由 R3「需要提供Instagram密碼嗎」取代"}
+  ]
+}

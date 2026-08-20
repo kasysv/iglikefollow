@@ -31,9 +31,10 @@
             </div>
             @php
                 // 後台沒填就用這組預設，⛔ 讓這條列永遠不會整條空白。
+                // R3:fallback 不得含內部流程字眼(如驗價);與 R3 fixture 同步。
                 $highlights = $settings?->homeHighlights() ?: [
                     ['title' => '免會員結帳', 'body' => '不需註冊即可下單'],
-                    ['title' => '後端重新驗價', 'body' => '不信任前端送出的價格'],
+                    ['title' => '價格清楚', 'body' => '選擇數量即顯示試算金額'],
                     ['title' => '服務分類清楚', 'body' => '依平台與服務類型選擇'],
                 ];
             @endphp
@@ -62,7 +63,8 @@
     <section id="platforms" class="scroll-mt-24 border-t border-black/10 bg-white">
         <div class="mx-auto max-w-[1220px] px-5 py-16 sm:px-8 lg:py-20">
             <p class="eyebrow">Step 1</p>
-            <h2 class="mt-4 text-4xl font-bold tracking-[-0.045em] sm:text-5xl">選擇平台</h2>
+            {{-- R3:固定 H2 --}}
+            <h2 class="mt-4 text-4xl font-bold tracking-[-0.045em] sm:text-5xl">選擇 Instagram、Facebook 或 Threads 服務</h2>
             <p class="mt-4 max-w-2xl leading-8 text-black/60">
                 每個平台的服務內容與交付方式不同，請先選擇要成長的平台。
             </p>
@@ -92,16 +94,18 @@
 
                             @if ($isOpen)
                                 <ul class="mt-6 flex-1 space-y-2.5 border-t border-black/10 pt-5 text-sm text-black/70">
+                                    {{-- R3:主要商品一跳可達,anchor 用 card_title,⛔ 不是純文字 --}}
                                     @foreach ($platform->services as $service)
                                         <li class="flex gap-2.5">
                                             <span aria-hidden="true" class="mt-2 h-1 w-1 shrink-0 rounded-full bg-black/25"></span>
-                                            <span>{{ $service->name }}</span>
+                                            <a href="{{ $service->primaryUrl() }}"
+                                               class="hover:text-ink hover:underline">{{ $service->card_title ?: $service->name }}</a>
                                         </li>
                                     @endforeach
                                 </ul>
                                 <a href="{{ route('platform', $platform->slug) }}"
                                    class="mt-7 inline-flex min-h-14 items-center justify-center rounded-full bg-ink px-6 text-base font-bold text-white transition-colors duration-200 hover:bg-black">
-                                    查看 {{ $platform->name }} 服務
+                                    {{ ['instagram' => '查看 Instagram 粉絲、買讚與觀看', 'facebook' => '查看 Facebook 粉絲、買讚與觀看', 'threads' => '查看 Threads 粉絲、買讚與瀏覽'][$platform->slug] ?? '查看 '.$platform->name.' 服務' }}
                                 </a>
                             @else
                                 <div class="mt-6 flex-1 rounded-2xl border border-dashed border-black/15 bg-paper p-5">
@@ -123,7 +127,7 @@
 
     <section id="process" class="mx-auto max-w-[1220px] scroll-mt-24 px-5 py-16 sm:px-8 lg:py-20">
         <p class="eyebrow">How it works</p>
-        <h2 class="mt-4 max-w-3xl text-4xl font-bold tracking-[-0.045em] sm:text-5xl">四個步驟，完成訂單。</h2>
+        <h2 class="mt-4 max-w-3xl text-4xl font-bold tracking-[-0.045em] sm:text-5xl">買讚、粉絲與觀看的下單流程</h2>
         <div class="mt-10 grid gap-px overflow-hidden rounded-[1.75rem] bg-black/10 sm:grid-cols-2 lg:grid-cols-4">
             <article class="bg-white p-7">
                 <span class="text-sm text-black/45">01</span>

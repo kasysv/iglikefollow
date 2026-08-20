@@ -108,7 +108,8 @@
     @if ($isAvailable)
         <section class="border-t border-black/10 bg-white">
             <div class="mx-auto max-w-[1320px] px-5 py-12 sm:px-8 lg:py-16">
-                <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">選擇服務</h2>
+                {{-- R3:固定 H2 加入平台名稱 --}}
+                <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">選擇 {{ $platform->name }} 服務</h2>
 
                 @if ($featured)
                     <a href="{{ $featured->primaryUrl() }}"
@@ -119,7 +120,7 @@
                                     主打服務
                                 </span>
                                 <h3 class="mt-4 text-2xl font-bold tracking-[-0.03em] sm:text-3xl">
-                                    {{ str($featured->card_title ?: $featured->name)->after($platform->name . ' ')->toString() ?: $featured->name }}
+                                    {{ $featured->card_title ?: $featured->name }}
                                 </h3>
                                 <p class="mt-3 leading-7 text-black/60">{{ $featured->card_blurb ?: $featured->summary }}</p>
                                 <p class="mt-4 text-sm text-black/55">
@@ -142,7 +143,7 @@
                             <div class="flex items-start justify-between gap-4">
                                 <div>
                                     <h3 class="text-lg font-bold tracking-[-0.02em]">
-                                        {{ str($service->card_title ?: $service->name)->after($platform->name . ' ')->toString() ?: $service->name }}
+                                        {{ $service->card_title ?: $service->name }}
                                     </h3>
                                     <p class="mt-2 text-sm leading-6 text-black/60">
                                         {{ $service->card_blurb ?: $service->summary }}
@@ -174,7 +175,7 @@
                                         <li>
                                             <a href="{{ $service->primaryUrl() }}"
                                                class="inline-flex min-h-11 items-center text-black/65 transition-colors duration-200 hover:text-ink hover:underline">
-                                                {{ str($service->name)->after($platform->name . ' ')->toString() ?: $service->name }}
+                                                {{ $service->card_title ?: $service->name }}
                                             </a>
                                         </li>
                                     @endforeach
@@ -188,7 +189,7 @@
 
         <section class="border-t border-black/10 bg-white">
             <div class="mx-auto max-w-[1320px] px-5 py-12 sm:px-8 lg:py-16">
-                <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">服務比較</h2>
+                <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">{{ $platform->name }} 服務比較</h2>
                 <div class="mt-6 overflow-x-auto">
                     <table class="w-full min-w-[640px] border-collapse text-left text-sm">
                         <caption class="sr-only">{{ $platform->name }} 各服務的交付方式與需填寫欄位比較</caption>
@@ -206,7 +207,7 @@
                                     <th scope="row" class="py-4 pr-4 font-semibold">
                                         <a href="{{ $service->primaryUrl() }}"
                                            class="hover:text-trust hover:underline">
-                                            {{ str($service->name)->after($platform->name . ' ')->toString() ?: $service->name }}
+                                            {{ $service->card_title ?: $service->name }}
                                         </a>
                                     </th>
                                     <td class="py-4 pr-4 text-black/60">{{ $service->goal ?: '—' }}</td>

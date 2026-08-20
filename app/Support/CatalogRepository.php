@@ -43,6 +43,12 @@ class CatalogRepository
         return Platform::query()
             ->published()
             ->withCount(['services' => fn ($q) => $q->published()])
+            /*
+             * R3:首頁平台卡的商品清單是真實內鏈(一跳直達 /product/),
+             * 所以只帶已發布且有 product_slug 的服務——沒有 canonical 的
+             * 服務放進清單就是壞連結。
+             */
+            ->with(['services' => fn ($q) => $q->published()->whereNotNull('product_slug')->orderBy('sort_order')])
             ->orderBy('sort_order')
             ->get();
     }

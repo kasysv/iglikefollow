@@ -51,8 +51,9 @@
             <li><a href="{{ route('home') }}" class="hover:text-ink hover:underline">首頁</a></li>
             <li aria-hidden="true">/</li>
             <li>
+                {{-- R3:麵包屑 Hub anchor=「平台名+服務」 --}}
                 <a href="{{ route('platform', $platform->slug) }}" class="hover:text-ink hover:underline">
-                    {{ $platform->name }}
+                    {{ $platform->name }}服務
                 </a>
             </li>
             <li aria-hidden="true">/</li>
@@ -186,7 +187,8 @@
                             <p class="eyebrow">Estimate</p>
                             <h2 id="estimate-title" class="mt-2 text-2xl font-bold tracking-[-0.03em]">方案試算</h2>
                         </div>
-                        <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">本機 MOCK</span>
+                        {{-- R3:公開頁不得出現內部技術字眼;誠實標示未開放即可。 --}}
+                        <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">預覽版本</span>
                     </div>
 
                     {{-- 服務項目的 radio 在左欄，⛔ 這裡不重複第二組 selector。 --}}
@@ -239,7 +241,7 @@
                                 </span>
                             </div>
                             <p class="mt-2 text-xs leading-5 text-black/50">
-                                實際金額以後端重新計算為準。
+                                實際金額以結帳頁顯示為準。
                             </p>
                         </div>
 
@@ -247,7 +249,7 @@
 
                         <p class="mt-4 text-xs leading-5 text-black/55">
                             下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。<br>
-                            本機 MOCK：不扣款、不建立訂單。
+                            目前為預覽版本，尚未開放正式下單。
                         </p>
                     </form>
                 </section>
@@ -295,7 +297,7 @@
                 <div class="bg-white p-6">
                     <dt class="text-sm font-bold">付款方式</dt>
                     <dd class="mt-2 leading-7 text-black/60">
-                        LINE Pay 或綠界付款。付款成功由後端驗證後才建立履約流程。
+                        LINE Pay 或綠界付款；付款完成後開始安排交付。
                     </dd>
                 </div>
             </dl>
@@ -327,7 +329,7 @@
                         <li>
                             <a href="{{ $other->primaryUrl() }}"
                                class="flex min-h-20 flex-col justify-center rounded-2xl border border-black/10 bg-white px-5 py-4 transition-colors duration-200 hover:border-ink">
-                                <span class="font-bold">{{ $other->name }}</span>
+                                <span class="font-bold">{{ $other->card_title ?: $other->name }}</span>
                                 <span class="mt-1 text-sm text-black/55">{{ $other->summary }}</span>
                             </a>
                         </li>
