@@ -78,31 +78,48 @@ class M2cApplyR5FaqCommand extends Command
             $snapshotPath = null;
 
             /*
-             * ⛔ 衝突必須在「產生快照之前」就擋掉:否則被拒絕的 apply 仍會
-             * 在 private snapshot 目錄留下垃圾檔。
+             * Preflight:未鎖定的快速拒絕,讓明顯衝突不必進 transaction。
+             * ⛔ 這不是安全邊界——真正的保證來自下方 transaction 內的
+             * lock → guard → snapshot → apply。
              */
             $this->assertNoApplyConflicts($fixture);
 
-            if (! $dry) {
-                $snapshotPath = $this->writeSnapshot($fixture);
-            }
-
             try {
-                DB::transaction(function () use ($fixture, $dry, &$stats): void {
-                    $this->applyFaqs($fixture, $stats);
+                DB::transaction(function () use ($fixture, $dry, &$stats, &$snapshotPath): void {
+                    /*
+                     * 安全順序(R2):同一 transaction 內
+                     *   1. 依 managed key 穩定排序取得 lockForUpdate;
+                     *   2. 在鎖內逐欄驗證;
+                     *   3. 由「同一批 locked rows」產生 snapshot before-state;
+                     *   4. 用同一批 locked rows 套用。
+                     * ⛔ snapshot 之後不得再有「重新查詢→未鎖定→save」的窗口:
+                     * Owner 的並行寫入只能等本 transaction commit 後才生效。
+                     */
+                    $locked = $this->lockManagedRows($fixture);
+
+                    $this->assertNoApplyConflicts($fixture, $locked);
+
+                    $snapshot = $this->buildSnapshot($fixture, $locked);
+
+                    $this->applyFaqs($fixture, $locked, $stats);
 
                     if ($dry) {
+                        // ⛔ dry-run 一律不產生快照檔。
                         throw new RuntimeException('__R5_DRY_RUN_ROLLBACK__');
                     }
+
+                    // 寫檔放在 commit 前的最後一步:apply 失敗就不會留下孤兒快照。
+                    $snapshotPath = $this->writeSnapshotFile($snapshot);
                 });
             } catch (RuntimeException $e) {
                 if ($e->getMessage() !== '__R5_DRY_RUN_ROLLBACK__') {
                     /*
-                     * 快照已寫出但 apply 失敗(含快照與寫入之間的狀態漂移)
-                     * → 只刪掉「本次剛建立、且位於固定快照目錄內」的那一個檔,
+                     * DB 已整批 rollback;若快照檔已寫出(commit 前最後一步之後
+                     * 才失敗),只刪掉「本次剛建立、且位於固定快照目錄內」的那一個,
                      * ⛔ 絕不碰既有快照。
                      */
                     $this->discardSnapshot($snapshotPath);
+                    $snapshotPath = null;
 
                     throw $e;
                 }
@@ -250,12 +267,38 @@ class M2cApplyR5FaqCommand extends Command
     // Apply
     // ------------------------------------------------------------------
 
-    /** @param array<string, mixed> $fixture @param array<string, mixed> $stats */
-    private function applyFaqs(array $fixture, array &$stats): void
+    /**
+     * 在 transaction 內取得所有已存在受控列的 row lock。
+     *
+     * ⛔ 依 managed key 穩定排序後一次 `lockForUpdate`,避免與其他並行寫入
+     * 形成死鎖;含 soft-deleted 列(withTrashed),否則被刪除的受控列會逃過
+     * 鎖定與驗證。回傳的集合就是後續 guard／snapshot／apply 的唯一依據——
+     * ⛔ 取得鎖之後不得再用未鎖定 query 取代這個集合。
+     *
+     * @param  array<string, mixed>  $fixture
+     * @return array<string, Faq>
+     */
+    private function lockManagedRows(array $fixture): array
     {
-        // ⛔ 先整批驗證再寫入:任一列狀態不合法 → 0 writes。
-        $this->assertNoApplyConflicts($fixture);
+        $keys = array_keys($this->expectedFromFixture($fixture));
+        sort($keys);
 
+        return Faq::withTrashed()
+            ->whereIn('managed_key', $keys)
+            ->orderBy('managed_key')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('managed_key')
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $fixture
+     * @param  array<string, Faq>  $locked
+     * @param  array<string, mixed>  $stats
+     */
+    private function applyFaqs(array $fixture, array $locked, array &$stats): void
+    {
         foreach ($this->expectedFromFixture($fixture) as $key => $expected) {
             $attributes = [
                 'scope' => $expected['scope'],
@@ -271,8 +314,12 @@ class M2cApplyR5FaqCommand extends Command
                 'sort_order' => $expected['sort_order'],
             ];
 
-            // ⛔ 只以 exact managed key 定位;不做 question 模糊匹配。
-            $existing = Faq::query()->where('managed_key', $key)->first();
+            /*
+             * ⛔ 只用「已鎖定」的那一批列;不得重新查詢(那會開出一個
+             * Owner 可插入寫入、之後被本 command 覆蓋的窗口)。
+             * 不存在的 key 才 create,並由 managed_key unique index 兜底。
+             */
+            $existing = $locked[$key] ?? null;
 
             if ($existing === null) {
                 Faq::query()->create($attributes + ['managed_key' => $key]);
@@ -305,9 +352,14 @@ class M2cApplyR5FaqCommand extends Command
      * `R5-APPLY-CONFLICT:faq.<key>` 拒絕整批,且 ⛔ 沒有 `--force` 可以繞過。
      * Owner 真要覆寫必須先處理衝突或另案批准。錯誤訊息只帶 key,不帶文案。
      *
+     * `$locked` 為 transaction 內已取得 row lock 的那一批列;傳入時只驗證
+     * 這批列(⛔ 不再重新查詢,避免驗證對象與寫入對象不是同一批)。
+     * 傳 null 時為 transaction 外的 preflight 快速拒絕,不具安全保證。
+     *
      * @param  array<string, mixed>  $fixture
+     * @param  array<string, Faq>|null  $locked
      */
-    private function assertNoApplyConflicts(array $fixture): void
+    private function assertNoApplyConflicts(array $fixture, ?array $locked = null): void
     {
         $expectedAll = $this->expectedFromFixture($fixture);
         $r3Baseline = $this->reusableR3Baseline();
@@ -315,7 +367,9 @@ class M2cApplyR5FaqCommand extends Command
 
         foreach ($expectedAll as $key => $expected) {
             // withTrashed:被 soft delete 的受控列也算衝突,不可靜默復活覆寫。
-            $row = Faq::withTrashed()->where('managed_key', $key)->first();
+            $row = $locked !== null
+                ? ($locked[$key] ?? null)
+                : Faq::withTrashed()->where('managed_key', $key)->first();
 
             if ($row === null) {
                 continue;
@@ -468,26 +522,33 @@ class M2cApplyR5FaqCommand extends Command
     // Snapshot(FAQ-only)
     // ------------------------------------------------------------------
 
-    /** @param array<string, mixed> $fixture */
-    private function writeSnapshot(array $fixture): string
+    /**
+     * 由「同一批 locked rows」組出 snapshot before-state。
+     *
+     * ⛔ 不重新查詢資料庫:before-state 必須與 guard 驗過、apply 即將覆寫的
+     * 是同一批列,否則快照記錄的「還原目標」可能不是真正被覆寫的狀態。
+     * 只擷取本輪會更新／新增的 exact managed key 列;不含 orders、PII、
+     * credential,也不含其他內容表或 Owner 自建 FAQ。
+     *
+     * @param  array<string, mixed>  $fixture
+     * @param  array<string, Faq>  $locked
+     * @return array<string, mixed>
+     */
+    private function buildSnapshot(array $fixture, array $locked): array
     {
         $expected = $this->expectedFromFixture($fixture);
         $fixtureKeys = array_keys($expected);
 
-        /*
-         * ⛔ 只擷取本輪會更新／新增的 exact managed key 列;不含 orders、
-         * PII、credential,也不含其他內容表或 Owner 自建 FAQ。
-         */
-        $beforeRows = Faq::withTrashed()
-            ->whereIn('managed_key', $fixtureKeys)
-            ->get()
-            ->map(fn (Faq $faq) => $this->rowFrom($faq))
-            ->values()
-            ->all();
+        $beforeKeys = array_values(array_intersect($fixtureKeys, array_keys($locked)));
+        sort($beforeKeys);
 
-        $beforeKeys = array_column($beforeRows, 'managed_key');
+        $beforeRows = [];
 
-        $snapshot = [
+        foreach ($beforeKeys as $key) {
+            $beforeRows[] = $this->rowFrom($locked[$key]);
+        }
+
+        return [
             'schema_version' => self::SNAPSHOT_SCHEMA_VERSION,
             'created_at' => now()->toIso8601String(),
             'fixture' => self::FIXTURE,
@@ -496,7 +557,11 @@ class M2cApplyR5FaqCommand extends Command
             'managed_faqs_before' => $beforeRows,
             'created_faq_keys' => array_values(array_diff($fixtureKeys, $beforeKeys)),
         ];
+    }
 
+    /** @param array<string, mixed> $snapshot */
+    private function writeSnapshotFile(array $snapshot): string
+    {
         $dir = storage_path('app/private/m2c-snapshots');
 
         if (! is_dir($dir)) {

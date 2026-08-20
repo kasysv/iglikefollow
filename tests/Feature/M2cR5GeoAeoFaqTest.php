@@ -9,9 +9,14 @@ use App\Models\ServiceVariant;
 use App\Support\FaqPageContent;
 use App\Support\ProductSlugMap;
 use Database\Seeders\CatalogSeeder;
+use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Query\Grammars\MySqlGrammar;
+use Illuminate\Database\Query\Grammars\PostgresGrammar;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\IsolatesSnapshotStorage;
@@ -392,6 +397,164 @@ class M2cR5GeoAeoFaqTest extends TestCase
 
         // ⛔ 0 新 snapshot。
         $this->assertSame($snapshotsBefore, $this->snapshotFiles());
+    }
+
+    // ------------------------------------------------------------------
+    // 2c. R2:lock → guard → snapshot → apply 必須在同一 transaction
+    // ------------------------------------------------------------------
+
+    /**
+     * real apply 必須在 transaction 內、於任何寫入之前鎖定受控列。
+     *
+     * ⛔ 不以 method 名稱或原始碼字串斷言,而是攔截實際送到資料庫的 SQL:
+     * 證明(a)有 transaction 並 commit、(b)受控列的鎖定查詢存在、
+     * (c)鎖定發生在第一次 FAQ 寫入之前。
+     */
+    public function test_real_apply_locks_managed_rows_before_any_write(): void
+    {
+        Artisan::call('m2c:apply-r3');
+
+        $log = [];
+        DB::listen(function ($query) use (&$log) {
+            $log[] = $query->sql;
+        });
+
+        $started = 0;
+        $committed = 0;
+        Event::listen(TransactionBeginning::class, function () use (&$started) {
+            $started++;
+        });
+        Event::listen(TransactionCommitted::class, function () use (&$committed) {
+            $committed++;
+        });
+
+        $this->assertSame(0, Artisan::call('m2c:apply-r5-faq'));
+
+        // (a) 真的開了 transaction 並 commit。
+        $this->assertGreaterThan(0, $started);
+        $this->assertGreaterThan(0, $committed);
+
+        $lockIndex = null;
+        $firstWriteIndex = null;
+
+        foreach ($log as $i => $sql) {
+            $isManagedSelect = str_contains($sql, 'from "faqs"')
+                && str_contains($sql, '"managed_key" in')
+                && str_contains($sql, 'order by "managed_key"');
+
+            if ($lockIndex === null && $isManagedSelect) {
+                $lockIndex = $i;
+            }
+
+            if ($firstWriteIndex === null
+                && (str_starts_with($sql, 'insert into "faqs"') || str_starts_with($sql, 'update "faqs"'))) {
+                $firstWriteIndex = $i;
+            }
+        }
+
+        // (b) 鎖定查詢存在。
+        $this->assertNotNull($lockIndex, '找不到受控列的鎖定查詢');
+
+        // (c) 鎖定必須早於第一次 FAQ 寫入。
+        $this->assertNotNull($firstWriteIndex, '本輪應有 FAQ 寫入');
+        $this->assertLessThan($firstWriteIndex, $lockIndex, '鎖定必須發生在任何 FAQ 寫入之前');
+    }
+
+    /**
+     * 鎖定查詢在支援 row lock 的 driver 上真的編譯成 `for update`。
+     *
+     * 本機測試庫是 SQLite,其 grammar 靜默省略 `for update`(SQLite 沒有
+     * row lock 概念,靠整庫寫鎖)。因此「並行 Owner 寫入被擋下」⛔ 無法在
+     * SQLite 上真實反證;此測試退而證明 query 帶著 lock 意圖,在 MySQL／
+     * Postgres grammar 下會輸出 `for update`。
+     */
+    public function test_the_managed_row_lock_compiles_to_for_update_on_locking_drivers(): void
+    {
+        $query = Faq::withTrashed()
+            ->whereIn('managed_key', ['r5.global.invoice', 'r3.global.price'])
+            ->orderBy('managed_key')
+            ->lockForUpdate()
+            ->getQuery();
+
+        $connection = DB::connection();
+
+        foreach ([new MySqlGrammar($connection), new PostgresGrammar($connection)] as $grammar) {
+            $this->assertStringContainsString('for update', $grammar->compileSelect($query));
+        }
+
+        // 現行測試 driver 是 SQLite:如實記錄,不假裝有 row lock。
+        $this->assertSame('sqlite', $connection->getDriverName());
+    }
+
+    /**
+     * snapshot 的 before-state 必須來自「同一批 locked rows」。
+     *
+     * 反證:3 個可重用 R3 key 在 apply 前是 R3 baseline 值,apply 後 DB 已是
+     * R5 值。若 before-state 是事後重新查詢產生的,快照就會記成 R5 值。
+     */
+    public function test_snapshot_before_state_comes_from_the_locked_rows(): void
+    {
+        Artisan::call('m2c:apply-r3');
+
+        $before = Faq::query()->whereIn('managed_key', self::REUSED_R3_KEYS)->orderBy('managed_key')
+            ->get()->map->only(['managed_key', 'question', 'answer', 'status', 'sort_order'])->toArray();
+
+        $snapshot = json_decode((string) file_get_contents($this->apply()), true);
+
+        $recorded = collect($snapshot['managed_faqs_before'])
+            ->sortBy('managed_key')
+            ->map(fn (array $row) => [
+                'managed_key' => $row['managed_key'],
+                'question' => $row['question'],
+                'answer' => $row['answer'],
+                'status' => $row['status'],
+                'sort_order' => (int) $row['sort_order'],
+            ])
+            ->values()
+            ->all();
+
+        $this->assertSame($before, $recorded);
+
+        // apply 後 DB 已是 R5 值 → 證明快照記的是「被覆寫前」的狀態。
+        $index = array_search('r3.global.price', array_column($recorded, 'managed_key'), true);
+        $this->assertNotSame(
+            $recorded[$index]['answer'],
+            Faq::query()->where('managed_key', 'r3.global.price')->value('answer'),
+        );
+    }
+
+    /**
+     * 快照之後發生狀態漂移時:0 FAQ writes、0 受保護表 writes、
+     * 不留下本次快照,且既有快照不被誤刪。
+     */
+    public function test_a_drift_after_snapshot_leaves_no_writes_and_no_new_snapshot(): void
+    {
+        $this->apply();
+
+        // sentinel 代表「既有真快照」,證明失敗清理不會波及它。
+        $sentinel = $this->snapshotDirectory().'/r5-faq-existing-sentinel.json';
+        file_put_contents($sentinel, '{"keep":true}');
+
+        $snapshotsBefore = $this->snapshotFiles();
+        $faqsBefore = $this->managedRowsFingerprint();
+        $protectedBefore = DB::table('services')->orderBy('id')->get()->toJson();
+
+        Faq::query()->where('managed_key', 'r5.global.invoice')
+            ->firstOrFail()->forceFill(['answer' => 'drift。'])->saveQuietly();
+
+        $drifted = $this->managedRowsFingerprint();
+
+        $this->assertSame(1, Artisan::call('m2c:apply-r5-faq'));
+        $this->assertStringContainsString('R5-APPLY-CONFLICT:faq.r5.global.invoice', Artisan::output());
+
+        // 0 writes:漂移後的狀態原封不動,受保護表也沒動。
+        $this->assertSame($drifted, $this->managedRowsFingerprint());
+        $this->assertNotSame($faqsBefore, $drifted);
+        $this->assertSame($protectedBefore, DB::table('services')->orderBy('id')->get()->toJson());
+
+        // 0 新快照,既有 sentinel 仍在。
+        $this->assertSame($snapshotsBefore, $this->snapshotFiles());
+        $this->assertFileExists($sentinel);
     }
 
     public function test_apply_fails_closed_when_a_managed_row_was_soft_deleted(): void
