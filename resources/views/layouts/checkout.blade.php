@@ -16,7 +16,10 @@
     {{-- Enclosed checkout：保留品牌，⛔ 移除平台導覽避免客人在填單途中離開。 --}}
     <header class="border-b border-black/10 bg-paper/95">
         <div class="mx-auto flex min-h-20 max-w-[1120px] items-center justify-between gap-6 px-5 sm:px-8">
-            <a href="{{ route('home') }}" aria-label="{{ $siteName ?? 'IGLIKEFOLLOW' }} 首頁">
+            <a href="{{ route('home') }}" aria-label="{{ $siteName ?? 'IGLIKEFOLLOW' }} 首頁" class="flex min-w-0 items-center gap-3">
+                {{-- 品牌方形標誌:與首頁 header 一致;裝飾性(名稱由 wordmark 的 alt 提供)。 --}}
+                <img src="{{ asset('images/iglikefollow-mark.png') }}" alt=""
+                     class="h-11 w-11 shrink-0 rounded-xl sm:h-12 sm:w-12" width="361" height="361">
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName ?? 'IGLIKEFOLLOW' }}"
                      class="h-auto w-36 sm:w-44" width="715" height="143">
             </a>
