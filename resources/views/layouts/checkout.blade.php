@@ -31,7 +31,7 @@
 
     <footer class="border-t border-black/10 bg-white">
         <div class="mx-auto max-w-[1120px] px-5 py-8 sm:px-8">
-            <p class="text-xs leading-6 text-black/50">
+            <p class="text-sm leading-6 text-black/60">
 {{-- R4:顧客語氣;真正的安全由 payment/dispatch flags 擋,不靠文案。 --}}
                 付款成功後自動處理，並開立電子發票。
             </p>

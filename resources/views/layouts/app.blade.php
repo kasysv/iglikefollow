@@ -63,7 +63,7 @@
                             ? $footerPlatform->services()->published()->whereNotNull('product_slug')->orderBy('sort_order')->get()
                             : collect(); @endphp
                         @if ($footerServices->isNotEmpty())
-                            <ul class="mt-3 space-y-2 text-sm text-black/60">
+                            <ul class="mt-3 space-y-2 text-sm leading-6 text-black/70">
                                 @foreach ($footerServices as $footerService)
                                     <li>
                                         {{-- D-103:公開內鏈一律直達 /product/ canonical。 --}}
@@ -75,12 +75,12 @@
                                 @endforeach
                             </ul>
                         @else
-                            <p class="mt-3 text-sm text-black/50">服務資料準備中。</p>
+                            <p class="mt-3 text-sm text-black/60">服務資料準備中。</p>
                         @endif
                     </div>
                 @endforeach
             </nav>
-            <p class="mt-10 border-t border-black/10 pt-6 text-xs leading-6 text-black/50">
+            <p class="mt-10 border-t border-black/10 pt-6 text-xs leading-6 text-black/60">
                 <span class="font-semibold text-black/70">{{ $siteName }}</span>
 
             </p>

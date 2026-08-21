@@ -14,7 +14,7 @@
             <h1 class="mt-5 text-[clamp(2.6rem,6vw,5.4rem)] font-bold leading-[1.02] tracking-[-0.05em]">
                 {{ $settings?->home_h1 ?: '多平台社群服務，一次選好。' }}
             </h1>
-            <p class="mt-6 max-w-2xl text-base leading-8 text-black/60 sm:text-lg">
+            <p class="mt-6 max-w-2xl text-base leading-8 text-black/70 sm:text-lg">
                 {{ $settings?->home_intro
                     ?: 'IGLIKEFOLLOW 提供 Instagram 與 Facebook 的粉絲、讚、留言與影片觀看服務。先選擇平台，再選擇需要的服務類型，最後挑選數量方案並免會員結帳。' }}
             </p>
@@ -47,7 +47,7 @@
                 @foreach ($highlights as $highlight)
                     <div>
                         <strong class="block text-base">{{ $highlight['title'] }}</strong>
-                        <span class="text-black/55">{{ $highlight['body'] }}</span>
+                        <span class="text-black/70">{{ $highlight['body'] }}</span>
                     </div>
                 @endforeach
             </div>
@@ -65,7 +65,7 @@
             <p class="eyebrow">Step 1</p>
             {{-- R3:固定 H2 --}}
             <h2 class="mt-4 text-4xl font-bold tracking-[-0.045em] sm:text-5xl">選擇 Instagram、Facebook 或 Threads 服務</h2>
-            <p class="mt-4 max-w-2xl leading-8 text-black/60">
+            <p class="mt-4 max-w-2xl text-base leading-8 text-black/70">
                 每個平台的服務內容與交付方式不同，請先選擇要成長的平台。
             </p>
 
@@ -73,7 +73,7 @@
                 {{-- ⛔ 資料庫沒有內容時顯示誠實空狀態，不回退 config fixture。 --}}
                 <div class="surface mt-10 p-7">
                     <p class="font-bold">服務資料準備中</p>
-                    <p class="mt-2 leading-7 text-black/60">目前沒有已發布的平台服務。</p>
+                    <p class="mt-2 text-base leading-7 text-black/70">目前沒有已發布的平台服務。</p>
                 </div>
             @else
                 <div class="mt-10 grid gap-5 lg:grid-cols-3">
@@ -87,10 +87,10 @@
                                     <h3 class="text-2xl font-bold tracking-[-0.03em]">{{ $platform->name }}</h3>
                                 </div>
                                 @unless ($isOpen)
-                                    <span class="shrink-0 rounded-full bg-mist px-3 py-1 text-xs font-bold text-black/55">準備中</span>
+                                    <span class="shrink-0 rounded-full bg-mist px-3 py-1 text-xs font-bold text-black/60">準備中</span>
                                 @endunless
                             </div>
-                            <p class="mt-3 leading-7 text-black/60">{{ $platform->tagline }}</p>
+                            <p class="mt-3 text-base leading-7 text-black/70">{{ $platform->tagline }}</p>
 
                             @if ($isOpen)
                                 <ul class="mt-6 flex-1 space-y-2.5 border-t border-black/10 pt-5 text-sm text-black/70">
@@ -109,7 +109,7 @@
                                 </a>
                             @else
                                 <div class="mt-6 flex-1 rounded-2xl border border-dashed border-black/15 bg-paper p-5">
-                                    <p class="text-sm leading-6 text-black/55">
+                                    <p class="text-sm leading-6 text-black/70">
                                         {{ $platform->intro ?: '服務資料準備中，開放前不會顯示方案或價格。' }}
                                     </p>
                                 </div>
@@ -130,24 +130,24 @@
         <h2 class="mt-4 max-w-3xl text-4xl font-bold tracking-[-0.045em] sm:text-5xl">買讚、粉絲與觀看的下單流程</h2>
         <div class="mt-10 grid gap-px overflow-hidden rounded-[1.75rem] bg-black/10 sm:grid-cols-2 lg:grid-cols-4">
             <article class="bg-white p-7">
-                <span class="text-sm text-black/45">01</span>
+                <span class="text-sm font-semibold text-black/60">01</span>
                 <h3 class="mt-10 text-xl font-bold">選擇平台</h3>
-                <p class="mt-3 leading-7 text-black/55">先決定要成長的社群平台。</p>
+                <p class="mt-3 text-base leading-7 text-black/70">先決定要成長的社群平台。</p>
             </article>
             <article class="bg-white p-7">
-                <span class="text-sm text-black/45">02</span>
+                <span class="text-sm font-semibold text-black/60">02</span>
                 <h3 class="mt-10 text-xl font-bold">選擇服務</h3>
-                <p class="mt-3 leading-7 text-black/55">粉絲、讚、留言或影片觀看。</p>
+                <p class="mt-3 text-base leading-7 text-black/70">粉絲、讚、留言或影片觀看。</p>
             </article>
             <article class="bg-white p-7">
-                <span class="text-sm text-black/45">03</span>
+                <span class="text-sm font-semibold text-black/60">03</span>
                 <h3 class="mt-10 text-xl font-bold">選擇方案</h3>
-                <p class="mt-3 leading-7 text-black/55">在同一頁比較數量與價格。</p>
+                <p class="mt-3 text-base leading-7 text-black/70">在同一頁比較數量與價格。</p>
             </article>
             <article class="bg-white p-7">
-                <span class="text-sm text-black/45">04</span>
+                <span class="text-sm font-semibold text-black/60">04</span>
                 <h3 class="mt-10 text-xl font-bold">快速結帳</h3>
-                <p class="mt-3 leading-7 text-black/55">免會員填寫目標並完成付款。</p>
+                <p class="mt-3 text-base leading-7 text-black/70">免會員填寫目標並完成付款。</p>
             </article>
         </div>
     </section>
@@ -164,7 +164,7 @@
                             <summary class="min-h-11 cursor-pointer list-none">
                                 <h3 class="text-lg font-bold">{{ $faq->question }}</h3>
                             </summary>
-                            <p class="mt-3 leading-7 text-black/60">{{ $faq->answer }}</p>
+                            <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                         </details>
                     @endforeach
                 </div>

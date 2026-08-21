@@ -27,6 +27,8 @@
                 <a href="{{ route('platform', $tab->slug) }}"
                    @if ($isCurrent) aria-current="page" @endif
                    class="platform-tab {{ $isCurrent ? 'platform-tab--active' : '' }}">
+                    {{-- M2-D-A:20px 裝飾性 Logo 幫助快速辨識平台;平台名稱仍是文字。 --}}
+                    <x-platform-brand-icon :slug="$tab->slug" size="sm" class="mr-2" />
                     {{ $tab->name }}
                     @if ($tab->status !== 'published')
                         <span class="ml-1.5 text-xs font-medium opacity-55">準備中</span>
@@ -47,18 +49,22 @@
     {{-- Hero：非對稱雙欄，右側為自建 CSS/SVG 抽象元素 --}}
     <section class="mx-auto max-w-[1320px] px-5 py-10 sm:px-8 lg:grid lg:grid-cols-[1.15fr_0.85fr] lg:items-center lg:gap-14 lg:py-14">
         <div>
-            <p class="eyebrow">{{ $platform->eyebrow ?: $platform->name }}</p>
+            {{-- M2-D-A:Hero 只放一次 28px 裝飾性 Logo,⛔ 不在每張服務卡重複。 --}}
+            <p class="flex items-center gap-2">
+                <x-platform-brand-icon :slug="$platform->slug" size="md" />
+                <span class="eyebrow">{{ $platform->eyebrow ?: $platform->name }}</span>
+            </p>
             <h1 class="mt-4 text-[clamp(2.1rem,3.6vw,3.4rem)] font-bold leading-[1.08] tracking-[-0.045em]">
                 {{ $platform->h1 ?: $platform->name . ' 社群成長服務' }}
             </h1>
-            <p class="mt-5 max-w-xl text-base leading-8 text-black/60 sm:text-lg">
+            <p class="mt-5 max-w-xl text-base leading-8 text-black/70 sm:text-lg">
                 {{ $platform->tagline }}
             </p>
 
             {{-- 「詳細介紹」屬於平台頁最上方的內容，接在一句話介紹之後。
                  ⛔ 原本只輸出在頁面最下方（約 79% 處），管理者填了會找不到。 --}}
             @if (filled($platform->intro))
-                <p class="mt-4 max-w-xl whitespace-pre-line leading-8 text-black/60">
+                <p class="mt-4 max-w-xl whitespace-pre-line text-base leading-8 text-black/70">
                     {{ $platform->intro }}
                 </p>
             @endif
@@ -116,14 +122,14 @@
                        class="service-card service-card--featured mt-7">
                         <div class="flex flex-wrap items-start justify-between gap-5">
                             <div class="max-w-xl">
-                                <span class="inline-flex rounded-full bg-trust/12 px-3 py-1 text-xs font-bold text-trust">
+                                <span class="featured-badge">
                                     主打服務
                                 </span>
                                 <h3 class="mt-4 text-2xl font-bold tracking-[-0.03em] sm:text-3xl">
                                     {{ $featured->card_title ?: $featured->name }}
                                 </h3>
-                                <p class="mt-3 leading-7 text-black/60">{{ $featured->card_blurb ?: $featured->summary }}</p>
-                                <p class="mt-4 text-sm text-black/55">
+                                <p class="mt-3 text-base leading-7 text-black/70">{{ $featured->card_blurb ?: $featured->summary }}</p>
+                                <p class="mt-4 text-sm leading-6 text-black/65">
                                     {{ $featured->variants->pluck('label')->join('、') }}
                                 </p>
                             </div>
@@ -145,7 +151,7 @@
                                     <h3 class="text-lg font-bold tracking-[-0.02em]">
                                         {{ $service->card_title ?: $service->name }}
                                     </h3>
-                                    <p class="mt-2 text-sm leading-6 text-black/60">
+                                    <p class="mt-2 text-base leading-7 text-black/70">
                                         {{ $service->card_blurb ?: $service->summary }}
                                     </p>
                                     @if (filled($service->goal))
@@ -210,9 +216,9 @@
                                             {{ $service->card_title ?: $service->name }}
                                         </a>
                                     </th>
-                                    <td class="py-4 pr-4 text-black/60">{{ $service->goal ?: '—' }}</td>
-                                    <td class="py-4 pr-4 text-black/60">{{ $service->input_label }}</td>
-                                    <td class="py-4 leading-6 text-black/60">{{ $service->delivery_summary }}</td>
+                                    <td class="py-4 pr-4 text-black/70">{{ $service->goal ?: '—' }}</td>
+                                    <td class="py-4 pr-4 text-black/70">{{ $service->input_label }}</td>
+                                    <td class="py-4 leading-6 text-black/70">{{ $service->delivery_summary }}</td>
                                 </tr>
                             @endforeach
                         </tbody>
@@ -234,7 +240,7 @@
                                 <summary class="min-h-11 cursor-pointer list-none">
                                     <h3 class="text-base font-bold">{{ $faq->question }}</h3>
                                 </summary>
-                                <p class="mt-3 leading-7 text-black/60">{{ $faq->answer }}</p>
+                                <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                             </details>
                         @endforeach
                     </div>
@@ -247,7 +253,7 @@
                 <div class="surface p-7 sm:p-9">
                     <h2 class="text-2xl font-bold tracking-[-0.03em] sm:text-3xl">服務資料準備中</h2>
                     {{-- 詳細介紹已在上方 hero 顯示，⛔ 這裡不重複；只說明目前沒有方案。 --}}
-                    <p class="mt-4 leading-8 text-black/60">
+                    <p class="mt-4 text-base leading-8 text-black/70">
                         目前沒有可販售的方案、價格或交付時間可以提供。等到服務資料確認後，這一頁才會顯示實際內容。
                     </p>
                     <a href="{{ route('home') }}#platforms"

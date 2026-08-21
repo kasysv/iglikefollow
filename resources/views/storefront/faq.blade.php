@@ -31,7 +31,7 @@
                             <summary class="min-h-11 cursor-pointer list-none">
                                 <h3 class="text-base font-bold sm:text-lg">{{ $faq->question }}</h3>
                             </summary>
-                            <p class="mt-3 leading-7 text-black/60">{{ $faq->answer }}</p>
+                            <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                         </details>
                     @endforeach
                 </div>
@@ -46,7 +46,7 @@
     <section class="border-t border-black/10 bg-paper">
         <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8 lg:py-16">
             <h2 class="text-2xl font-bold tracking-[-0.035em] sm:text-3xl">各平台與商品的專屬問題</h2>
-            <p class="mt-4 leading-7 text-black/60">
+            <p class="mt-4 text-base leading-7 text-black/70">
                 想知道各平台服務怎麼選，或某項商品要提供哪一種網址，請前往對應頁面查看該項服務的說明與問答。
             </p>
 
@@ -59,7 +59,7 @@
                             </a>
                         </h3>
                         @if ($navPlatform->services->isNotEmpty())
-                            <ul class="mt-3 space-y-2 text-sm text-black/60">
+                            <ul class="mt-3 space-y-2 text-sm leading-6 text-black/70">
                                 @foreach ($navPlatform->services as $navService)
                                     <li>
                                         {{-- D-103:一律直達 /product/ canonical owner。 --}}
@@ -70,7 +70,7 @@
                                 @endforeach
                             </ul>
                         @else
-                            <p class="mt-3 text-sm text-black/50">服務資料準備中。</p>
+                            <p class="mt-3 text-sm text-black/60">服務資料準備中。</p>
                         @endif
                     </div>
                 @endforeach
@@ -81,7 +81,7 @@
     <section class="border-t border-black/10 bg-white">
         <div class="mx-auto max-w-3xl px-5 py-12 sm:px-8">
             <h2 class="text-2xl font-bold tracking-[-0.035em]">還沒找到答案？</h2>
-            <p class="mt-4 leading-7 text-black/60">
+            <p class="mt-4 text-base leading-7 text-black/70">
                 訂單相關問題請保留訂單編號並聯絡客服，客服會依當時處理進度確認可以協助的內容。
             </p>
             <a href="{{ route('home') }}#platforms" class="primary-button mt-6 inline-flex">查看全部服務</a>

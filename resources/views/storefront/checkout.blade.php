@@ -21,7 +21,7 @@
                 aria-controls="summary-mobile">
             <span>
                 <span id="summary-mobile-title" class="block text-sm font-bold">訂單摘要</span>
-                <span class="mt-1 block text-xs text-black/55">{{ $service->name }}／{{ $variant->label }}</span>
+                <span class="mt-1 block text-sm text-black/65">{{ $service->name }}／{{ $variant->label }}</span>
             </span>
             <span class="shrink-0 text-lg font-bold tabular-nums">NT${{ number_format($amount) }}</span>
         </button>
@@ -54,7 +54,7 @@
                            placeholder="{{ $service->input_hint }}"
                            aria-describedby="target-hint"
                            class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base placeholder:text-black/35">
-                    <p id="target-hint" class="mt-2 text-xs leading-5 text-black/50">
+                    <p id="target-hint" class="mt-2 text-sm leading-6 text-black/65">
                         {{ $service->input_label }}須為公開狀態才能交付。
                     </p>
                     @error('target') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
@@ -75,7 +75,7 @@
                                value="{{ old('customer_email') }}"
                                aria-describedby="email-hint"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base">
-                        <p id="email-hint" class="mt-2 text-xs leading-5 text-black/50">用來接收訂單與電子發票通知。</p>
+                        <p id="email-hint" class="mt-2 text-sm leading-6 text-black/65">用來接收訂單與電子發票通知。</p>
                         @error('customer_email') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                     </div>
 
@@ -88,7 +88,7 @@
                                value="{{ old('customer_phone') }}"
                                aria-describedby="phone-hint"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
-                        <p id="phone-hint" class="mt-2 text-xs leading-5 text-black/50">客服需要聯絡時使用。</p>
+                        <p id="phone-hint" class="mt-2 text-sm leading-6 text-black/65">客服需要聯絡時使用。</p>
                         @error('customer_phone') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                     </div>
                 </div>
@@ -127,7 +127,7 @@
                                        @checked(old('personal_invoice_mode', 'email') === $mode)>
                                 <span>
                                     <span class="block font-semibold">{{ $modeLabel }}</span>
-                                    <span class="mt-0.5 block text-xs leading-5 text-black/50">{{ $modeHint }}</span>
+                                    <span class="mt-0.5 block text-sm leading-6 text-black/65">{{ $modeHint }}</span>
                                 </span>
                             </label>
                         @endforeach
@@ -141,7 +141,7 @@
                                value="{{ old('carrier_number') }}"
                                :disabled="!(invoiceKind === 'personal' && personalMode === 'mobile_barcode')"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base uppercase placeholder:normal-case placeholder:text-black/35">
-                        <p class="mt-2 text-xs leading-5 text-black/50">格式為 / 加 7 碼大寫英數字。</p>
+                        <p class="mt-2 text-sm leading-6 text-black/65">格式為 / 加 7 碼大寫英數字。</p>
                         @error('carrier_number') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                     </div>
 
@@ -151,7 +151,7 @@
                                value="{{ old('love_code') }}"
                                :disabled="!(invoiceKind === 'personal' && personalMode === 'donation')"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums placeholder:text-black/35">
-                        <p class="mt-2 text-xs leading-5 text-black/50">3 至 7 位數字。捐贈後不另開立個人發票。</p>
+                        <p class="mt-2 text-sm leading-6 text-black/65">3 至 7 位數字。捐贈後不另開立個人發票。</p>
                         @error('love_code') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                     </div>
                 </div>
@@ -164,7 +164,7 @@
                                placeholder="12345678" value="{{ old('buyer_tax_id') }}"
                                :disabled="invoiceKind !== 'business'"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums placeholder:text-black/35">
-                        <p class="mt-2 text-xs leading-5 text-black/50">8 位數字。</p>
+                        <p class="mt-2 text-sm leading-6 text-black/65">8 位數字。</p>
                         @error('buyer_tax_id') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
                     </div>
 
@@ -205,12 +205,13 @@
                     <span class="text-sm font-bold">應付金額</span>
                     <span class="text-3xl font-bold tabular-nums tracking-[-0.03em]">NT${{ number_format($amount) }}</span>
                 </div>
-                <p class="mt-2 text-xs leading-5 text-black/50">金額由伺服器依目前單價重新計算。</p>
+                <p class="mt-2 text-sm leading-6 text-black/65">金額由伺服器依目前單價重新計算。</p>
 
-                {{-- R4:顧客語氣;本機不會真實扣款由既有 flags/mock gate 保證,⛔ 不靠文案。 --}}
-                <button type="submit" class="primary-button mt-5">前往付款</button>
+                {{-- R4:顧客語氣;本機不會真實扣款由既有 flags/mock gate 保證,⛔ 不靠文案。
+                     M2-D-A:結帳頁唯一的購買動作,套 accent。 --}}
+                <button type="submit" class="primary-button primary-button--purchase mt-5">前往付款</button>
 
-                <p class="mt-4 text-xs leading-6 text-black/55">
+                <p class="mt-4 text-sm leading-6 text-black/65">
                     支援 LINE Pay、綠界付款；付款成功後自動處理，並開立電子發票。
                 </p>
             </div>

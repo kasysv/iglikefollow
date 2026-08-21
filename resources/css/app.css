@@ -12,6 +12,16 @@
     --color-paper: #f7f7f4;
     --color-mist: #ecece7;
     --color-trust: #165b45;
+    /*
+     * M2-D-A 成交色:只給「主打標籤、已選款式、真正的購買 CTA」三種角色。
+     * #C93636 配白字對比約 5.17:1(通過 WCAG AA 正常字級)。
+     * ⛔ 不是全站主色——正文、H1／H2／H3、一般連結與導覽按鈕一律維持 ink;
+     * ⛔ 不得改成 #FF0000 這類未經對比檢查的亮紅。
+     */
+    --color-accent: #c93636;
+    --color-accent-dark: #ad2c2c;
+    /* 極淡底色只作選取狀態襯底,其上文字仍為 ink。 */
+    --color-accent-tint: #fbf1f1;
 }
 
 @layer base {
@@ -61,6 +71,14 @@
     .service-card--featured {
         @apply border-ink/15 bg-gradient-to-br from-mist to-white p-6 sm:p-8;
     }
+    /*
+     * 「主打服務」標籤:accent 實底＋白字(對比約 5.17:1)。
+     * ⛔ 原本淡綠底＋深綠小字在淺色卡上幾乎看不見,且綠色保留給信任語意。
+     */
+    .featured-badge {
+        @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-bold text-white;
+        background-color: var(--color-accent);
+    }
     .service-card__arrow {
         @apply grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/12 text-lg text-black/45 transition-colors duration-200;
     }
@@ -71,8 +89,13 @@
         @apply block min-h-14 cursor-pointer rounded-2xl border border-black/10 bg-white p-4 transition-colors duration-200 hover:border-ink/40;
     }
     .variant-card:has(input:checked) {
-        /* 選中以描邊＋淡色底＋左側 accent 表示，⛔ 不用整張大黑塊壓過內容。 */
-        @apply border-trust bg-trust/6 shadow-[inset_3px_0_0_0_var(--color-trust)];
+        /*
+         * 已選款式屬於成交層級,改用 accent 描邊＋極淡底＋左側色條。
+         * ⛔ 不整張紅底:價格與款式說明仍要以 ink 讀,顏色只標示「選到哪一個」。
+         */
+        border-color: var(--color-accent);
+        background-color: var(--color-accent-tint);
+        box-shadow: inset 3px 0 0 0 var(--color-accent);
     }
     .variant-card:has(input:focus-visible) {
         @apply outline outline-[3px] outline-offset-[3px] outline-[#6d5bd0];
@@ -101,6 +124,18 @@
     }
     .primary-button {
         @apply inline-flex min-h-14 w-full items-center justify-center rounded-full bg-ink px-6 py-4 text-base font-bold text-white transition hover:-translate-y-0.5 hover:bg-black;
+    }
+    /*
+     * 真正的購買動作(商品頁「繼續結帳」、結帳頁「前往付款」)。
+     * ⛔ 只給這兩個位置:一般導覽、「選擇服務」、首頁平台卡 CTA 與 FAQ
+     * 「查看全部服務」維持黑底,否則整站都在喊同一件事就沒有層級可言。
+     * 保留 .primary-button 的 min-h-14(56px)與字級。
+     */
+    .primary-button--purchase {
+        background-color: var(--color-accent);
+    }
+    .primary-button--purchase:hover {
+        background-color: var(--color-accent-dark);
     }
 }
 

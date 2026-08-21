@@ -66,7 +66,7 @@
         <h1 class="mt-3 text-[clamp(1.85rem,2.9vw,2.7rem)] font-bold leading-[1.12] tracking-[-0.04em]">
             {{ $service->h1 ?: $service->name }}
         </h1>
-        <p class="mt-3 max-w-2xl leading-7 text-black/60">{{ $service->summary }}</p>
+        <p class="mt-3 max-w-2xl text-base leading-7 text-black/70">{{ $service->summary }}</p>
 
         @if ($service->hero_image_path)
             <img src="{{ \Illuminate\Support\Facades\Storage::url($service->hero_image_path) }}"
@@ -79,7 +79,7 @@
         <section class="mx-auto max-w-3xl px-5 py-14 sm:px-8">
             <div class="surface p-7 sm:p-9">
                 <h2 class="text-2xl font-bold tracking-[-0.03em]">方案準備中</h2>
-                <p class="mt-4 leading-8 text-black/60">
+                <p class="mt-4 text-base leading-8 text-black/70">
                     這個服務目前沒有已發布的方案。方案資料確認後才會顯示價格與數量範圍。
                 </p>
             </div>
@@ -108,25 +108,25 @@
                 {{-- 購買前必要理解：適合對象與必要條件，放在選購模組上方 --}}
                 <dl class="grid gap-px overflow-hidden rounded-2xl bg-black/10 sm:grid-cols-3">
                     <div class="bg-white p-4">
-                        <dt class="text-xs font-bold text-black/50">適合目標</dt>
+                        <dt class="text-sm font-bold text-black/60">適合目標</dt>
                         <dd class="mt-1.5 font-semibold">{{ $service->goal ?: '社群成長' }}</dd>
                     </div>
                     <div class="bg-white p-4">
-                        <dt class="text-xs font-bold text-black/50">需要填寫</dt>
+                        <dt class="text-sm font-bold text-black/60">需要填寫</dt>
                         <dd class="mt-1.5 font-semibold">{{ $service->input_label }}</dd>
                     </div>
                     <div class="bg-white p-4">
-                        <dt class="text-xs font-bold text-black/50">必要條件</dt>
+                        <dt class="text-sm font-bold text-black/60">必要條件</dt>
                         <dd class="mt-1.5 font-semibold">帳號或貼文須為公開</dd>
                     </div>
                 </dl>
-                <p class="mt-3 text-sm leading-6 text-black/55">{{ $service->delivery_summary }}</p>
+                <p class="mt-3 text-base leading-7 text-black/70">{{ $service->delivery_summary }}</p>
 
                 {{-- 服務項目導航：真實 radio，關閉 JS 仍可選 --}}
                 <aside aria-labelledby="variant-title" class="mt-8">
                     {{-- M2-C:選購區標題由後台 cta_label 驅動;無值 fallback「選擇數量方案」。 --}}
                     <h2 id="variant-title" class="text-lg font-bold tracking-[-0.02em]">{{ $service->cta_label ?: '選擇數量方案' }}</h2>
-                    <p class="mt-2 text-sm leading-6 text-black/55">不同服務項目的來源與單價不同。</p>
+                    <p class="mt-2 text-sm leading-6 text-black/65">不同服務項目的來源與單價不同。</p>
                     <div class="mt-5 grid gap-2 sm:grid-cols-2">
                         @foreach ($variants as $variant)
                             <label class="variant-card">
@@ -145,7 +145,7 @@
                                          class="mt-3 h-auto w-full rounded-xl" loading="lazy">
                                 @endif
                                 {{-- 說明改由下方「服務項目簡介」框呈現，⛔ 卡片內不重複同一段文字。 --}}
-                                <span class="mt-2 block text-xs tabular-nums text-black/50">
+                                <span class="mt-2 block text-sm tabular-nums text-black/65">
                                     {{ number_format($variant->min_quantity) }}–{{ number_format($variant->max_quantity) }} {{ $variant->quantity_unit }}
                                 </span>
                             </label>
@@ -156,7 +156,7 @@
                     @if ($hasAnyDescription)
                         <div class="mt-4 rounded-2xl border border-black/10 bg-paper p-5"
                              aria-live="polite" aria-atomic="true">
-                            <p class="text-xs font-bold text-black/50">服務項目簡介</p>
+                            <p class="text-sm font-bold text-black/60">服務項目簡介</p>
                             <p class="mt-2 font-bold" x-text="b.label">{{ $default->label }}</p>
                             {{-- whitespace-pre-line 讓後台輸入的換行在前台保留；
                                  ⛔ 沒有它時 HTML 會把換行折成一整段。x-text 也會照樣
@@ -165,7 +165,7 @@
                                x-text="b.description || '這個服務項目尚未填寫簡介。'">
                                 {{ $default->description ?: '這個服務項目尚未填寫簡介。' }}
                             </p>
-                            <p class="mt-3 text-xs tabular-nums text-black/50">
+                            <p class="mt-3 text-sm tabular-nums text-black/65">
                                 單價 NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>／<span
                                     x-text="b.unit">{{ $default->quantity_unit }}</span>
                                 ・可買
@@ -193,11 +193,11 @@
                     {{-- 服務項目的 radio 在左欄，⛔ 這裡不重複第二組 selector。 --}}
                     <dl class="mt-6 space-y-2 border-b border-black/10 pb-5 text-sm">
                         <div class="flex justify-between gap-4">
-                            <dt class="text-black/55">已選服務項目</dt>
+                            <dt class="text-black/65">已選服務項目</dt>
                             <dd class="font-bold" x-text="b.label">{{ $default->label }}</dd>
                         </div>
                         <div class="flex justify-between gap-4">
-                            <dt class="text-black/55">單價</dt>
+                            <dt class="text-black/65">單價</dt>
                             <dd class="font-semibold tabular-nums">
                                 NT$<span x-text="b.unit_price">{{ number_format((float) $default->unit_price, 2) }}</span>／<span
                                     x-text="b.unit">{{ $default->quantity_unit }}</span>
@@ -220,7 +220,7 @@
                                value="{{ old('quantity', $startQuantity) }}"
                                aria-describedby="quantity-hint"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
-                        <p id="quantity-hint" class="mt-2 text-xs leading-5 text-black/55">
+                        <p id="quantity-hint" class="mt-2 text-sm leading-6 text-black/65">
                             可輸入 <span x-text="Number(b.min).toLocaleString()">{{ number_format($default->min_quantity) }}</span>
                             至 <span x-text="Number(b.max).toLocaleString()">{{ number_format($default->max_quantity) }}</span>
                             <span x-text="b.unit">{{ $unit }}</span>，需為
@@ -239,14 +239,15 @@
                                     NT$<span x-text="estimate">—</span>
                                 </span>
                             </div>
-                            <p class="mt-2 text-xs leading-5 text-black/50">
+                            <p class="mt-2 text-sm leading-6 text-black/65">
                                 實際金額以結帳頁顯示為準。
                             </p>
                         </div>
 
-                        <button type="submit" class="primary-button mt-6">繼續結帳</button>
+                        {{-- M2-D-A:真正的購買動作,用 accent 與一般導覽按鈕區分。 --}}
+                        <button type="submit" class="primary-button primary-button--purchase mt-6">繼續結帳</button>
 
-                        <p class="mt-4 text-xs leading-5 text-black/55">
+                        <p class="mt-4 text-sm leading-6 text-black/65">
                             下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。
                         </p>
                     </form>
@@ -313,7 +314,7 @@
                             <summary class="min-h-11 cursor-pointer list-none">
                                 <h3 class="text-base font-bold">{{ $faq->question }}</h3>
                             </summary>
-                            <p class="mt-3 leading-7 text-black/60">{{ $faq->answer }}</p>
+                            <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                         </details>
                     @endforeach
                 </div>
@@ -331,7 +332,7 @@
                             <a href="{{ $other->primaryUrl() }}"
                                class="flex min-h-20 flex-col justify-center rounded-2xl border border-black/10 bg-white px-5 py-4 transition-colors duration-200 hover:border-ink">
                                 <span class="font-bold">{{ $other->card_title ?: $other->name }}</span>
-                                <span class="mt-1 text-sm text-black/55">{{ $other->summary }}</span>
+                                <span class="mt-1 text-sm leading-6 text-black/65">{{ $other->summary }}</span>
                             </a>
                         </li>
                     @endif

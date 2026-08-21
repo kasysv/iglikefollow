@@ -7,9 +7,20 @@
     禁止 CDN、外部圖片、JS、raw DB SVG。純裝飾:aria-hidden、focusable
     false,平台名稱仍由旁邊的 H3 提供。
 --}}
-@props(['slug'])
+@props(['slug', 'size' => 'md'])
 
 @php
+    /*
+     * 尺寸同樣是 allowlist:⛔ 不接受任意數值或 class,未知值一律退回 md。
+     * 就算呼叫端傳進奇怪的值,輸出也只會是這兩組固定尺寸之一。
+     */
+    $brandSizes = [
+        'sm' => ['px' => '20', 'class' => 'h-5 w-5'],
+        'md' => ['px' => '28', 'class' => 'h-7 w-7'],
+    ];
+
+    $brandSize = $brandSizes[is_string($size) ? $size : 'md'] ?? $brandSizes['md'];
+
     $brandIcons = [
         'instagram' => [
             'color' => '#E4405F',
@@ -29,14 +40,16 @@
 @endphp
 
 @if ($brandIcon !== null)
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28"
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+         width="{{ $brandSize['px'] }}" height="{{ $brandSize['px'] }}"
          fill="{{ $brandIcon['color'] }}" aria-hidden="true" focusable="false"
-         class="h-7 w-7 shrink-0"><path d="{{ $brandIcon['path'] }}" /></svg>
+         class="{{ $brandSize['class'] }} shrink-0"><path d="{{ $brandIcon['path'] }}" /></svg>
 @else
     {{-- 安全中性 fallback:⛔ 未知 slug 不輸出任何提交值,只畫中性圓點。 --}}
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28"
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+         width="{{ $brandSize['px'] }}" height="{{ $brandSize['px'] }}"
          fill="none" aria-hidden="true" focusable="false"
-         class="h-7 w-7 shrink-0 text-black/30">
+         class="{{ $brandSize['class'] }} shrink-0 text-black/30">
         <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
         <circle cx="12" cy="12" r="2.5" fill="currentColor" />
     </svg>
