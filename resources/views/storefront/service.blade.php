@@ -133,9 +133,15 @@
                                 <input type="radio" name="variant" value="{{ $variant->id }}" form="checkout-form"
                                        class="sr-only" x-model="variant" @change="selectVariant('{{ $variant->id }}')"
                                        @checked($variant->is($default))>
-                                <span class="flex items-baseline justify-between gap-3">
-                                    <span class="font-bold">{{ $variant->label }}</span>
-                                    <span class="shrink-0 text-sm tabular-nums text-black/60">
+                                {{--
+                                    R1:手機改成「名稱一行、單價下一行」。
+                                    ⛔ 原本 flex + shrink-0 會把單價擠出 viewport,
+                                    在 390px 只看得到款式名稱。sm 以上恢復左右排列。
+                                --}}
+                                <span class="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+                                    <span class="min-w-0 font-bold">{{ $variant->label }}</span>
+                                    <span data-probe="variant-price"
+                                          class="text-sm tabular-nums text-black/65 sm:shrink-0">
                                         NT${{ number_format((float) $variant->unit_price, 2) }}／{{ $variant->quantity_unit }}
                                     </span>
                                 </span>
@@ -145,7 +151,8 @@
                                          class="mt-3 h-auto w-full rounded-xl" loading="lazy">
                                 @endif
                                 {{-- 說明改由下方「服務項目簡介」框呈現，⛔ 卡片內不重複同一段文字。 --}}
-                                <span class="mt-2 block text-sm tabular-nums text-black/65">
+                                <span data-probe="variant-bounds"
+                                      class="mt-2 block text-sm tabular-nums text-black/65">
                                     {{ number_format($variant->min_quantity) }}–{{ number_format($variant->max_quantity) }} {{ $variant->quantity_unit }}
                                 </span>
                             </label>
@@ -181,7 +188,7 @@
             {{-- 右欄只做選品試算；履約、聯絡、發票與付款一律在 /checkout 填寫。
                  卡片短，sticky 不會讓任何欄位捲不到，⛔ 也不加內層 scrollbar。 --}}
             <div class="lg:sticky lg:top-6">
-                <section id="checkout" class="surface p-5 sm:p-7" aria-labelledby="estimate-title">
+                <section id="checkout" data-probe="estimate-card" class="surface p-5 sm:p-7" aria-labelledby="estimate-title">
                     <div class="flex items-start justify-between gap-5">
                         <div>
                             <p class="eyebrow">Estimate</p>
@@ -245,7 +252,7 @@
                         </div>
 
                         {{-- M2-D-A:真正的購買動作,用 accent 與一般導覽按鈕區分。 --}}
-                        <button type="submit" class="primary-button primary-button--purchase mt-6">繼續結帳</button>
+                        <button type="submit" data-probe="purchase-cta" class="primary-button primary-button--purchase mt-6">繼續結帳</button>
 
                         <p class="mt-4 text-sm leading-6 text-black/65">
                             下一步填寫{{ $service->input_label }}、聯絡方式與電子發票。

@@ -262,6 +262,93 @@ class M2dStorefrontVisualHierarchyTest extends TestCase
         );
     }
 
+    // ------------------------------------------------------------------
+    // R1:三個手機可見缺陷的結構反證
+    // ------------------------------------------------------------------
+
+    public function test_the_platform_tab_provides_its_own_gap_not_a_dropped_component_class(): void
+    {
+        /*
+         * ⛔ platform-brand-icon 不輸出 $attributes,呼叫端傳 class 會被丟掉。
+         * 因此間距必須由 .platform-tab 自己的 gap 提供,不能假設 component
+         * 會轉發 class。
+         */
+        $css = (string) file_get_contents(resource_path('css/app.css'));
+
+        $start = strpos($css, '.platform-tab {');
+        $this->assertNotFalse($start);
+        $block = substr($css, $start, strpos($css, '}', $start) - $start);
+
+        $this->assertStringContainsString('gap-2', $block);
+
+        // 呼叫端不得再傳無效的 class(避免誤導後續維護者)。
+        $blade = (string) file_get_contents(resource_path('views/storefront/platform.blade.php'));
+        $this->assertStringNotContainsString('size="sm" class="mr-2"', $blade);
+
+        // 元件本身仍不轉發任意屬性(維持無注入面)。
+        $component = (string) file_get_contents(resource_path('views/components/platform-brand-icon.blade.php'));
+        $this->assertStringNotContainsString('{{ $attributes', $component);
+
+        // tab 仍是真實連結,active 樣式與 Logo 尺寸不變。
+        $html = $this->instagramHub();
+        $this->assertStringContainsString('href="'.route('platform', 'facebook').'"', $html);
+        $this->assertStringContainsString('platform-tab--active', $html);
+        $this->assertStringContainsString('width="20"', $html);
+    }
+
+    public function test_the_mobile_header_keeps_brand_and_both_links_without_an_oversized_wordmark(): void
+    {
+        $html = $this->get('/')->assertOk()->getContent();
+
+        // 三個必要元素都有 probe hook,且都是真實連結。
+        $this->assertStringContainsString('data-probe="brand"', $html);
+        $this->assertStringContainsString('data-probe="nav-faq"', $html);
+        $this->assertStringContainsString('data-probe="nav-cta"', $html);
+        $this->assertStringContainsString('href="'.route('faq').'"', $html);
+        $this->assertStringContainsString('#platforms', $html);
+
+        // ⛔ 品牌名稱仍以 alt 提供,不得只剩沒有名字的圖。
+        $this->assertMatchesRegularExpression('/<img[^>]*iglikefollow-logo\.png[^>]*alt="IGLIKEFOLLOW"/u', $html);
+
+        // 手機 wordmark 縮到 w-32,桌機仍是 w-52(⛔ 原本 w-40 會溢出並壓到「常見問題」)。
+        $layout = (string) file_get_contents(resource_path('views/layouts/app.blade.php'));
+        $this->assertStringContainsString('w-32 max-w-full sm:w-52', $layout);
+
+        // 方形 mark 在 <640px 收起,sm 以上才出現。
+        $this->assertStringContainsString('hidden h-11 w-11 shrink-0 rounded-xl sm:block', $layout);
+
+        // 兩個 mobile 連結維持 44px 觸控高度且不換行。
+        $this->assertSame(2, substr_count($layout, 'min-h-11 items-center whitespace-nowrap'));
+
+        // ⛔ 不得改成 JS-only。
+        $this->assertStringNotContainsString('onclick', $layout);
+    }
+
+    public function test_variant_cards_stack_the_price_on_mobile_and_restore_the_row_from_sm(): void
+    {
+        $html = $this->productPage();
+
+        // 手機堆疊、sm 以上恢復左右排列。
+        $this->assertStringContainsString('flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between', $html);
+
+        // ⛔ 單價不得再用無條件 shrink-0 被擠出畫面。
+        $this->assertStringNotContainsString('<span class="shrink-0 text-sm tabular-nums text-black/60">', $html);
+        $this->assertStringContainsString('sm:shrink-0', $html);
+
+        // 名稱、單價、上下限三者都在同一張卡內,且有 probe hook。
+        $this->assertStringContainsString('data-probe="variant-price"', $html);
+        $this->assertStringContainsString('data-probe="variant-bounds"', $html);
+
+        // 價格值、單位與提交行為不變。
+        $variant = ServiceVariant::query()->published()
+            ->whereHas('service', fn ($q) => $q->where('product_slug', 'ig買粉絲'))
+            ->orderBy('sort_order')->firstOrFail();
+
+        $this->assertStringContainsString('NT$'.number_format((float) $variant->unit_price, 2), $html);
+        $this->assertStringContainsString('form="checkout-form"', $html);
+        $this->assertStringContainsString('type="radio"', $html);
+    }
+
     public function test_footer_small_text_keeps_enough_contrast(): void
     {
         foreach ([resource_path('views/layouts/app.blade.php'), resource_path('views/layouts/checkout.blade.php')] as $path) {

@@ -21,14 +21,17 @@
 
     {{-- 平台切換：真實連結，非 JS tab --}}
     <nav aria-label="平台切換" class="border-b border-black/10 bg-white">
-        <div class="mx-auto flex max-w-[1320px] gap-1 overflow-x-auto px-5 sm:px-8">
+        {{-- tab 列允許在自己的容器內水平捲動,⛔ 不得造成頁面級 overflow。 --}}
+        <div data-probe="platform-tabs" data-allow-xscroll
+             class="mx-auto flex max-w-[1320px] gap-1 overflow-x-auto px-5 sm:px-8">
             @foreach (app(\App\Support\CatalogRepository::class)->navigablePlatforms() as $tab)
                 @php $isCurrent = $tab->slug === $platform->slug; @endphp
                 <a href="{{ route('platform', $tab->slug) }}"
                    @if ($isCurrent) aria-current="page" @endif
                    class="platform-tab {{ $isCurrent ? 'platform-tab--active' : '' }}">
-                    {{-- M2-D-A:20px 裝飾性 Logo 幫助快速辨識平台;平台名稱仍是文字。 --}}
-                    <x-platform-brand-icon :slug="$tab->slug" size="sm" class="mr-2" />
+                    {{-- M2-D-A:20px 裝飾性 Logo 幫助快速辨識平台;平台名稱仍是文字。
+                         R1:間距由 .platform-tab 的 gap-2 提供(元件不輸出 $attributes)。 --}}
+                    <x-platform-brand-icon :slug="$tab->slug" size="sm" />
                     {{ $tab->name }}
                     @if ($tab->status !== 'published')
                         <span class="ml-1.5 text-xs font-medium opacity-55">準備中</span>

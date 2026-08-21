@@ -19,14 +19,22 @@
 </head>
 <body>
     <header class="border-b border-black/10 bg-paper/95">
-        <div class="mx-auto flex min-h-20 max-w-[1220px] items-center justify-between gap-6 px-5 sm:px-8">
+        {{--
+            R1:mobile header 三元素(品牌／常見問題／選擇服務)必須同時可見。
+            ⛔ 原本 w-40 的 wordmark 實際渲染 160px 會溢出自己的連結框並壓到
+            「常見問題」;改為 <640px 收起方形 mark、wordmark 降到 w-32,
+            並縮小 gap／padding。⛔ 不刪任何連結、不刪 alt、不改成 JS-only。
+        --}}
+        <div class="mx-auto flex min-h-20 max-w-[1220px] items-center justify-between gap-3 px-4 sm:gap-6 sm:px-8">
             {{-- Logo 是圖片，公司名稱仍須以可存取名稱保留，⛔ 不可只剩一張沒有名字的圖。 --}}
-            <a href="{{ route('home') }}" aria-label="{{ $siteName }} 首頁" class="flex min-w-0 items-center gap-3">
-                {{-- 品牌方形標誌:裝飾性(名稱由 wordmark 的 alt 提供),固定尺寸避免 CLS。 --}}
+            <a href="{{ route('home') }}" aria-label="{{ $siteName }} 首頁"
+               data-probe="brand" class="flex min-w-0 shrink items-center gap-2 sm:gap-3">
+                {{-- 品牌方形標誌:裝飾性(名稱由 wordmark 的 alt 提供),固定尺寸避免 CLS。
+                     ⛔ 手機空間不足時先讓它退場,保留帶 alt 的 wordmark。 --}}
                 <img src="{{ asset('images/iglikefollow-mark.png') }}" alt=""
-                     class="h-11 w-11 shrink-0 rounded-xl sm:h-12 sm:w-12" width="361" height="361">
+                     class="hidden h-11 w-11 shrink-0 rounded-xl sm:block sm:h-12 sm:w-12" width="361" height="361">
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName }}"
-                     class="h-auto w-40 sm:w-52" width="715" height="143">
+                     class="h-auto w-32 max-w-full sm:w-52" width="715" height="143">
             </a>
             @php $onFaq = request()->routeIs('faq'); @endphp
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
@@ -39,13 +47,15 @@
                    class="hover:opacity-60 {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
                 <a href="{{ route('home') }}#platforms" class="rounded-full bg-ink px-5 py-3 text-white">選擇服務</a>
             </nav>
-            {{-- Mobile:同一組目的地;min-h-11(44px)符合 tap target。 --}}
-            <div class="flex items-center gap-2 md:hidden">
+            {{-- Mobile:同一組目的地;min-h-11(44px)符合 tap target,⛔ 文字不換行。 --}}
+            <div class="flex shrink-0 items-center gap-1.5 md:hidden">
                 <a href="{{ route('faq') }}"
                    @if ($onFaq) aria-current="page" @endif
-                   class="flex min-h-11 items-center px-2 text-sm font-semibold {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
+                   data-probe="nav-faq"
+                   class="flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm font-semibold {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
                 <a href="{{ route('home') }}#platforms"
-                   class="flex min-h-11 items-center rounded-full bg-ink px-4 text-sm font-bold text-white">選擇服務</a>
+                   data-probe="nav-cta"
+                   class="flex min-h-11 items-center whitespace-nowrap rounded-full bg-ink px-3.5 text-sm font-bold text-white">選擇服務</a>
             </div>
         </div>
     </header>

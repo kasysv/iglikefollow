@@ -56,8 +56,13 @@
     .choice-card:has(input:checked) {
         @apply border-ink bg-ink text-white shadow-lg;
     }
+    /*
+     * R1:間距由 .platform-tab 自己的 gap 提供。
+     * ⛔ 不靠呼叫端傳 class——platform-brand-icon 不輸出 $attributes,
+     * 那種寫法看起來有效但實際不會出現在 HTML。
+     */
     .platform-tab {
-        @apply inline-flex min-h-14 shrink-0 items-center border-b-2 border-transparent px-4 text-sm font-bold text-black/55 transition-colors duration-200 hover:text-ink;
+        @apply inline-flex min-h-14 shrink-0 items-center gap-2 border-b-2 border-transparent px-4 text-sm font-bold text-black/55 transition-colors duration-200 hover:text-ink;
     }
     .platform-tab--active {
         @apply border-ink text-ink;
