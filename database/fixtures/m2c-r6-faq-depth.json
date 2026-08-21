@@ -1,0 +1,147 @@
+{
+    "_meta": {
+        "source": "10-Projects/新站重建/M2-C-R6-FAQ-DEPTH-CLAUDE-TASK.md",
+        "note": "M2-C R6 FAQ 深度補強:以 Owner 第一方營運事實補強交易前／售後問題。共通付款、發票、下單時間放 /faq;粉絲商品專屬問題只放對應 canonical 商品 owner。⛔ 不改 R5 的 URL／Title／Description／H1／intro／canonical／導航／首頁三題精選。",
+        "approved_at": "2026-08-20",
+        "updated_r5_keys": 1,
+        "new_global_keys": 5,
+        "new_service_keys": 12
+    },
+    "faqs": {
+        "global": [
+            {
+                "managed_key": "r5.global.processing-start",
+                "question": "付款成功後多久開始處理？多久會完成？",
+                "answer": "一般約在付款成功後6小時開始處理，通常1至3天內完成。實際時間會依服務與下單數量不同，100個通常較快，10,000個需要較長時間。",
+                "status": "published",
+                "sort_order": 7
+            },
+            {
+                "managed_key": "r6.global.payment-failed",
+                "question": "付款失敗或付款頁取消了怎麼辦？",
+                "answer": "付款頁明確顯示失敗或取消時，可以重新付款。若帳戶已扣款、訂單仍顯示處理中或無法確認付款結果，請先不要再次付款，並提供訂單編號與付款紀錄聯絡客服核對。",
+                "status": "published",
+                "sort_order": 11
+            },
+            {
+                "managed_key": "r6.global.duplicate-payment",
+                "question": "重複按下付款會被扣款兩次嗎？",
+                "answer": "同一筆結帳重複送出時，系統會避免重複建立相同訂單或再次啟動付款；但如果另外重新建立一張新訂單，仍可能形成兩筆交易。若發現兩次扣款或兩張已付款訂單，請停止再次付款並立即聯絡客服。",
+                "status": "published",
+                "sort_order": 12
+            },
+            {
+                "managed_key": "r6.global.invoice-conversion",
+                "question": "個人電子發票開立後可以改成公司發票嗎？",
+                "answer": "不可以。為配合國稅局勸止二聯式發票換開三聯式發票政策，個人發票開立後不接受改為公司發票。若需要公司報帳，請在下單時選擇公司發票，並確認公司名稱與統一編號正確。",
+                "status": "published",
+                "sort_order": 13
+            },
+            {
+                "managed_key": "r6.global.always-open",
+                "question": "IGLIKEFOLLOW可以24小時下單嗎？",
+                "answer": "可以。網站全年24小時接受下單，付款成功後系統會自動開始處理；客服訊息則依收到順序回覆。",
+                "status": "published",
+                "sort_order": 14
+            }
+        ],
+        "service": [
+            {
+                "managed_key": "r6.ig買粉絲.delivery-list",
+                "product_slug": "ig買粉絲",
+                "question": "購買IG粉絲會保留交付名單嗎？",
+                "answer": "會。每筆加粉都會保留交付名單，作為後續核對掉粉與補量的依據。交付名單是加粉紀錄，保固仍依方案的半年保固條件處理。",
+                "status": "published",
+                "sort_order": 30
+            },
+            {
+                "managed_key": "r6.ig買粉絲.warranty",
+                "product_slug": "ig買粉絲",
+                "question": "IG粉絲掉了會補嗎？保固多久？",
+                "answer": "會。粉絲方案提供半年掉粉補量保固；保固期間內，交付名單中的粉絲有掉就補。同一目標同時購買相同或相近服務、帳號改名或改為私密，可能無法正確核對，因此不在保固範圍。",
+                "status": "published",
+                "sort_order": 31
+            },
+            {
+                "managed_key": "r6.ig買粉絲.private-account",
+                "product_slug": "ig買粉絲",
+                "question": "私密帳戶可以購買IG粉絲嗎？",
+                "answer": "可以，但私密帳戶不提供保固。建議下單前將帳戶設為公開，並在處理與保固期間維持公開狀態。",
+                "status": "published",
+                "sort_order": 32
+            },
+            {
+                "managed_key": "r6.ig買粉絲.rename-or-delete",
+                "product_slug": "ig買粉絲",
+                "question": "處理期間改IG帳號名稱或刪除貼文會怎樣？",
+                "answer": "更改帳號名稱或刪除下單使用的目標貼文不在保固範圍，也可能使尚未完成的數量無法繼續交付。請提供訂單編號與新目標聯絡客服，確認能否將尚未交付的剩餘數量轉移。",
+                "status": "published",
+                "sort_order": 33
+            },
+            {
+                "managed_key": "r6.fb買粉絲.delivery-list",
+                "product_slug": "fb買粉絲",
+                "question": "購買Facebook粉絲會保留交付名單嗎？",
+                "answer": "會。每筆加粉都會保留交付名單，作為後續核對掉粉與補量的依據。交付名單是加粉紀錄，保固仍依方案的半年保固條件處理。",
+                "status": "published",
+                "sort_order": 30
+            },
+            {
+                "managed_key": "r6.fb買粉絲.warranty",
+                "product_slug": "fb買粉絲",
+                "question": "Facebook粉絲掉了會補嗎？保固多久？",
+                "answer": "會。粉絲方案提供半年掉粉補量保固；保固期間內，交付名單中的粉絲有掉就補。同一目標同時購買相同或相近服務、帳號改名或改為私密，可能無法正確核對，因此不在保固範圍。",
+                "status": "published",
+                "sort_order": 31
+            },
+            {
+                "managed_key": "r6.fb買粉絲.private-account",
+                "product_slug": "fb買粉絲",
+                "question": "私密帳戶可以購買Facebook粉絲嗎？",
+                "answer": "可以，但私密帳戶不提供保固。建議下單前將帳戶設為公開，並在處理與保固期間維持公開狀態。",
+                "status": "published",
+                "sort_order": 32
+            },
+            {
+                "managed_key": "r6.fb買粉絲.rename-or-delete",
+                "product_slug": "fb買粉絲",
+                "question": "處理期間改Facebook帳號名稱或刪除貼文會怎樣？",
+                "answer": "更改帳號名稱或刪除下單使用的目標貼文不在保固範圍，也可能使尚未完成的數量無法繼續交付。請提供訂單編號與新目標聯絡客服，確認能否將尚未交付的剩餘數量轉移。",
+                "status": "published",
+                "sort_order": 33
+            },
+            {
+                "managed_key": "r6.threads買粉絲.delivery-list",
+                "product_slug": "threads買粉絲",
+                "question": "購買Threads粉絲會保留交付名單嗎？",
+                "answer": "會。每筆加粉都會保留交付名單，作為後續核對掉粉與補量的依據。交付名單是加粉紀錄，保固仍依方案的半年保固條件處理。",
+                "status": "published",
+                "sort_order": 30
+            },
+            {
+                "managed_key": "r6.threads買粉絲.warranty",
+                "product_slug": "threads買粉絲",
+                "question": "Threads粉絲掉了會補嗎？保固多久？",
+                "answer": "會。粉絲方案提供半年掉粉補量保固；保固期間內，交付名單中的粉絲有掉就補。同一目標同時購買相同或相近服務、帳號改名或改為私密，可能無法正確核對，因此不在保固範圍。",
+                "status": "published",
+                "sort_order": 31
+            },
+            {
+                "managed_key": "r6.threads買粉絲.private-account",
+                "product_slug": "threads買粉絲",
+                "question": "私密帳戶可以購買Threads粉絲嗎？",
+                "answer": "可以，但私密帳戶不提供保固。建議下單前將帳戶設為公開，並在處理與保固期間維持公開狀態。",
+                "status": "published",
+                "sort_order": 32
+            },
+            {
+                "managed_key": "r6.threads買粉絲.rename-or-delete",
+                "product_slug": "threads買粉絲",
+                "question": "處理期間改Threads帳號名稱或刪除貼文會怎樣？",
+                "answer": "更改帳號名稱或刪除下單使用的目標貼文不在保固範圍，也可能使尚未完成的數量無法繼續交付。請提供訂單編號與新目標聯絡客服，確認能否將尚未交付的剩餘數量轉移。",
+                "status": "published",
+                "sort_order": 33
+            }
+        ]
+    }
+}
