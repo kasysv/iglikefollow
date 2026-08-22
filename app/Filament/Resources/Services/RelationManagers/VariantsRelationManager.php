@@ -57,13 +57,34 @@ class VariantsRelationManager extends RelationManager
                  * M2-E-B:在方案列直接看到 SMM 對應狀態。
                  * ⛔ 整欄對非 Owner 隱藏——對應會顯示供應商服務名稱,屬商業
                  * 敏感資訊;FulfillmentMappingPolicy 明文不讓 Editor 看到。
-                 * ⛔ 只顯示名稱／最低量／最高量／啟用狀態,不含 ID、分類、
-                 * 型別、rate、refill、cancel 或任何成本。
+                 * ⛔ 只顯示名稱／最低量／最高量,不含 ID、分類、型別、rate、
+                 * refill、cancel 或任何成本。
+                 * ⛔ R1:不再附加「已啟用／已停用」——會不會派單由下一欄回答。
                  */
                 TextColumn::make('smm_mapping')->label('SMM 服務')
                     ->visible(fn (): bool => ConfigureSmmMappingAction::allowed())
                     ->state(fn (ServiceVariant $record): string => ConfigureSmmMappingAction::statusFor($record))
                     ->wrap(),
+                /*
+                 * M2-E-B R1:「這個方案現在會不會自動派單」的直接答案。
+                 *
+                 * ⛔ 與上一欄分開,是因為 mapping 啟用 ≠ 系統會送單:全站
+                 * 派單 gate 關著時,綠勾會是一個系統不會兌現的承諾。狀態一律
+                 * 由 ConfigureSmmMappingAction::dispatchState() 從既有的
+                 * FulfillmentDispatchGate 與 isUsable() 推導,⛔ 這裡不自行
+                 * 判讀 env/config。
+                 *
+                 * ⛔ badge 同時有圖示與文字:顏色不是唯一的區別方式,
+                 * 色覺障礙與灰階列印都必須讀得出來。
+                 */
+                TextColumn::make('auto_dispatch')->label('自動派單')
+                    ->visible(fn (): bool => ConfigureSmmMappingAction::allowed())
+                    ->state(fn (ServiceVariant $record): string => ConfigureSmmMappingAction::dispatchState($record))
+                    ->badge()
+                    ->formatStateUsing(fn (string $state): string => ConfigureSmmMappingAction::dispatchLabel($state))
+                    ->icon(fn (string $state): string => ConfigureSmmMappingAction::dispatchIcon($state))
+                    ->color(fn (string $state): string => ConfigureSmmMappingAction::dispatchColor($state))
+                    ->tooltip(fn (string $state): string => ConfigureSmmMappingAction::dispatchTooltip($state)),
             ])
             ->defaultSort('sort_order')
             ->headerActions([

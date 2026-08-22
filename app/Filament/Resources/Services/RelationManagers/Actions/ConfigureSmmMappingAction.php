@@ -9,6 +9,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Rules\AvailableProviderService;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Support\QuantityCompatibility;
 use Closure;
 use Filament\Actions\Action;
@@ -309,7 +310,14 @@ final class ConfigureSmmMappingAction
             .($service->is_available ? '' : '（已下架，僅可停用保留）');
     }
 
-    /** 方案列表要顯示的一行狀態;⛔ 只有名稱／上下限／啟用狀態。 */
+    /**
+     * 方案列表要顯示的一行狀態;⛔ 只有名稱／上下限。
+     *
+     * ⛔ M2-E-B R1:這裡刻意不再附加「已啟用／已停用」。會不會自動派單改由
+     * 獨立的「自動派單」欄回答(見 dispatchState),因為 mapping 啟用只代表
+     * 對應正確,與「系統現在會不會送單」是兩件事;兩個答案擠在同一格,只會
+     * 讓人把前者讀成後者。
+     */
     public static function statusFor(ServiceVariant $variant): string
     {
         $mapping = self::existingMapping($variant);
@@ -323,15 +331,100 @@ final class ConfigureSmmMappingAction
             ->where('provider_service_id', $mapping->provider_service_id)
             ->first();
 
-        $state = $mapping->is_enabled ? '已啟用' : '已停用';
-
         if ($service === null) {
-            return '已對應：（服務已下架）｜'.$state;
+            return '已對應：（服務已下架）';
         }
 
         return '已對應：'.$service->name
             .'｜最低 '.$service->minimum_quantity_raw
-            .'｜最高 '.$service->maximum_quantity_raw
-            .'｜'.$state;
+            .'｜最高 '.$service->maximum_quantity_raw;
+    }
+
+    /*
+     * 「自動派單」欄的三態(四個 case,兩個共用黃色警示)。
+     * ⛔ 值是穩定的機器可讀 key;文案與顏色由下面的 helper 決定。
+     */
+    public const DISPATCH_OFF = 'off';
+
+    public const DISPATCH_CHECK = 'check';
+
+    public const DISPATCH_WAITING = 'waiting';
+
+    public const DISPATCH_READY = 'ready';
+
+    /**
+     * 這個方案現在到底會不會被自動派單。
+     *
+     * ⛔ 唯一真實來源是 `FulfillmentDispatchGate::enabled()` 與
+     * `$mapping->isUsable()`——這裡不重新解讀 env 或 config。自己複製一份
+     * gate 判斷,就是多一個會與真正的 gate 走散的地方;走散的那一刻,畫面
+     * 就會對 Owner 做出系統其實不會兌現的承諾。
+     *
+     * ⛔ 純讀取:不解密 credential、不接觸 provider、不產生任何派單。
+     */
+    public static function dispatchState(ServiceVariant $variant): string
+    {
+        $mapping = self::existingMapping($variant);
+
+        // 沒有對應,或對應是停用的 → 這個方案不在自動派單的範圍內。
+        if ($mapping === null || ! $mapping->is_enabled) {
+            return self::DISPATCH_OFF;
+        }
+
+        /*
+         * 已啟用卻不可用:provider、service ID 或 payload 型別其中一項不成立。
+         * ⛔ 這是「需要人去看一眼」,不是「關著」——歸到 off 會讓一筆壞掉的
+         * 對應看起來跟從沒設定過一樣安靜。
+         */
+        if (! $mapping->isUsable()) {
+            return self::DISPATCH_CHECK;
+        }
+
+        // 對應本身沒問題,但全站總開關關著 → ⛔ 不得顯示綠勾。
+        if (! FulfillmentDispatchGate::enabled()) {
+            return self::DISPATCH_WAITING;
+        }
+
+        return self::DISPATCH_READY;
+    }
+
+    /** ⛔ 圖示與文字並存:顏色不得是唯一的區別方式(色覺無障礙)。 */
+    public static function dispatchLabel(string $state): string
+    {
+        return match ($state) {
+            self::DISPATCH_CHECK => '需要檢查',
+            self::DISPATCH_WAITING => '尚未開放',
+            self::DISPATCH_READY => '可自動派單',
+            default => '未啟用',
+        };
+    }
+
+    public static function dispatchColor(string $state): string
+    {
+        return match ($state) {
+            self::DISPATCH_CHECK, self::DISPATCH_WAITING => 'warning',
+            self::DISPATCH_READY => 'success',
+            default => 'gray',
+        };
+    }
+
+    public static function dispatchIcon(string $state): string
+    {
+        return match ($state) {
+            self::DISPATCH_CHECK, self::DISPATCH_WAITING => 'heroicon-m-exclamation-triangle',
+            self::DISPATCH_READY => 'heroicon-m-check-circle',
+            default => 'heroicon-m-x-circle',
+        };
+    }
+
+    /** 滑鼠停留時的說明;⛔ 純文字,不含 ID、credential 或 config 值。 */
+    public static function dispatchTooltip(string $state): string
+    {
+        return match ($state) {
+            self::DISPATCH_CHECK => '這筆對應已啟用，但目前不可用（例如服務代碼或派單格式不符），需要重新設定。',
+            self::DISPATCH_WAITING => '這筆對應正確，但全站自動派單尚未開放，所以還不會實際送單。',
+            self::DISPATCH_READY => '對應正確，且全站自動派單已開放，這個方案會自動送單。',
+            default => '這個方案沒有啟用的 SMM 對應，不會自動派單。',
+        };
     }
 }
