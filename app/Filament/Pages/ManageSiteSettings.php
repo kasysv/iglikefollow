@@ -16,6 +16,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
+use UnitEnum;
 
 /**
  * Singleton settings page (spec §3 site_settings).
@@ -24,11 +25,13 @@ use Illuminate\Support\Facades\Auth;
  */
 class ManageSiteSettings extends Page
 {
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedHome;
 
-    protected static ?string $navigationLabel = '網站設定';
+    protected static ?string $navigationLabel = '首頁與全站設定';
 
-    protected static ?int $navigationSort = 7;
+    protected static string|UnitEnum|null $navigationGroup = '網站內容與 SEO';
+
+    protected static ?int $navigationSort = 1;
 
     protected static ?string $title = '網站設定';
 

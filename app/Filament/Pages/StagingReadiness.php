@@ -7,6 +7,7 @@ use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
+use UnitEnum;
 
 /**
  * Owner-only, read-only staging readiness — the CLI report on a page.
@@ -22,9 +23,11 @@ class StagingReadiness extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentCheck;
 
-    protected static ?string $navigationLabel = 'Staging Readiness';
+    protected static ?string $navigationLabel = '上線準備檢查';
 
-    protected static ?int $navigationSort = 8;
+    protected static string|UnitEnum|null $navigationGroup = '系統管理';
+
+    protected static ?int $navigationSort = 3;
 
     protected static ?string $title = 'Staging Readiness(唯讀)';
 

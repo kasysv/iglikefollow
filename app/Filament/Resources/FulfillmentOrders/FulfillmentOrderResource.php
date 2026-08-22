@@ -10,6 +10,7 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use UnitEnum;
 
 /**
  * Read-only fulfilment records.
@@ -25,13 +26,15 @@ class FulfillmentOrderResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedTruck;
 
-    protected static ?string $navigationLabel = '履約紀錄';
+    protected static ?string $navigationLabel = '派單紀錄';
+
+    protected static string|UnitEnum|null $navigationGroup = '訂單營運';
 
     protected static ?string $modelLabel = '履約紀錄';
 
     protected static ?string $pluralModelLabel = '履約紀錄';
 
-    protected static ?int $navigationSort = 11;
+    protected static ?int $navigationSort = 3;
 
     public static function table(Table $table): Table
     {

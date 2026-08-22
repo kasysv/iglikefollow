@@ -15,20 +15,23 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use UnitEnum;
 
 class PlatformResource extends Resource
 {
     protected static ?string $model = Platform::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedSquares2x2;
 
-    protected static ?string $navigationLabel = '平台';
+    protected static ?string $navigationLabel = '平台管理';
+
+    protected static string|UnitEnum|null $navigationGroup = '商品與價格';
 
     protected static ?string $modelLabel = '平台';
 
     protected static ?string $pluralModelLabel = '平台';
 
-    protected static ?int $navigationSort = 1;
+    protected static ?int $navigationSort = 3;
 
     public static function form(Schema $schema): Schema
     {

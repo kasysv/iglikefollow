@@ -13,6 +13,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use UnitEnum;
 
 /**
  * Owner-only supplier mappings.
@@ -27,13 +28,15 @@ class FulfillmentMappingResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowsRightLeft;
 
-    protected static ?string $navigationLabel = '履約對應';
+    protected static ?string $navigationLabel = '商品派單對照';
+
+    protected static string|UnitEnum|null $navigationGroup = '履約與串接';
 
     protected static ?string $modelLabel = '履約對應';
 
     protected static ?string $pluralModelLabel = '履約對應';
 
-    protected static ?int $navigationSort = 10;
+    protected static ?int $navigationSort = 1;
 
     public static function form(Schema $schema): Schema
     {

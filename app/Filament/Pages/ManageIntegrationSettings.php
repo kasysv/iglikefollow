@@ -17,6 +17,7 @@ use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
+use UnitEnum;
 
 /**
  * Owner-only credential entry for the payment, invoice and fulfilment providers.
@@ -36,9 +37,11 @@ class ManageIntegrationSettings extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedKey;
 
-    protected static ?string $navigationLabel = '串接設定';
+    protected static ?string $navigationLabel = '金流／發票／API 設定';
 
-    protected static ?int $navigationSort = 8;
+    protected static string|UnitEnum|null $navigationGroup = '履約與串接';
+
+    protected static ?int $navigationSort = 3;
 
     protected static ?string $title = '串接設定';
 

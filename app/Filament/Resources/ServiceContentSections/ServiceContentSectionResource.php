@@ -15,20 +15,23 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use UnitEnum;
 
 class ServiceContentSectionResource extends Resource
 {
     protected static ?string $model = ServiceContentSection::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentMagnifyingGlass;
 
-    protected static ?string $navigationLabel = '內容段落';
+    protected static ?string $navigationLabel = 'SEO 內容段落';
+
+    protected static string|UnitEnum|null $navigationGroup = '網站內容與 SEO';
 
     protected static ?string $modelLabel = '內容段落';
 
     protected static ?string $pluralModelLabel = '內容段落';
 
-    protected static ?int $navigationSort = 4;
+    protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
     {

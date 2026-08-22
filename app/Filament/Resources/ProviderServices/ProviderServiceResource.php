@@ -9,6 +9,7 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use UnitEnum;
 
 /**
  * Read-only view of what the supplier's catalog last declared.
@@ -25,13 +26,15 @@ class ProviderServiceResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedBuildingStorefront;
 
-    protected static ?string $navigationLabel = '供應商服務目錄';
+    protected static ?string $navigationLabel = 'TheMostPanel 服務目錄';
+
+    protected static string|UnitEnum|null $navigationGroup = '履約與串接';
 
     protected static ?string $modelLabel = '供應商服務';
 
     protected static ?string $pluralModelLabel = '供應商服務';
 
-    protected static ?int $navigationSort = 12;
+    protected static ?int $navigationSort = 2;
 
     public static function table(Table $table): Table
     {

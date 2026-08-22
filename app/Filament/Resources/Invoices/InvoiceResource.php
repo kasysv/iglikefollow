@@ -10,6 +10,7 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use UnitEnum;
 
 /**
  * Read-only e-invoice records, owner only.
@@ -28,11 +29,13 @@ class InvoiceResource extends Resource
 
     protected static ?string $navigationLabel = '電子發票';
 
+    protected static string|UnitEnum|null $navigationGroup = '訂單營運';
+
     protected static ?string $modelLabel = '電子發票';
 
     protected static ?string $pluralModelLabel = '電子發票';
 
-    protected static ?int $navigationSort = 9;
+    protected static ?int $navigationSort = 2;
 
     public static function table(Table $table): Table
     {

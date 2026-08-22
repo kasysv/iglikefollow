@@ -18,20 +18,23 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use UnitEnum;
 
 class ServiceResource extends Resource
 {
     protected static ?string $model = Service::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentDuplicate;
 
-    protected static ?string $navigationLabel = '服務分類';
+    protected static ?string $navigationLabel = '商品頁面';
+
+    protected static string|UnitEnum|null $navigationGroup = '商品與價格';
 
     protected static ?string $modelLabel = '服務分類';
 
     protected static ?string $pluralModelLabel = '服務分類';
 
-    protected static ?int $navigationSort = 2;
+    protected static ?int $navigationSort = 1;
 
     public static function form(Schema $schema): Schema
     {

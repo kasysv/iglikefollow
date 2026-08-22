@@ -10,6 +10,7 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use UnitEnum;
 
 /**
  * Read-only order records.
@@ -26,11 +27,13 @@ class OrderResource extends Resource
 
     protected static ?string $navigationLabel = '訂單';
 
+    protected static string|UnitEnum|null $navigationGroup = '訂單營運';
+
     protected static ?string $modelLabel = '訂單';
 
     protected static ?string $pluralModelLabel = '訂單';
 
-    protected static ?int $navigationSort = 6;
+    protected static ?int $navigationSort = 1;
 
     public static function table(Table $table): Table
     {

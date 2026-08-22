@@ -10,6 +10,7 @@ use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Auth;
+use UnitEnum;
 
 /** Owner 唯讀稽核紀錄；⛔ 後台不提供建立、編輯或刪除。 */
 class AdminAuditLogResource extends Resource
@@ -20,11 +21,13 @@ class AdminAuditLogResource extends Resource
 
     protected static ?string $navigationLabel = '操作紀錄';
 
+    protected static string|UnitEnum|null $navigationGroup = '系統管理';
+
     protected static ?string $modelLabel = '操作紀錄';
 
     protected static ?string $pluralModelLabel = '操作紀錄';
 
-    protected static ?int $navigationSort = 9;
+    protected static ?int $navigationSort = 2;
 
     public static function table(Table $table): Table
     {
