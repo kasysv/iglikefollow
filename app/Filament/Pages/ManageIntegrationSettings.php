@@ -37,11 +37,11 @@ class ManageIntegrationSettings extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedKey;
 
-    protected static ?string $navigationLabel = '金流／發票／API 設定';
+    protected static ?string $navigationLabel = '串接設定';
 
-    protected static string|UnitEnum|null $navigationGroup = '履約與串接';
+    protected static string|UnitEnum|null $navigationGroup = '系統設定';
 
-    protected static ?int $navigationSort = 3;
+    protected static ?int $navigationSort = 1;
 
     protected static ?string $title = '串接設定';
 

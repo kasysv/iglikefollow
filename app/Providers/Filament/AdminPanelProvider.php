@@ -13,7 +13,6 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Widgets\AccountWidget;
-use Filament\Widgets\FilamentInfoWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -50,24 +49,23 @@ class AdminPanelProvider extends PanelProvider
              * query 或授權判斷。
              */
             ->navigationGroups([
-                NavigationGroup::make('訂單營運')
+                NavigationGroup::make('訂單管理')
                     ->collapsible(),
-                NavigationGroup::make('商品與價格')
+                NavigationGroup::make('商品管理')
                     ->collapsible(),
-                NavigationGroup::make('網站內容與 SEO')
-                    ->collapsible()
-                    ->collapsed(),
-                NavigationGroup::make('履約與串接')
-                    ->collapsible()
-                    ->collapsed(),
-                NavigationGroup::make('系統管理')
+                NavigationGroup::make('網站內容')
+                    ->collapsible(),
+                NavigationGroup::make('系統設定')
                     ->collapsible()
                     ->collapsed(),
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
+            /*
+             * M2-E-B:只保留帳號 widget。⛔ 移除 FilamentInfoWidget——那是框架
+             * 版本宣傳,對日常客服作業沒有意義,也不新增花俏的 Dashboard。
+             */
             ->widgets([
                 AccountWidget::class,
-                FilamentInfoWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,

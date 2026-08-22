@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 class Order extends Model
@@ -50,6 +51,18 @@ class Order extends Model
     public function events(): HasMany
     {
         return $this->hasMany(OrderEvent::class)->orderBy('id');
+    }
+
+    /**
+     * 這張訂單的電子發票。
+     *
+     * ⛔ 唯讀關聯,只為了讓客服在同一張訂單看到發票狀態,不新增任何開立、
+     * 重送或作廢入口——那些仍只屬於發票狀態機。一張訂單至多一張發票;
+     * 取最新一筆以免歷史資料有多列時靜默挑錯。
+     */
+    public function invoice(): HasOne
+    {
+        return $this->hasOne(Invoice::class)->latestOfMany();
     }
 
     /**

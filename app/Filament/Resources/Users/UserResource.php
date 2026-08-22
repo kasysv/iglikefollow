@@ -23,13 +23,13 @@ class UserResource extends Resource
 
     protected static ?string $navigationLabel = '後台帳號';
 
-    protected static string|UnitEnum|null $navigationGroup = '系統管理';
+    protected static string|UnitEnum|null $navigationGroup = '系統設定';
 
     protected static ?string $modelLabel = '後台帳號';
 
     protected static ?string $pluralModelLabel = '後台帳號';
 
-    protected static ?int $navigationSort = 1;
+    protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
     {

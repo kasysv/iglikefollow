@@ -27,7 +27,7 @@ class OrderResource extends Resource
 
     protected static ?string $navigationLabel = '訂單';
 
-    protected static string|UnitEnum|null $navigationGroup = '訂單營運';
+    protected static string|UnitEnum|null $navigationGroup = '訂單管理';
 
     protected static ?string $modelLabel = '訂單';
 

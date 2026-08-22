@@ -26,9 +26,9 @@ class ServiceResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentDuplicate;
 
-    protected static ?string $navigationLabel = '商品頁面';
+    protected static ?string $navigationLabel = '商品';
 
-    protected static string|UnitEnum|null $navigationGroup = '商品與價格';
+    protected static string|UnitEnum|null $navigationGroup = '商品管理';
 
     protected static ?string $modelLabel = '服務分類';
 

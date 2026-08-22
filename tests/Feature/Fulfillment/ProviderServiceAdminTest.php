@@ -111,20 +111,36 @@ class ProviderServiceAdminTest extends TestCase
         $response->assertSee('不代表帳戶沒有服務');
     }
 
-    public function test_an_owner_sees_the_business_fields(): void
+    /**
+     * M2-E-B:主畫面只給非技術人員需要的三欄。
+     *
+     * ⛔ 服務代碼、rate、分類、型別、refill、cancel、最後觀察一律不在
+     * 主畫面出現——它們仍在資料庫與 model 裡,這是顯示決定,不是資料變更。
+     */
+    public function test_the_catalog_screen_shows_only_name_and_bounds(): void
     {
         ProviderService::factory()->create([
             'provider_service_id' => '9101',
             'name' => '虛構目錄服務',
             'rate_raw' => '0.90',
+            'category' => '虛構分類',
+            'service_type' => '虛構型別',
+            'minimum_quantity_raw' => '50',
+            'maximum_quantity_raw' => '5000',
         ]);
 
         $response = $this->actingAs($this->owner())->get(self::URL);
 
         $response->assertOk();
-        $response->assertSee('9101');
         $response->assertSee('虛構目錄服務');
-        $response->assertSee('0.90');
+        $response->assertSee('50');
+        $response->assertSee('5000');
+
+        // ⛔ 原始觀察欄位不得出現在主畫面。
+        $response->assertDontSee('9101');
+        $response->assertDontSee('0.90');
+        $response->assertDontSee('虛構分類');
+        $response->assertDontSee('虛構型別');
     }
 
     /**
@@ -190,8 +206,8 @@ class ProviderServiceAdminTest extends TestCase
 
     // ==================================== MAPPING-UI-A:Owner review 搜尋／篩選
 
-    /** 264 筆真實 catalog 之後,Owner 靠搜尋而不是捲動找服務。 */
-    public function test_the_catalog_is_searchable_by_id_name_and_category(): void
+    /** M2-E-B:搜尋只用服務名稱;⛔ 代碼與分類不再是主畫面的搜尋維度。 */
+    public function test_the_catalog_is_searchable_by_name(): void
     {
         $this->actingAs($this->owner());
 
@@ -206,123 +222,96 @@ class ProviderServiceAdminTest extends TestCase
             'category' => '別的分類',
         ]);
 
-        foreach (['91011', '獨特虛構搜尋服務', '獨特虛構分類'] as $term) {
-            Livewire::test(ListProviderServices::class)
-                ->searchTable($term)
-                ->assertCanSeeTableRecords([$target])
-                ->assertCanNotSeeTableRecords([$other]);
-        }
+        Livewire::test(ListProviderServices::class)
+            ->searchTable('獨特虛構搜尋服務')
+            ->assertCanSeeTableRecords([$target])
+            ->assertCanNotSeeTableRecords([$other]);
     }
 
-    public function test_the_catalog_is_filterable_by_availability_category_type_refill_and_cancel(): void
+    /** M2-E-B:主畫面只保留「可用」篩選;⛔ 分類／型別／refill／cancel 篩選已移除。 */
+    public function test_the_catalog_is_filterable_by_availability_only(): void
     {
         $this->actingAs($this->owner());
 
         $available = ProviderService::factory()->available()->create([
-            'category' => '分類甲', 'service_type' => 'Default', 'supports_refill' => true,
+            'provider_service_id' => '93001',
+            'name' => '可用虛構服務',
         ]);
         $unavailable = ProviderService::factory()->create([
-            'category' => '分類乙', 'service_type' => 'Custom', 'supports_refill' => false,
+            'provider_service_id' => '93002',
+            'name' => '已下架虛構服務',
+            'is_available' => false,
         ]);
 
         Livewire::test(ListProviderServices::class)
             ->filterTable('is_available', true)
             ->assertCanSeeTableRecords([$available])
             ->assertCanNotSeeTableRecords([$unavailable]);
-
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('category', '分類乙')
-            ->assertCanSeeTableRecords([$unavailable])
-            ->assertCanNotSeeTableRecords([$available]);
-
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('service_type', 'Default')
-            ->assertCanSeeTableRecords([$available])
-            ->assertCanNotSeeTableRecords([$unavailable]);
-
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('supports_refill', true)
-            ->assertCanSeeTableRecords([$available])
-            ->assertCanNotSeeTableRecords([$unavailable]);
     }
 
-    /** 預設排序:服務代碼由最小開始且為數值序——'9' 在 '99'、'100' 之前。 */
-    public function test_the_default_sort_is_numeric_ascending_by_service_id(): void
+    /** M2-E-B:主畫面沒有服務代碼可排,預設改以服務名稱排序。 */
+    public function test_the_default_sort_is_by_service_name(): void
     {
         $this->actingAs($this->owner());
 
-        $c = ProviderService::factory()->available()->create(['provider_service_id' => '100']);
-        $b = ProviderService::factory()->available()->create(['provider_service_id' => '99']);
-        $a = ProviderService::factory()->available()->create(['provider_service_id' => '9']);
-
-        // ⛔ 數值序(長度＋lexicographic),不是字典序('100' < '99')。
-        Livewire::test(ListProviderServices::class)
-            ->assertCanSeeTableRecords([$a, $b, $c], inOrder: true);
-    }
-
-    /** R1:cancel filter 的獨立正／反資料證明。 */
-    public function test_the_cancel_filter_narrows_to_cancelable_rows(): void
-    {
-        $this->actingAs($this->owner());
-
-        $cancelable = ProviderService::factory()->available()->create(['supports_cancel' => true]);
-        $other = ProviderService::factory()->available()->create(['supports_cancel' => false]);
+        $b = ProviderService::factory()->available()->create([
+            'provider_service_id' => '94002', 'name' => 'B 虛構服務',
+        ]);
+        $a = ProviderService::factory()->available()->create([
+            'provider_service_id' => '94001', 'name' => 'A 虛構服務',
+        ]);
 
         Livewire::test(ListProviderServices::class)
-            ->filterTable('supports_cancel', true)
-            ->assertCanSeeTableRecords([$cancelable])
-            ->assertCanNotSeeTableRecords([$other]);
-
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('supports_cancel', false)
-            ->assertCanSeeTableRecords([$other])
-            ->assertCanNotSeeTableRecords([$cancelable]);
+            ->assertCanSeeTableRecords([$a, $b], inOrder: true);
     }
 
     /**
-     * ⛔ R1:filter 選項 label 是 provider-controlled text 的另一個出口。
-     * 敵意 category／service type 進 filter 後,整份 rendered HTML(含
-     * filter dropdown)不得出現任何 raw payload;且該敵意值必須真的作為
-     * filter option 運作(round-trip 篩選命中),證明不是「filter 根本
-     * 沒渲染」的假陰性。
+     * M2-E-B:refill／cancel 不再是主畫面的篩選維度。
+     *
+     * ⛔ 這不代表資料消失:欄位仍在 model 上,只是不塞進日常操作畫面。
      */
-    public function test_hostile_filter_option_labels_are_escaped(): void
+    public function test_refill_and_cancel_filters_are_absent_from_the_screen(): void
     {
         $this->actingAs($this->owner());
 
-        $hostileCategory = '<script>alert("filter-cat-xss")</script>';
-        $hostileType = '<img src=x onerror=alert("filter-type-xss")>';
+        $component = Livewire::test(ListProviderServices::class);
 
-        $hostile = ProviderService::factory()->available()->create([
-            'category' => $hostileCategory,
-            'service_type' => $hostileType,
+        $component->assertTableFilterExists('is_available');
+
+        foreach (['supports_cancel', 'supports_refill', 'category', 'service_type'] as $removed) {
+            $this->assertNull(
+                $component->instance()->getTable()->getFilter($removed),
+                "主畫面不應再有 {$removed} 篩選",
+            );
+        }
+    }
+
+    /**
+     * ⛔ Provider-controlled text renders as text, never as markup.
+     *
+     * M2-E-B 把分類／型別篩選移出主畫面,但敵意目錄的風險並未消失——
+     * 服務「名稱」正是主畫面現在會渲染的 provider-controlled 欄位,
+     * 所以逃逸保證改用名稱驗證,強度不變。
+     */
+    public function test_hostile_provider_names_are_escaped_on_the_screen(): void
+    {
+        $this->actingAs($this->owner());
+
+        $hostileName = '<script>alert("catalog-name-xss")</script>';
+
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '95001',
+            'name' => $hostileName,
         ]);
-        $benign = ProviderService::factory()->available()->create([
-            'category' => '正常分類',
-            'service_type' => 'Default',
-        ]);
 
-        // 敵意值確實作為 filter option 運作。
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('category', $hostileCategory)
-            ->assertCanSeeTableRecords([$hostile])
-            ->assertCanNotSeeTableRecords([$benign]);
-
-        Livewire::test(ListProviderServices::class)
-            ->filterTable('service_type', $hostileType)
-            ->assertCanSeeTableRecords([$hostile])
-            ->assertCanNotSeeTableRecords([$benign]);
-
-        // 整份 component HTML(含 filter UI)0 個 raw payload;escaped 版本存在。
         $html = Livewire::test(ListProviderServices::class)->html();
 
-        // raw payload(含未 escape 的 < >)全頁 0 出現;'<script>' 標籤本身也不得存在。
-        $this->assertStringNotContainsString($hostileCategory, $html);
-        $this->assertStringNotContainsString($hostileType, $html);
+        // raw payload 全頁 0 出現;'<script>alert' 也不得存在。
+        $this->assertStringNotContainsString($hostileName, $html);
         $this->assertStringNotContainsString('<script>alert', $html);
-        // escaped 版本存在(< > " 都被轉義,payload 只剩純文字)。
-        $this->assertStringContainsString('&lt;script&gt;alert(&quot;filter-cat-xss&quot;)', $html);
-        $this->assertStringContainsString('&lt;img src=x onerror=alert(&quot;filter-type-xss&quot;)&gt;', $html);
+
+        // escaped 版本存在(payload 只剩純文字)。
+        $this->assertStringContainsString('&lt;script&gt;alert(&quot;catalog-name-xss&quot;)', $html);
     }
 
     /**

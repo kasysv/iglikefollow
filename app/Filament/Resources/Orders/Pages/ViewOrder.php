@@ -89,6 +89,34 @@ class ViewOrder extends ViewRecord
                     TextEntry::make('invoice_kind')->label('發票類型')
                         ->formatStateUsing(fn ($state, Order $record) => $record->invoiceSummary()),
                 ])->columns(3),
+
+            /*
+             * M2-E-B:發票收進訂單頁,客服不必再切到獨立發票清單。
+             * ⛔ 全部唯讀:沒有開立、重送、作廢或「標記已開立」按鈕——
+             * 那些只屬於發票狀態機。
+             * ⛔ 遮罩規則沿用 Invoice::maskedInvoiceNumber() 與
+             * maskedProviderReference(),不因為換個畫面就放寬回顯。
+             * 沒有發票時每一欄都顯示「尚未開立」,不推論成功或失敗。
+             */
+            Section::make('電子發票')
+                ->description('⛔ 唯讀；發票號碼與供應商單號僅顯示遮罩後的值。「尚未開立」代表沒有這筆紀錄，不代表開立失敗。')
+                ->schema([
+                    TextEntry::make('invoice_status')->label('發票狀態')
+                        ->state(fn (Order $record): string => $record->invoice?->status->label() ?? '尚未開立'),
+                    TextEntry::make('invoice_number_masked')->label('發票號碼')
+                        ->state(fn (Order $record): string => $record->invoice?->maskedInvoiceNumber() ?? '尚未開立'),
+                    TextEntry::make('invoice_issued_at')->label('開立時間')
+                        ->state(fn (Order $record): string => $record->invoice?->issued_at?->format('Y-m-d H:i:s') ?? '尚未開立'),
+                    TextEntry::make('invoice_reference_masked')->label('供應商單號')
+                        ->state(fn (Order $record): string => $record->invoice?->maskedProviderReference() ?? '尚未開立'),
+                    TextEntry::make('invoice_attempts')->label('開立嘗試')
+                        ->state(fn (Order $record): string => $record->invoice === null
+                            ? '尚未開立'
+                            : $record->invoice->attempts()->count().' 次'),
+                    TextEntry::make('invoice_note')->label('狀態說明')
+                        ->columnSpanFull()
+                        ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['invoice']),
+                ])->columns(3),
         ]);
     }
 }

@@ -2,7 +2,9 @@
 
 namespace App\Filament\Resources\Services\RelationManagers;
 
+use App\Filament\Resources\Services\RelationManagers\Actions\ConfigureSmmMappingAction;
 use App\Filament\Resources\ServiceVariants\Schemas\ServiceVariantForm;
+use App\Models\ServiceVariant;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
@@ -51,6 +53,17 @@ class VariantsRelationManager extends RelationManager
                         'draft' => 'warning',
                         default => 'gray',
                     }),
+                /*
+                 * M2-E-B:在方案列直接看到 SMM 對應狀態。
+                 * ⛔ 整欄對非 Owner 隱藏——對應會顯示供應商服務名稱,屬商業
+                 * 敏感資訊;FulfillmentMappingPolicy 明文不讓 Editor 看到。
+                 * ⛔ 只顯示名稱／最低量／最高量／啟用狀態,不含 ID、分類、
+                 * 型別、rate、refill、cancel 或任何成本。
+                 */
+                TextColumn::make('smm_mapping')->label('SMM 服務')
+                    ->visible(fn (): bool => ConfigureSmmMappingAction::allowed())
+                    ->state(fn (ServiceVariant $record): string => ConfigureSmmMappingAction::statusFor($record))
+                    ->wrap(),
             ])
             ->defaultSort('sort_order')
             ->headerActions([
@@ -62,6 +75,8 @@ class VariantsRelationManager extends RelationManager
             // ⛔ 不提供 Associate／Dissociate：服務項目必須屬於這個服務，不可轉掛。
             ->recordActions([
                 EditAction::make()->mutateDataUsing(fn (array $data): array => $this->ownedBy($data)),
+                // M2-E-B:同頁設定 SMM 對應;⛔ 只有 Owner 看得到(action 內另有授權檢查)。
+                ConfigureSmmMappingAction::make(),
                 DeleteAction::make(),
             ])
             ->toolbarActions([

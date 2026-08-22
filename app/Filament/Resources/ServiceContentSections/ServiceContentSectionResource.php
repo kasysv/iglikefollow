@@ -33,6 +33,16 @@ class ServiceContentSectionResource extends Resource
 
     protected static ?int $navigationSort = 2;
 
+    /*
+     * M2-E-B:只從側邊導航隱藏,⛔ route、Resource、Model、policy 與資料
+     * 全部保留——這是日常畫面的精簡,不是功能下架。直接輸入網址仍可進入
+     * (授權與 noindex 照舊),也因此可以隨時回滾。
+     */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public static function form(Schema $schema): Schema
     {
         return ServiceContentSectionForm::configure($schema);

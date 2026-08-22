@@ -27,9 +27,9 @@ class ManageSiteSettings extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedHome;
 
-    protected static ?string $navigationLabel = '首頁與全站設定';
+    protected static ?string $navigationLabel = '首頁設定';
 
-    protected static string|UnitEnum|null $navigationGroup = '網站內容與 SEO';
+    protected static string|UnitEnum|null $navigationGroup = '網站內容';
 
     protected static ?int $navigationSort = 1;
 

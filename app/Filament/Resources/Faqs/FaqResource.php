@@ -25,13 +25,13 @@ class FaqResource extends Resource
 
     protected static ?string $navigationLabel = '常見問題';
 
-    protected static string|UnitEnum|null $navigationGroup = '網站內容與 SEO';
+    protected static string|UnitEnum|null $navigationGroup = '網站內容';
 
     protected static ?string $modelLabel = '常見問題';
 
     protected static ?string $pluralModelLabel = '常見問題';
 
-    protected static ?int $navigationSort = 3;
+    protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
     {
