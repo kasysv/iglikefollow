@@ -5,6 +5,7 @@ namespace Tests\Feature\Operations;
 use App\Jobs\SubmitFulfillmentOrder;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -220,8 +221,14 @@ class StagingDeploymentArtifactsTest extends TestCase
         $this->fail('⛔ 找不到 bash(Git Bash/Linux bash);runtime 反證無法執行。');
     }
 
-    /** 建立 fake-curl bin 目錄;⛔ 永不連網,依 URL 回 fixture。 */
-    private function makeFakeCurl(string $mode = 'ok'): string
+    /**
+     * 建立 fake-curl bin 目錄;⛔ 永不連網,依 URL 回 fixture。
+     *
+     * R1:fixture 現在會模擬 D-103 的「單次 302 → 商品 canonical」。
+     * `FAKE_CURL_REDIR` 讓每個測試改寫那一次轉址的行為,用來反證腳本
+     * 在錯誤 Location、外站 Location、target 仍 redirect 時真的會 fail。
+     */
+    private function makeFakeCurl(): string
     {
         $dir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'fake-curl-'.uniqid();
         mkdir($dir, 0777, true);
@@ -230,7 +237,16 @@ class StagingDeploymentArtifactsTest extends TestCase
 #!/usr/bin/env bash
 # fake curl:⛔ 不連網;依 URL 回 fixture(1 H1、meta noindex、
 # X-Robots noindex、robots Disallow)。FAKE_CURL_MODE=fail 模擬 transport failure。
+#
+# D-103 fixture:
+#   /services/instagram/followers  →  302 + Location: <base>/product/ig%E8%B2%B7%E7%B2%89%E7%B5%B2/
+#   該 canonical target             →  200(單一 H1、meta noindex)
+#
+# FAKE_CURL_REDIR 可改寫 302 那一步,用來反證腳本會 fail closed:
+#   wrong-path | other-host | with-query | no-location | not-302 | target-redirects
 MODE="${FAKE_CURL_MODE:-ok}"
+REDIR="${FAKE_CURL_REDIR:-ok}"
+CANON_PATH='/product/ig%E8%B2%B7%E7%B2%89%E7%B5%B2/'
 HEAD=0
 OUT=""
 URL=""
@@ -244,10 +260,40 @@ for a in "$@"; do
     prev="$a"
 done
 if [ "$MODE" = "fail" ]; then exit 6; fi
+
+# base = scheme://host[:port]
+BASE_ONLY="$(printf '%s' "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')"
+
+is_service_url=0
+case "$URL" in
+    */services/instagram/followers) is_service_url=1 ;;
+esac
+is_canonical=0
+case "$URL" in
+    */product/*) is_canonical=1 ;;
+esac
+
 if [ "$HEAD" = "1" ]; then
+    if [ "$is_service_url" = "1" ]; then
+        case "$REDIR" in
+            no-location) printf 'HTTP/2 302\r\nx-robots-tag: noindex, nofollow\r\n\r\n' ;;
+            not-302)     printf 'HTTP/2 200\r\nx-robots-tag: noindex, nofollow\r\n\r\n' ;;
+            wrong-path)  printf 'HTTP/2 302\r\nlocation: %s/product/wrong-slug/\r\n\r\n' "$BASE_ONLY" ;;
+            other-host)  printf 'HTTP/2 302\r\nlocation: https://evil.example.invalid%s\r\n\r\n' "$CANON_PATH" ;;
+            with-query)  printf 'HTTP/2 302\r\nlocation: %s%s?utm=x\r\n\r\n' "$BASE_ONLY" "$CANON_PATH" ;;
+            *)           printf 'HTTP/2 302\r\nlocation: %s%s\r\n\r\n' "$BASE_ONLY" "$CANON_PATH" ;;
+        esac
+        exit 0
+    fi
+    # canonical target 自己再轉一次 → chain(必須被抓出來)
+    if [ "$is_canonical" = "1" ] && [ "$REDIR" = "target-redirects" ]; then
+        printf 'HTTP/2 302\r\nlocation: %s/somewhere-else/\r\n\r\n' "$BASE_ONLY"
+        exit 0
+    fi
     printf 'HTTP/2 200\r\nx-robots-tag: noindex, nofollow\r\n\r\n'
     exit 0
 fi
+
 case "$URL" in
     */robots.txt) BODY="User-agent: *
 Disallow: /" ;;
@@ -422,6 +468,151 @@ SH;
         $this->assertStringContainsString('尚未進入 maintenance', $output);
         // ⛔ php/git/mysqldump/composer 0 次被叫。
         $this->assertFileDoesNotExist($marker);
+    }
+
+    // ==================================== R1:D-103 單次 302 驗收
+
+    /** 每個 D-103 情境共用的執行器;回 [exitCode, output]。 */
+    private function runPostDeploy(string $redirMode = 'ok'): array
+    {
+        $fake = $this->makeFakeCurl();
+        $tmp = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pdc-tmp-'.uniqid();
+        mkdir($tmp, 0777, true);
+
+        $result = $this->runScript(
+            base_path(self::DIR.'staging-post-deploy-check.sh'),
+            "'https://staging.example.invalid'",
+            $fake,
+            $tmp,
+            $redirMode === 'ok' ? '' : 'export FAKE_CURL_REDIR='.$redirMode.';',
+        );
+
+        // ⛔ 每條路徑都必須清乾淨 tempfile,失敗路徑也一樣。
+        $this->assertSame([], glob($tmp.DIRECTORY_SEPARATOR.'*') ?: [], 'tempfile 未清理');
+
+        return $result;
+    }
+
+    /**
+     * ⛔ 成功路徑:單次 302 直達 canonical,target 200。
+     *
+     * 這是這次 R1 的核心——舊腳本期待 `/services/instagram/followers`
+     * 直接 200,因此在正確的 staging 上誤報 BLOCKER。
+     */
+    public function test_the_check_accepts_a_single_302_to_the_product_canonical(): void
+    {
+        [$exit, $output] = $this->runPostDeploy();
+
+        $this->assertSame(0, $exit, $output);
+        $this->assertStringContainsString('全部通過', $output);
+        $this->assertStringContainsString('回 302', $output);
+        $this->assertStringContainsString('Location 精確等於 canonical', $output);
+        $this->assertStringContainsString('canonical target 回 200', $output);
+        $this->assertStringNotContainsString('unbound variable', $output);
+        $this->assertStringNotContainsString('BLOCKER', $output);
+    }
+
+    /**
+     * ⛔ 錯誤 Location／外站 Location／缺 Location／非 302／target 仍 redirect
+     * 一律 fail closed。
+     *
+     * 「外站」那一條特別重要:如果只驗「有 302 且最後 200」,一個把使用者
+     * 導去別的網域的設定錯誤會完全通過驗收。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function badRedirectProvider(): array
+    {
+        return [
+            '錯誤 path' => ['wrong-path'],
+            '外站 host' => ['other-host'],
+            '帶 query' => ['with-query'],
+            '缺 Location' => ['no-location'],
+            '不是 302' => ['not-302'],
+            'target 仍 redirect（chain）' => ['target-redirects'],
+        ];
+    }
+
+    #[DataProvider('badRedirectProvider')]
+    public function test_the_check_fails_closed_on_a_bad_redirect(string $mode): void
+    {
+        [$exit, $output] = $this->runPostDeploy($mode);
+
+        $this->assertSame(1, $exit, $mode.' 應該 exit 1；實際輸出：'.$output);
+        $this->assertStringContainsString('BLOCKER', $output, $mode);
+        $this->assertStringNotContainsString('全部通過', $output, $mode);
+        // ⛔ set -u 下不得因未初始化變數而中止(那會變成看不懂的失敗)。
+        $this->assertStringNotContainsString('unbound variable', $output, $mode);
+    }
+
+    /** ⛔ 腳本不得用 curl -L:跟隨轉址會把 chain 掩蓋成漂亮的 200。 */
+    public function test_the_check_never_follows_redirects(): void
+    {
+        $script = $this->artifact('staging-post-deploy-check.sh');
+
+        foreach ([' -L ', '--location', '-sSL', '-L"'] as $needle) {
+            $this->assertStringNotContainsString($needle, $script, $needle);
+        }
+
+        // 仍必須是 GET/HEAD-only(既有安全限制不因本輪放寬)。
+        foreach (['-X POST', '--data', '-F ', 'callback'] as $needle) {
+            $this->assertStringNotContainsString($needle, $script, $needle);
+        }
+    }
+
+    /**
+     * ⛔ 不得把 302 擅自升級成 301:正式永久 redirect 屬 M5。
+     *
+     * 驗的是「比較 status 的那一行」而不是全文有無 `301` 字樣——腳本註解
+     * 裡本來就寫著「302 不得改 301」,用全文掃描會把那句提醒本身判成違規。
+     */
+    public function test_the_check_expects_302_not_a_permanent_redirect(): void
+    {
+        $script = $this->artifact('staging-post-deploy-check.sh');
+
+        // 實際做判斷的那一行:必須比對 302。
+        $this->assertMatchesRegularExpression(
+            '/\[\s*"\$REDIR_CODE"\s*=\s*"302"\s*\]/',
+            $script,
+            '腳本必須明確要求 302',
+        );
+
+        // ⛔ 任何「期待 301」的判斷式都不得存在。
+        $this->assertDoesNotMatchRegularExpression(
+            '/\[\s*"\$REDIR_CODE"\s*=\s*"301"\s*\]/',
+            $script,
+            '⛔ 不得期待 301：正式永久 redirect 屬 M5',
+        );
+    }
+
+    // ==================================== R1:artisan executable bit
+
+    /**
+     * ⛔ Git index 必須把 `artisan` 記成 100755。
+     *
+     * RunCloud Supervisor 初次啟動時是 `FATAL ... artisan is not executable`;
+     * 在 VPS 上 `chmod 755` 只能救當下那一次,下一次 checkout 會再壞一次。
+     * 真正的修法是把 mode 存進 Git。
+     *
+     * ⛔ 這裡刻意讀 `git ls-files --stage`,不看工作目錄的檔案權限:
+     * 本 repo `core.fileMode=false`,而且 Windows 的 working-tree mode
+     * 根本不可信——用 `is_executable()` 驗會得到與 Linux 部署無關的答案。
+     */
+    public function test_git_records_artisan_as_executable(): void
+    {
+        $output = [];
+        $exit = 0;
+        exec('git -C '.escapeshellarg(base_path()).' ls-files --stage -- artisan 2>&1', $output, $exit);
+
+        $this->assertSame(0, $exit, '無法讀取 git index：'.implode("\n", $output));
+        $this->assertNotEmpty($output);
+
+        // 格式:<mode> <sha> <stage>\t<path>
+        $this->assertMatchesRegularExpression(
+            '/^100755 [0-9a-f]{40} 0\tartisan$/',
+            trim($output[0]),
+            'artisan 在 Git index 內必須是 100755；實際：'.trim($output[0]),
+        );
     }
 
     /** guard 的其他 fail-closed 分支:不存在的 BACKUP_DIR 同樣在任何 side effect 前停止。 */
