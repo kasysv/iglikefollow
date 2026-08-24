@@ -134,6 +134,107 @@ class AnyIntegerQuantityRoundingTest extends TestCase
         );
     }
 
+    // ================================================== 2b. R1:前端金額精度
+
+    /**
+     * ⛔ R1:金額計算的來源必須是整數 mills 字串,不是 float。
+     *
+     * GPT 反例證明 float／Number 路徑在大數時會比後端多 NT$1。這條測試
+     * 釘住「頁面真的送出 mills 字串」與「頁面自己不再做乘法」。
+     */
+    public function test_the_page_ships_integer_mills_and_does_not_multiply_itself(): void
+    {
+        $html = $this->get('/product/ig買粉絲/')->assertOk()->getContent();
+
+        // mills 以字串傳遞(JSON 內為 "unit_price_mills":"7000" 形狀)。
+        $this->assertMatchesRegularExpression(
+            '/unit_price_mills\\\\u0022:\\\\u0022\d+\\\\u0022/',
+            $html,
+            'bounds 必須以字串傳遞 unit_price_mills',
+        );
+
+        // ⛔ 頁面不得自己算金額:初版的 Number 乘法必須完全消失。
+        $this->assertStringNotContainsString('Math.round(this.b.unit_price', $html);
+        $this->assertStringNotContainsString('* 10000)', $html);
+
+        // 改為呼叫共用模組。
+        $this->assertStringContainsString('formatTotalTwd(this.b.unit_price_mills', $html);
+    }
+
+    /**
+     * ⛔ 前端模組與 `Money::total()` 必須逐位一致。
+     *
+     * 這裡用 Node 實際執行 `resources/js/quantity-total.js`(⛔ 正式程式碼本身,
+     * 不是複製品),把同一組向量的結果與 PHP 比對。GPT 的大數反例與兩個
+     * 64-bit 溢位邊界都在其中。
+     *
+     * ⛔ 找不到 node 就明確 skip 並說明,不假裝通過。
+     */
+    public function test_the_javascript_module_agrees_with_money_total(): void
+    {
+        exec('node --version 2>&1', $probe, $probeExit);
+
+        if ($probeExit !== 0) {
+            $this->markTestSkipped('⛔ 找不到 node，無法執行前端模組交叉比對。');
+        }
+
+        $vectors = [
+            ['5900', '100'], ['5900', '101'], ['5900', '1000'],
+            ['14999', '1'], ['15000', '1'], ['25000', '1'], ['45000', '1'],
+            ['5', '1000'], ['15', '1000'],
+            // GPT 反例:餘數 4865 必須捨去。
+            ['1000000005', '4000000973'],
+            ['1000000005', '4000000000'],
+            // 超過 PHP 64-bit → 兩邊都必須拒絕。
+            ['999999999999', '4294967295'],
+            ['9223372036854775807', '1'],
+            ['9223372036854775807', '2'],
+            // 四捨五入為 0、零數量、零單價。
+            ['1', '1'], ['5900', '0'], ['0', '100'],
+        ];
+
+        $php = [];
+        foreach ($vectors as [$mills, $quantity]) {
+            try {
+                $php[] = Money::total((int) $mills, (int) $quantity);
+            } catch (UnsellablePriceException) {
+                $php[] = null;
+            }
+        }
+
+        $script = base_path('storage/framework/testing/xcheck-'.uniqid().'.mjs');
+        $module = str_replace('\\', '/', base_path('resources/js/quantity-total.js'));
+        $json = json_encode($vectors);
+
+        file_put_contents($script, <<<JS
+            import { totalTwd } from 'file:///{$module}';
+            const cases = {$json};
+            console.log(JSON.stringify(cases.map(([m, q]) => {
+                const t = totalTwd(m, q);
+                return t === null ? null : t.toString();
+            })));
+            JS);
+
+        $output = [];
+        exec('node '.escapeshellarg($script).' 2>&1', $output, $exit);
+        @unlink($script);
+
+        $this->assertSame(0, $exit, '執行前端模組失敗：'.implode("\n", $output));
+
+        $js = json_decode(implode('', $output), true);
+        $this->assertIsArray($js, '前端模組輸出無法解析：'.implode("\n", $output));
+
+        foreach ($vectors as $i => [$mills, $quantity]) {
+            $expected = $php[$i] === null ? null : (string) $php[$i];
+
+            $this->assertSame(
+                $expected,
+                $js[$i],
+                "mills {$mills} × 數量 {$quantity}：前端與 Money::total() 不一致",
+            );
+        }
+    }
+
     // ================================================== 3. half-up 四捨五入
 
     /** 施工單指定案例:0.59 × 100 / 101 / 1000。 */

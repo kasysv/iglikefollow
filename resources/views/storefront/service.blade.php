@@ -8,6 +8,15 @@
         'min' => (int) $v->min_quantity,
         'max' => (int) $v->max_quantity,
         'default' => (int) $v->default_quantity,
+        /*
+         * ⛔ R1:金額計算的來源是「整數 mills 的十進位字串」,不是 float。
+         *
+         * GPT 反例:mills 1,000,000,005 × 數量 4,000,000,973 的乘積超過
+         * Number.MAX_SAFE_INTEGER,用 float／Number 算會比後端多 NT$1。
+         * 字串進、BigInt 算,才能與 PHP `Money::total()` 逐位一致。
+         */
+        'unit_price_mills' => (string) $v->unitPriceMills(),
+        // ⛔ 這個只給畫面顯示單價用,絕不參與金額計算。
         'unit_price' => (float) $v->unit_price,
         // 服務項目簡介同時給 Alpine 切換用；⛔ 仍以下方 server-rendered 版本為主。
         'label' => (string) $v->label,
@@ -88,10 +97,12 @@
     {{-- 服務頁只管選品：服務項目、數量與即時試算。
          付款方式與電子發票狀態已移到 /checkout，⛔ 這裡不再持有。
 
-         estimate() 用的是與伺服器同一條 half-up 規則，且同樣不讓 binary float
-         決定進位：單價先化成整數 mills（×10000 後的 Math.round 只是消掉 IEEE
-         表示誤差，不是金額的四捨五入），再用整數餘數判斷。
-         ⛔ 直接寫 Math.round(q * unit_price) 會在 .5 邊界漂移。
+         estimate() 呼叫 resources/js/quantity-total.js 的 formatTotalTwd()，
+         那份用 BigInt 做與伺服器逐位一致的 half-up，並有 Node 可執行的回歸。
+         ⛔ R1:初版在這裡自己用 Number 乘法算，GPT 反例證明乘積一旦超過
+         Number.MAX_SAFE_INTEGER 就會比伺服器多 NT$1。金額不該有第二套算法，
+         所以這裡只負責呼叫，不負責計算。
+         ⛔ 無效輸入時 formatTotalTwd 回傳 '—'，不會讓整區崩潰、也不顯示 0。
          ⛔ 這只是試算；伺服器重算的金額才是唯一真實來源。
 
          valid：M3A 起範圍內任何正整數皆可，⛔ 不再檢查倍數。
@@ -105,11 +116,9 @@
             get b() { return this.bounds[this.variant] },
             selectVariant(key) { this.variant = key; this.quantity = this.bounds[key].default },
             get estimate() {
-                const q = Number(this.quantity) || 0
-                const mills = Math.round(this.b.unit_price * 10000) * q
-                const whole = Math.floor(mills / 10000)
-                const remainder = mills - whole * 10000
-                return (remainder * 2 >= 10000 ? whole + 1 : whole).toLocaleString()
+                return window.formatTotalTwd
+                    ? window.formatTotalTwd(this.b.unit_price_mills, this.quantity, '—')
+                    : '—'
             },
             get valid() {
                 const q = Number(this.quantity)
