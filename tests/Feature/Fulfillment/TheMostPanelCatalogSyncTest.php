@@ -182,11 +182,12 @@ class TheMostPanelCatalogSyncTest extends TestCase
         $this->assertSame(0, $reads);
     }
 
+    /** ⛔ R1 之後「不支援」只剩一種：ext-curl 不存在,不再挑版本。 */
     public function test_an_unsupported_runtime_blocks_before_credential(): void
     {
         Http::fake();
         $this->withCredential();
-        $this->useCapability(TheMostPanelCurlCapability::unsupported('7.85.0', 0x075500));
+        $this->useCapability(TheMostPanelCurlCapability::unsupported());
 
         $reads = $this->countCredentialReads(function () {
             $this->assertSame('blocked_unsupported_transport_cap', $this->sync()->outcome);

@@ -37,9 +37,12 @@ class TheMostPanelReadOnlyCommandTest extends TestCase
         config()->set('integrations.themostpanel_read_only.enabled', true);
 
         /*
-         * ⛔ 本機 libcurl 7.85.0 低於 8.4.0，真實 runtime 下探針會一律拒絕。
-         * 這裡注入一個明確「支援」的 runtime 描述，才能測到其餘行為——⛔ 而不是
-         * 為了讓測試通過就放寬那道閘。
+         * ⛔ 明確描述一個支援的 runtime，而不是修改這台機器的 PHP。
+         *
+         * R1 之後傳輸中止由 bounded sink 的 short write 執行，不挑 libcurl
+         * 版本；本機 7.85.0 與 staging 實測的 7.68.0 都 supported。這裡注入
+         * 一個明確「支援」的 runtime 描述，才能測到其餘行為——⛔ 而不是為了
+         * 讓測試通過就放寬那道閘。
          */
         $this->app->bind(
             TheMostPanelReadOnlyProbe::class,

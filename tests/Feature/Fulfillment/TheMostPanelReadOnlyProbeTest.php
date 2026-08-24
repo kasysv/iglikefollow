@@ -55,9 +55,10 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         /*
          * ⛔ 明確描述一個支援的 runtime，而不是修改這台機器的 PHP。
          *
-         * 本機 libcurl 是 7.85.0（低於 8.4.0），真實 runtime 下探針會正確地
-         * 一律拒絕。要測其餘所有行為，必須把「runtime 支援與否」變成可注入的
-         * 條件——而不是為了讓測試通過就放寬那道閘。
+         * R1 之後傳輸中止由 bounded sink 的 short write 執行，不挑 libcurl
+         * 版本；本機 7.85.0 與 staging 實測的 7.68.0 都 supported。要測其餘
+         * 所有行為，仍把「runtime 支援與否」變成可注入的條件——而不是為了讓
+         * 測試通過就放寬那道閘。
          */
         $this->useCapability(TheMostPanelCurlCapability::supported());
     }
@@ -791,19 +792,19 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         $this->assertTrue($this->probe()->probe(TheMostPanelReadOnlyAction::Services)->isObserved());
     }
 
-    public function test_the_capability_threshold_is_libcurl_8_4_0(): void
+    /**
+     * ⛔ `CURLOPT_MAXFILESIZE_LARGE` 只是額外保險層，不是能力門檻。
+     *
+     * 8.4.0 之前該選項不套用到進行中的傳輸；但 R1 之後主要防線是 bounded
+     * sink 的 short write，那不看這個常數也不看版本。此測試只釘住「常數是
+     * 否存在」不再是任何判定依據——不得再寫回任何「8.4 是門檻」的斷言。
+     */
+    public function test_the_maxfilesize_constant_presence_is_not_the_capability_gate(): void
     {
-        // 官方文件：8.4.0 之前 max-filesize 不套用到進行中的傳輸。
-        $this->assertFalse(TheMostPanelCurlCapability::unsupported('8.3.9', 0x080309)->supportsOngoingTransferCap());
+        $this->assertTrue(TheMostPanelCurlCapability::supported('8.3.9')->supportsOngoingTransferCap());
         $this->assertTrue(TheMostPanelCurlCapability::supported('8.4.0')->supportsOngoingTransferCap());
     }
 
-    /**
-     * ⛔ 常數存在不等於它會生效。
-     *
-     * 7.85.0 也定義了 `CURLOPT_MAXFILESIZE_LARGE`，只是不會套用到進行中的
-     * 傳輸——所以版本必須另外檢查，不能只看常數。
-     */
     /**
      * ⛔ R1 反轉:short write 不挑版本,舊版 libcurl 也支援。
      *

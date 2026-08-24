@@ -27,8 +27,6 @@ class TheMostPanelCurlCapability
 {
     public function __construct(
         private readonly bool $extensionLoaded,
-        private readonly bool $maxFileSizeOptionExists,
-        private readonly int $versionNumber,
         private readonly string $versionString,
     ) {}
 
@@ -36,15 +34,13 @@ class TheMostPanelCurlCapability
     public static function fromRuntime(): self
     {
         if (! extension_loaded('curl') || ! function_exists('curl_version')) {
-            return new self(false, false, 0, 'unavailable');
+            return new self(false, 'unavailable');
         }
 
         $version = curl_version() ?: [];
 
         return new self(
             extensionLoaded: true,
-            maxFileSizeOptionExists: defined('CURLOPT_MAXFILESIZE_LARGE'),
-            versionNumber: (int) ($version['version_number'] ?? 0),
             versionString: (string) ($version['version'] ?? 'unknown'),
         );
     }
@@ -52,7 +48,7 @@ class TheMostPanelCurlCapability
     /** 測試用：明確描述一個具備 ext-curl 的 runtime(如 staging 的 7.68.0)。 */
     public static function supported(string $versionString = '7.68.0'): self
     {
-        return new self(true, true, 0x074400, $versionString);
+        return new self(true, $versionString);
     }
 
     /**
@@ -63,7 +59,7 @@ class TheMostPanelCurlCapability
      */
     public static function unsupported(): self
     {
-        return new self(false, false, 0, 'unavailable');
+        return new self(false, 'unavailable');
     }
 
     /**
