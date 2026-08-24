@@ -74,6 +74,22 @@ class EcpayPaymentGateway implements PaymentGateway
             return $this->giveUp($attempt);
         }
 
+        /*
+         * ⛔ MerchantTradeNo 必須是 1–20 字的純英數字,簽章與輸出 form 之前
+         * 再驗一次。
+         *
+         * 這個值就是 `$attempt->reference`。新的 reference 由
+         * `PaymentAttempt::newReference()` 產生,一定合法;這裡擋的是 legacy
+         * (`PAY-…` 帶連字號,staging 已被綠界 `10200031` 實際拒絕)或任何
+         * 人工/異常寫入的資料。把不合法的值簽了章送出去,結果是客人到了
+         * 綠界頁面才看到一個看不懂的錯誤——fail closed 在這裡,走同一個
+         * `giveUp()`:確定沒有付款 session、收斂 failed、釋放 claim,客人
+         * 可以立即重試(新 checkout 會拿到合法的新 reference)。
+         */
+        if (! self::isValidMerchantTradeNo($attempt->reference)) {
+            return $this->giveUp($attempt);
+        }
+
         $fields = $this->fieldsFor($attempt, (string) $setting->identifier);
 
         // 簽章在最後一步加上，⛔ 涵蓋所有其他欄位。
@@ -88,6 +104,18 @@ class EcpayPaymentGateway implements PaymentGateway
         $this->markPending->handle($attempt);
 
         return PaymentInitiation::formPost($endpoint, $fields);
+    }
+
+    /**
+     * 綠界 AioCheckOut V5 的 `MerchantTradeNo` 規格:1–20 字、純英數字。
+     *
+     * ⛔ 整條 regex 錨定 `\A…\z`,不用 `^…$`(後者容忍結尾換行)。官方規格
+     * 是 String(20)、僅允許數字與英文字母;staging 實測連字號會被
+     * `10200031` 拒絕——被拒代表該次根本沒有建立綠界交易。
+     */
+    public static function isValidMerchantTradeNo(string $reference): bool
+    {
+        return preg_match('/\A[A-Za-z0-9]{1,20}\z/', $reference) === 1;
     }
 
     /**
