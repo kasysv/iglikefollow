@@ -33,6 +33,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -52,6 +53,7 @@ use Tests\TestCase;
  */
 class InvoiceConcurrencyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private FakeInvoiceGateway $gateway;
@@ -61,9 +63,9 @@ class InvoiceConcurrencyTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
 
         // B2：發票 sandbox 總開關預設關閉，測試需明確開啟。
-        config()->set('integrations.invoice.sandbox_enabled', true);
 
         $this->gateway = new FakeInvoiceGateway;
         $this->app->instance(InvoiceGateway::class, $this->gateway);
@@ -82,7 +84,7 @@ class InvoiceConcurrencyTest extends TestCase
     private function configuredGateway(): void
     {
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production)
             ->configured()->create();
 
         DB::table('integration_settings')->where('id', $setting->id)->update(['is_enabled' => true]);
@@ -271,7 +273,7 @@ class InvoiceConcurrencyTest extends TestCase
 
         // 先建立一組原值。
         app(UpdateIntegrationCredentials::class)->handle(
-            IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox,
+            IntegrationProvider::LinePay, IntegrationEnvironment::Production,
             'channel-1', ['ChannelSecret' => 'original-secret']
         );
 
@@ -286,7 +288,7 @@ class InvoiceConcurrencyTest extends TestCase
 
         try {
             app(UpdateIntegrationCredentials::class)->handle(
-                IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox,
+                IntegrationProvider::LinePay, IntegrationEnvironment::Production,
                 'channel-2', ['ChannelSecret' => 'rotated-secret']
             );
             $this->fail('稽核失敗時應該整筆 rollback。');
@@ -306,7 +308,7 @@ class InvoiceConcurrencyTest extends TestCase
         $this->actingAs(User::factory()->create(['role' => 'owner', 'is_active' => true]));
 
         app(UpdateIntegrationCredentials::class)->handle(
-            IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox,
+            IntegrationProvider::LinePay, IntegrationEnvironment::Production,
             'channel-1', ['ChannelSecret' => 'a-secret']
         );
 

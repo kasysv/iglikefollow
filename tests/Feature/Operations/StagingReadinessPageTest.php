@@ -59,7 +59,12 @@ class StagingReadinessPageTest extends TestCase
         $response->assertHeader('X-Robots-Tag', 'noindex, nofollow');
         // 狀態欄位存在。
         $response->assertSee('APP_ENV');
-        $response->assertSee('Sandbox 付款能力');
+        // ⛔ M4C：逐項回報三個 Owner 通道，不再有一個「付款能力」總結。
+        // 一個布林值答不出 Owner 需要知道的事：哪一個開著、哪一個還缺欄位。
+        $response->assertSee('綠界付款通道');
+        $response->assertSee('LINE Pay 通道');
+        $response->assertSee('綠界發票通道');
+        $response->assertSee('此環境可對外送出交易請求');
         $response->assertSee('TheMostPanel staging 派單能力');
         $response->assertSee('履約狀態輪詢');
         $response->assertSee('credential 已填」不等於「允許連線');

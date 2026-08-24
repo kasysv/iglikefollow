@@ -6,22 +6,27 @@ use App\Actions\Orders\MarkPaymentPending;
 use App\Actions\Payments\FailPaymentInitiation;
 use App\Contracts\PaymentGateway;
 use App\DTO\PaymentInitiation;
-use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\PaymentFailureReason;
 use App\Models\IntegrationSetting;
 use App\Models\PaymentAttempt;
+use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
 
 /**
- * ECPay AioCheckOut V5, stage environment.
+ * ECPay AioCheckOut V5.
  *
  * ECPay is a browser hand-off: the server builds a fixed set of fields, signs
  * them, and the customer's browser POSTs them to ECPay's cashier. The result
  * comes back later, server to server, at the ReturnURL — ⛔ the browser's own
  * return proves nothing and is treated as decoration.
  *
- * The endpoint is read from config, never from the database. A URL an admin
- * can type is a URL this server would post a signed payload to.
+ * The endpoint comes from a version-controlled allowlist, never from the
+ * database. A URL an admin can type is a URL this server would post a signed
+ * payload to.
+ *
+ * ⛔ M4C:讀 Owner 在後台維護的唯一一套正式 credential。sandbox row 就算存在
+ * 也不會被讀到——「跟著環境選 row」只會在某天變成用測試金鑰收真錢,或反過來。
  */
 class EcpayPaymentGateway implements PaymentGateway
 {
@@ -37,12 +42,6 @@ class EcpayPaymentGateway implements PaymentGateway
 
     public function initiate(PaymentAttempt $attempt): PaymentInitiation
     {
-        // ⛔ 同樣的檢查放在 adapter 自己身上：有人直接從 container 取出這個
-        // 類別時，registry 那道防線根本不會被執行到。
-        if (! SandboxGuard::enabled()) {
-            return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
-        }
-
         /*
          * ⛔ 以下每一種情況都代表「確定沒有付款 session」，所以必須把已經
          * claim 的 attempt 收斂成 failed。
@@ -50,6 +49,10 @@ class EcpayPaymentGateway implements PaymentGateway
          * 只回一個 failed initiation 是不夠的：attempt 會留在 pending，而
          * resolver 正確地擋下任何 pending，於是這張訂單再也付不了款——連換
          * 一家 provider 都不行。claim 一旦取得，就有責任放掉。
+         *
+         * ⛔ 這裡沒有一個獨立的「總開關」檢查:通道是否可用已經包含在
+         * `setting()` 裡(環境＋Owner 開關＋credential 齊全)。分成兩個檢查
+         * 就是兩份會各自漂移的規則。
          */
         $setting = $this->setting();
 
@@ -57,9 +60,10 @@ class EcpayPaymentGateway implements PaymentGateway
             return $this->giveUp($attempt);
         }
 
-        $endpoint = (string) config('integrations.endpoints.ecpay_payment.sandbox');
+        // ⛔ 端點必須與版本控制中的白名單完全一致,否則一個位元組都不送出。
+        $endpoint = ProviderEndpoints::ecpayPayment();
 
-        if ($endpoint === '') {
+        if ($endpoint === null) {
             return $this->giveUp($attempt);
         }
 
@@ -130,14 +134,14 @@ class EcpayPaymentGateway implements PaymentGateway
         ];
     }
 
-    /** 目前僅 sandbox；⛔ production 需另一次明確批准。 */
+    /**
+     * Owner 維護的唯一一套正式設定;⛔ 環境或開關任一不成立即 null。
+     *
+     * 這一個方法同時涵蓋:這台機器可以外呼、Owner 已開啟綠界付款、
+     * MerchantID 與兩個 secret 都齊全。任一不成立就沒有付款 session。
+     */
     private function setting(): ?IntegrationSetting
     {
-        $setting = IntegrationSetting::query()
-            ->where('provider', IntegrationProvider::EcpayPayment)
-            ->where('environment', IntegrationEnvironment::Sandbox)
-            ->first();
-
-        return $setting?->isUsable() ? $setting : null;
+        return LiveIntegration::setting(IntegrationProvider::EcpayPayment);
     }
 }

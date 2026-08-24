@@ -13,49 +13,51 @@
 | 破口——這台伺服器會拿著憑證去連任何有人填進去的主機。放在版本控制裡，
 | 改動才會被 review。
 |
-| ⛔ 目前所有端點都留空：本輪禁止任何外部呼叫，M3B-B 才會依官方文件填入。
-| TheMostPanel 沒有已證實的 sandbox，⛔ 不得為了「看起來完整」而杜撰一個。
+| ⛔ M4C 之後,「這個通道要不要收款」不再由這個檔案或 .env 決定,而是由
+| Owner 在後台切換 production `integration_settings.is_enabled`。端點白名單
+| 仍然留在這裡:它是安全邊界,不是營運開關。
 |
 */
 
 return [
 
     /*
-     | 每個 provider 在各環境的 base endpoint。
-     | 空字串代表「尚未確認」，adapter 必須 fail closed，不得猜測。
+     | 每個 provider 的正式端點。
+     |
+     | ⛔ 真實字串必須與 App\Services\Integrations\ProviderEndpoints 的常數
+     | 完全一致;adapter 一律透過那個類別取值,任何不一致都 fail closed。
+     | 兩處並存是刻意的:設定被竄改時,adapter 在送出任何東西之前就停下來。
      */
     'endpoints' => [
-        // 綠界 AioCheckOut V5 stage（2026-08-16 核對官方文件）。
-        // ⛔ production 仍留空：啟用正式收款需要另一次明確批准。
+        // 綠界全方位金流 V5(2026-08-24 核對官方文件 developers.ecpay.com.tw/16449)。
         'ecpay_payment' => [
             'sandbox' => 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5',
-            'production' => '',
+            'production' => 'https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5',
         ],
-        // LINE Pay Online API v4 sandbox base（2026-08-16 核對官方文件）。
+        // LINE Pay Online API v4 base(2026-08-24 核對 developers-pay.line.me/online-api-v4)。
         'line_pay' => [
             'sandbox' => 'https://sandbox-api-pay.line.me',
-            'production' => '',
+            'production' => 'https://api-pay.line.me',
         ],
-        // 綠界 B2C 電子發票 stage（2026-08-17 核對官方文件）。
-        // ⛔ production 仍留空：正式開立發票需要另一次明確批准。
+        // 綠界 B2C 電子發票開立(2026-08-24 核對 developers.ecpay.com.tw/22040)。
         'ecpay_invoice' => [
             'sandbox' => 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue',
-            'production' => '',
+            'production' => 'https://einvoice.ecpay.com.tw/B2CInvoice/Issue',
         ],
-        // 結果不明時的唯讀查詢端點；⛔ 只用來「確認是否已開出」，不重開。
+        // 結果不明時的唯讀查詢端點(2026-08-24 核對 developers.ecpay.com.tw/22108)。
+        // ⛔ 只用來「確認是否已開出」,不重開。
         'ecpay_invoice_query' => [
             'sandbox' => 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue',
-            'production' => '',
+            'production' => 'https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue',
         ],
         /*
-         | ⛔ 仍為空，而且是刻意的。
+         | ⛔ 仍為空,而且是刻意的。
          |
-         | 這一組 `endpoints` 代表「可用來執行交易的端點」。TheMostPanel 的
-         | 派單（`add`）尚未獲准，所以這裡不得有值——既有的安全測試也以
-         | 「所有 production 端點皆為空」作為不變式。
+         | TheMostPanel 的派單(`add`)不在 M4C 範圍;正式派單需要另一次明確
+         | 批准,而且目前沒有可用的 HTTP client。
          |
-         | 唯讀探針用的位址另放在下方 `themostpanel_read_only.endpoint`，
-         | 與交易端點分開，避免有人把「可以查詢」誤讀成「可以下單」。
+         | 唯讀探針用的位址另放在下方 `themostpanel_read_only.endpoint`,
+         | 與交易端點分開,避免有人把「可以查詢」誤讀成「可以下單」。
          */
         'themostpanel' => [
             /*
@@ -70,26 +72,20 @@ return [
     ],
 
     /*
-     | 允許被啟用的 provider／environment 組合。
+     | ⛔ DEPRECATED — 付款／發票已不再讀這一組。
      |
-     | ⛔ 本輪全部為 false。啟用正式交易需要另一次明確批准，而不是有人在後台
-     | 按一個開關；把它放在程式碼裡，才不會被偽造的 Livewire payload 打開。
+     | 這裡曾是「哪些 provider／environment 可以被啟用」的批准清單。Owner 於
+     | 2026-08-24 明確改變方向:實際網站只有一套正式設定,而開關屬於 Owner 的
+     | 後台,不是 code。留著一個能否決 Owner 的清單,結果就是 Owner 在後台按了
+     | 開關卻沒有反應,然後有人回來改 code——那正是這一輪要消除的東西。
+     |
+     | ⛔ 只剩 themostpanel 仍受此清單約束:自動派單不在 M4C 範圍,它的批准
+     | 仍然必須是一次 reviewed 的 code 變更。
+     |
+     | ⛔ 綠界付款／LINE Pay／綠界發票的鍵已移除,不是設成 true。留著 true 會
+     | 讓人以為必須先在這裡開一次;移除才能證明 runtime 真的沒有再讀它。
      */
     'enablable' => [
-        // sandbox 付款測試已獲批准，Owner 可在後台啟用這兩組設定。
-        // ⛔ production 仍為 false：正式收款需要另一次明確批准。
-        'ecpay_payment' => [
-            'sandbox' => true,
-            'production' => false,
-        ],
-        'line_pay' => [
-            'sandbox' => true,
-            'production' => false,
-        ],
-        'ecpay_invoice' => [
-            'sandbox' => false,
-            'production' => false,
-        ],
         // ⛔ 仍為 false：這控制的是「自動派單」，與下方的唯讀探針無關。
         'themostpanel' => [
             'production' => false,
@@ -137,34 +133,22 @@ return [
     ],
 
     /*
-     | 發票 gateway 綁定。local／testing 一律使用 Fake，
-     | ⛔ 其他環境沒有明確 adapter 就 fail closed，不得默默降級成 Fake。
+     | ⛔ DEPRECATED／IGNORED — 付款與發票的營運開關已移至後台。
+     |
+     | `INVOICE_GATEWAY`、`INVOICE_SANDBOX_ENABLED`、`PAYMENTS_SANDBOX_ENABLED`
+     | 這三個 env 旗標在 M4C 之後不再參與任何 runtime 決定。唯一的營運事實是
+     | production `integration_settings.is_enabled`(見
+     | App\Services\Integrations\LiveIntegration)。
+     |
+     | ⛔ 保留這兩個鍵只為相容既有部署的 .env 檔不致噴錯,值一律被忽略;
+     | 已有測試證明把它們設成 false 也不會蓋過 Owner 的後台開關。
+     | ⛔ 不要在新程式碼裡讀它們。
      */
     'invoice' => [
         'gateway' => env('INVOICE_GATEWAY', 'fake'),
-
-        /*
-         | Sandbox 開立發票總開關。
-         |
-         | ⛔ 預設關閉。關閉時 adapter 一律 fail closed——不送出任何請求，也不
-         | 退回 Fake。填了 credential 也不等於開始開立發票。
-         |
-         | ⛔ production 永遠不受這個開關影響：InvoiceSandboxGuard 另外硬性
-         | 拒絕 production 環境。
-         */
         'sandbox_enabled' => env('INVOICE_SANDBOX_ENABLED', false),
     ],
 
-    /*
-     | Sandbox 付款流程總開關。
-     |
-     | ⛔ 預設關閉。關閉時 checkout 仍走 local mock，付款 adapter 一律 fail
-     | closed——不會退回 Fake，也不會連到任何 endpoint。要實際測試 sandbox
-     | 需要在環境中明確打開，並且已在後台填入 sandbox credential。
-     |
-     | ⛔ production 永遠不受這個開關影響：PaymentGatewayRegistry 另外硬性
-     | 拒絕 production 環境。
-     */
     'payments' => [
         'sandbox_enabled' => env('PAYMENTS_SANDBOX_ENABLED', false),
     ],

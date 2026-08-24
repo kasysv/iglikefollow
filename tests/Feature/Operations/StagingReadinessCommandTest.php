@@ -9,11 +9,11 @@ use App\Models\FulfillmentMapping;
 use App\Models\IntegrationSetting;
 use App\Models\ProviderService;
 use App\Models\ServiceVariant;
-use App\Services\Invoices\InvoiceSandboxGuard;
-use App\Services\Payments\SandboxGuard;
+use App\Services\Integrations\LiveIntegration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -25,6 +25,7 @@ use Tests\TestCase;
  */
 class StagingReadinessCommandTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private const KEY_MARKER = 'FAKE-READINESS-KEY-MARKER-880022';
@@ -95,37 +96,109 @@ class StagingReadinessCommandTest extends TestCase
     }
 
     /**
-     * ⛔ R1(P0-1)cross-seam:readiness 的付款/發票狀態必須與真正的
-     * runtime guards 同源同值——同一 flag matrix 下逐格對照。
+     * ⛔ cross-seam：readiness 的通道狀態必須與真正的 runtime 判斷同源同值。
+     *
+     * readiness 若自己算一份，就會出現 Owner 看到「已啟用」而 adapter 其實拒絕
+     * ——或反過來。那讓 readiness 從診斷工具變成一個誤導來源。
+     *
+     * ⛔ M4C：逐個通道對照，矩陣改成「credential 齊全 × Owner 開關」。
      */
-    public function test_payment_and_invoice_readiness_match_the_runtime_guards(): void
+    public function test_channel_readiness_matches_the_runtime_truth(): void
     {
         $this->healthyStagingConfig();
 
-        foreach ([[false, false], [true, false], [false, true], [true, true]] as [$payment, $invoice]) {
-            config()->set('integrations.payments.sandbox_enabled', $payment);
-            config()->set('integrations.invoice.sandbox_enabled', $invoice);
+        $matrix = [
+            [IntegrationProvider::EcpayPayment, 'channel_ecpay_payment', '3000001'],
+            [IntegrationProvider::LinePay, 'channel_line_pay', 'channel-0001'],
+            [IntegrationProvider::EcpayInvoice, 'channel_ecpay_invoice', '3000001'],
+        ];
 
-            $report = StagingReadinessCommand::report();
-            $checks = collect($report['checks']);
+        foreach ($matrix as [$provider, $key, $identifier]) {
+            // 1. 完全沒有設定。
+            $checks = collect(StagingReadinessCommand::report()['checks']);
+            $this->assertSame('blocked', $checks->firstWhere('key', $key)['status'], $key.' 未設定');
+            $this->assertStringContainsString('live=no', $checks->firstWhere('key', $key)['value']);
 
-            $this->assertSame(
-                SandboxGuard::enabled() ? 'ok' : 'blocked',
-                $checks->firstWhere('key', 'sandbox_payment')['status'],
-            );
-            $this->assertSame(
-                InvoiceSandboxGuard::enabled() ? 'ok' : 'blocked',
-                $checks->firstWhere('key', 'sandbox_invoice')['status'],
-            );
+            // 2. credential 齊全但 Owner 沒開。
+            $this->configureChannelWithoutEnabling($provider, $identifier);
+            $value = collect(StagingReadinessCommand::report()['checks'])->firstWhere('key', $key);
+            $this->assertSame('blocked', $value['status'], $key.' 未啟用');
+            $this->assertStringContainsString('credential=complete', $value['value']);
+            $this->assertStringContainsString('owner_switch=off', $value['value']);
+
+            // 3. Owner 開了。
+            $this->enableChannel($provider, $identifier);
+            $value = collect(StagingReadinessCommand::report()['checks'])->firstWhere('key', $key);
+            $this->assertSame('ok', $value['status'], $key.' 已啟用');
+            $this->assertStringContainsString('live=yes', $value['value']);
+
+            // ⛔ 與 runtime 同源：readiness 說可用，adapter 就必須也說可用。
+            $this->assertTrue(LiveIntegration::availableToCustomer($provider), $key.' 與 runtime 不一致');
+        }
+    }
+
+    /**
+     * ⛔ 本機環境：通道就算全開，readiness 也必須說「不會對外送出」。
+     *
+     * 這一格最容易被寫錯成「開關開了就是 ok」，而那會讓人在開發機器上看到
+     * 一份說自己正在收款的 readiness 報告。
+     */
+    public function test_a_local_machine_reports_outbound_as_blocked(): void
+    {
+        $this->healthyStagingConfig();
+        $this->enableAllChannels();
+
+        $this->app['env'] = 'local';
+
+        $checks = collect(StagingReadinessCommand::report()['checks']);
+
+        $this->assertSame('blocked', $checks->firstWhere('key', 'outbound_allowed')['status']);
+
+        foreach (['channel_ecpay_payment', 'channel_line_pay', 'channel_ecpay_invoice'] as $key) {
+            $value = $checks->firstWhere('key', $key);
+            $this->assertSame('blocked', $value['status'], $key);
+            // ⛔ credential 齊全、開關也開著，但 live=no——三件事分開回報。
+            $this->assertStringContainsString('owner_switch=on', $value['value']);
+            $this->assertStringContainsString('live=no', $value['value']);
         }
 
-        // production:guard hard stop → readiness 同步為 not enabled。
-        $this->app['env'] = 'production';
-        config()->set('integrations.payments.sandbox_enabled', true);
-        $this->assertFalse(SandboxGuard::enabled());
-        $report = StagingReadinessCommand::report();
-        $this->assertSame('not enabled', collect($report['checks'])->firstWhere('key', 'sandbox_payment')['value']);
         $this->app['env'] = 'staging';
+    }
+
+    /**
+     * ⛔ 已 deprecated 的 sandbox 旗標不得再影響 readiness。
+     *
+     * 這是 Owner 那次「付款方式目前無法使用」的根因；釘住它，同一個問題就不會
+     * 換個地方再發生一次。
+     */
+    public function test_the_deprecated_flags_do_not_affect_readiness(): void
+    {
+        $this->healthyStagingConfig();
+        $this->enableAllChannels();
+
+        config()->set('integrations.payments.sandbox_enabled', false);
+        config()->set('integrations.invoice.sandbox_enabled', false);
+
+        $checks = collect(StagingReadinessCommand::report()['checks']);
+
+        foreach (['channel_ecpay_payment', 'channel_line_pay', 'channel_ecpay_invoice'] as $key) {
+            $this->assertSame('ok', $checks->firstWhere('key', $key)['status'], $key);
+        }
+    }
+
+    /** ⛔ 端點必須恰好是官方正式網址；不符即 blocker。 */
+    public function test_a_tampered_endpoint_is_reported_as_a_blocker(): void
+    {
+        $this->healthyStagingConfig();
+
+        $checks = collect(StagingReadinessCommand::report()['checks']);
+        $this->assertSame('ok', $checks->firstWhere('key', 'endpoint_ecpay_payment')['status']);
+
+        config()->set('integrations.endpoints.ecpay_payment.production', 'https://evil.example.com/pay');
+
+        $checks = collect(StagingReadinessCommand::report()['checks']);
+        $this->assertSame('blocker', $checks->firstWhere('key', 'endpoint_ecpay_payment')['status']);
+        $this->assertSame('unexpected', $checks->firstWhere('key', 'endpoint_ecpay_payment')['value']);
     }
 
     /** R1(3.4):mapping readiness 誠實呈現目前真相,strict 時為 blocker。 */

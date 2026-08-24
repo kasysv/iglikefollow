@@ -212,29 +212,31 @@ class AppServiceProvider extends ServiceProvider
      * back to something that issues nothing — a site that believes it is
      * invoicing while nothing reaches the tax authority is worse than one that
      * refuses to start.
+     *
+     * ⛔ M4C:不再讀 `INVOICE_GATEWAY`。要不要開發票由 Owner 在後台切換,
+     * 而「用哪一個 adapter」是這裡的技術決定,兩者不該由同一個 env 變數混著管。
      */
     private function bindInvoiceGateway(): void
     {
         $this->app->singleton(InvoiceGateway::class, function () {
             /*
-             * ⛔ Production is refused before anything else is considered.
+             * Owner 已開啟發票通道且設定齊全時,使用真實的綠界 adapter。
              *
-             * Not "no adapter is configured yet" — a hard refusal, so that
-             * neither INVOICE_GATEWAY nor a forged config can start issuing
-             * real tax documents. Enabling that needs its own approval, not a
-             * changed environment variable.
+             * ⛔ 這一步在環境判斷之前:`InvoiceSandboxGuard::setting()` 本身
+             * 已經要求環境可以外呼(staging／production),所以 local／testing
+             * 永遠走不到這裡——不需要另一個會與它漂移的環境檢查。
              */
-            if ($this->app->environment('production')) {
-                throw new RuntimeException(
-                    '⛔ production 尚未獲准開立電子發票；本輪只支援 sandbox。'
-                );
-            }
-
-            // sandbox 開關開啟且設定齊全時，才使用真實的綠界 stage adapter。
             if (InvoiceSandboxGuard::setting() !== null) {
                 return $this->app->make(EcpayInvoiceGateway::class);
             }
 
+            /*
+             * ⛔ 只有 local／testing 可以用 Fake。
+             *
+             * staging／production 在沒有可用設定時必須拋出,不得默默降級成
+             * 一個什麼都不開的 Fake:一個以為自己在開發票、實際上什麼都沒送到
+             * 財政部的網站,比一個明白拒絕啟動的網站糟得多。
+             */
             if ($this->app->environment('local', 'testing')) {
                 return new FakeInvoiceGateway;
             }

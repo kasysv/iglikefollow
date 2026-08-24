@@ -31,10 +31,26 @@ class StartPaymentController extends Controller
     public function store(CheckoutRequest $request): View|RedirectResponse
     {
         $validated = $request->validated();
+
+        /*
+         * ⛔ 後端重新驗證這個 provider 現在真的可用,不信任前端送來的
+         * radio 或 hidden 欄位:表單上看不到的選項,照樣可以用一份手寫的
+         * POST 送進來。
+         *
+         * `for()` 讀的是與結帳頁完全相同的判斷(`availableToCustomer()`),
+         * ⛔ 不是一份近似的檢查——兩份規則就是兩份會各自漂移的規則。
+         */
         $gateway = $this->registry->for($validated['payment']);
 
         if ($gateway === null) {
-            // ⛔ 沒開啟或沒有可用憑證就誠實擋下，不退回 Fake 假裝成功。
+            /*
+             * ⛔ 誠實擋下，而且在建立任何訂單之前。
+             *
+             * 順序是行為的一部分：先建單再回錯誤，會在資料庫留下一張永遠不會
+             * 被付款的訂單，而後台看起來像有人下了單。
+             *
+             * ⛔ 不退回 Fake 假裝成功。
+             */
             return redirect()->route('checkout')
                 ->withErrors(['payment' => '這個付款方式目前無法使用，請稍後再試或改選其他方式。']);
         }

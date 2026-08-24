@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -44,6 +45,7 @@ use Tests\TestCase;
  */
 class InvoiceLifecycleTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private FakeInvoiceGateway $gateway;
@@ -54,9 +56,9 @@ class InvoiceLifecycleTest extends TestCase
 
         // ⛔ 這一輪不得有任何外部呼叫。
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
 
         // B2：發票 sandbox 總開關預設關閉，測試需明確開啟。
-        config()->set('integrations.invoice.sandbox_enabled', true);
 
         $this->gateway = new FakeInvoiceGateway;
         $this->app->instance(InvoiceGateway::class, $this->gateway);
@@ -77,7 +79,7 @@ class InvoiceLifecycleTest extends TestCase
     private function configureInvoiceGateway(): IntegrationSetting
     {
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production)
             ->configured()->create();
 
         // 啟用受 config allowlist 管制，測試中直接寫 DB 模擬「已獲批准啟用」。
@@ -245,7 +247,7 @@ class InvoiceLifecycleTest extends TestCase
     public function test_a_disabled_credential_leaves_the_invoice_pending_configuration(): void
     {
         IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production)
             ->configured()->create(); // is_enabled 預設 false
 
         $invoice = $this->create()->handle($this->paidOrder());

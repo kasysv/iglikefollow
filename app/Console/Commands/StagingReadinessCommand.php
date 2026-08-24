@@ -8,8 +8,8 @@ use App\Enums\IntegrationProvider;
 use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
-use App\Services\Invoices\InvoiceSandboxGuard;
-use App\Services\Payments\SandboxGuard;
+use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
 use App\Support\QuantityCompatibility;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -100,15 +100,45 @@ class StagingReadinessCommand extends Command
         $capabilityStatus = fn (bool $on): string => $on ? 'ok' : ($strict ? 'blocker' : 'blocked');
 
         /*
-         * ⛔ R1(P0-1):單一事實來源——直接問真正的 runtime guards
-         * (SandboxGuard／InvoiceSandboxGuard),與 adapter 完全同源,
-         * production hard stop 也一併繼承。不存在第二套 alias flags。
+         * ⛔ M4C:逐項回報三個 Owner 通道,不再有一個「付款能力」總結。
+         *
+         * 一個布林值答不出 Owner 真正需要知道的事:哪一個通道開著、哪一個
+         * credential 還缺欄位、以及這台機器到底會不會對外送出請求。
+         *
+         * ⛔ 單一事實來源:直接問 `LiveIntegration`,與 adapter 完全同源;
+         * 不讀已 deprecated 的 sandbox env 旗標,也沒有第二套 alias flags。
          */
-        $sandboxPayment = SandboxGuard::enabled();
-        $checks[] = self::check('sandbox_payment', 'Sandbox 付款能力', $sandboxPayment ? 'enabled' : 'not enabled', $capabilityStatus($sandboxPayment));
+        $outbound = LiveIntegration::outboundAllowed();
+        $checks[] = self::check(
+            'outbound_allowed',
+            '此環境可對外送出交易請求',
+            $outbound ? 'allowed' : 'blocked(local/testing)',
+            $outbound ? 'ok' : 'blocked',
+        );
 
-        $sandboxInvoice = InvoiceSandboxGuard::enabled();
-        $checks[] = self::check('sandbox_invoice', 'Sandbox 發票能力', $sandboxInvoice ? 'enabled' : 'not enabled', $capabilityStatus($sandboxInvoice));
+        foreach ([
+            ['ecpay_payment', '綠界付款通道', IntegrationProvider::EcpayPayment],
+            ['line_pay', 'LINE Pay 通道', IntegrationProvider::LinePay],
+            ['ecpay_invoice', '綠界發票通道', IntegrationProvider::EcpayInvoice],
+        ] as [$key, $label, $provider]) {
+            [$value, $status] = self::channelReadiness($provider, $strict);
+            $checks[] = self::check('channel_'.$key, $label, $value, $status);
+        }
+
+        // ⛔ 端點必須與版本控制中的白名單完全一致;不符是部署上要修的問題。
+        foreach ([
+            ['ecpay_payment', '綠界付款端點', ProviderEndpoints::ecpayPayment()],
+            ['line_pay', 'LINE Pay API 端點', ProviderEndpoints::linePayApi()],
+            ['ecpay_invoice_issue', '綠界發票開立端點', ProviderEndpoints::ecpayInvoiceIssue()],
+            ['ecpay_invoice_query', '綠界發票查詢端點', ProviderEndpoints::ecpayInvoiceQuery()],
+        ] as [$key, $label, $resolved]) {
+            $checks[] = self::check(
+                'endpoint_'.$key,
+                $label.'(版本控制固定)',
+                $resolved !== null ? 'exact' : 'unexpected',
+                $resolved !== null ? 'ok' : 'blocker',
+            );
+        }
 
         $stagingDispatchFlag = (bool) config('fulfillment.staging.themostpanel_dispatch_enabled');
         $dispatchDriver = (string) config('fulfillment.driver');
@@ -144,12 +174,17 @@ class StagingReadinessCommand extends Command
         [$mappingValue, $mappingStatus] = self::mappingReadiness($strict);
         $checks[] = self::check('fulfillment_mappings', '可派單 mapping', $mappingValue, $mappingStatus);
 
-        // ---- credential presence(⛔ 只看存在性,不解密) ----
+        /*
+         * ---- credential presence(⛔ 只看存在性,不解密) ----
+         *
+         * ⛔ M4C:全部改看 production 那一列。runtime 只讀它,所以回報 sandbox
+         * 列的狀態等於回報一個不影響任何行為的數字。
+         */
         foreach ([
-            ['ecpay_payment_sandbox', '綠界付款(sandbox)credential', IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox],
-            ['line_pay_sandbox', 'LINE Pay(sandbox)credential', IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox],
-            ['ecpay_invoice_sandbox', '綠界發票(sandbox)credential', IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox],
-            ['themostpanel_production', 'TheMostPanel credential', IntegrationProvider::TheMostPanel, IntegrationEnvironment::Production],
+            ['ecpay_payment', '綠界付款 credential', IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production],
+            ['line_pay', 'LINE Pay credential', IntegrationProvider::LinePay, IntegrationEnvironment::Production],
+            ['ecpay_invoice', '綠界發票 credential', IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production],
+            ['themostpanel', 'TheMostPanel credential', IntegrationProvider::TheMostPanel, IntegrationEnvironment::Production],
         ] as [$key, $label, $provider, $environment]) {
             [$value, $status] = self::credentialPresence($provider, $environment, $strict);
             $checks[] = self::check('credential_'.$key, $label, $value, $status);
@@ -170,6 +205,35 @@ class StagingReadinessCommand extends Command
     private static function check(string $key, string $label, string $value, string $status): array
     {
         return ['key' => $key, 'label' => $label, 'value' => $value, 'status' => $status];
+    }
+
+    /**
+     * One Owner channel: credential completeness, the Owner switch, and whether
+     * it could actually run right now.
+     *
+     * ⛔ 三件事分開回報,因為它們的修法完全不同:缺欄位要 Owner 去填、開關關著
+     * 要 Owner 去開、環境不允許外呼則兩者都不是問題(本機就該是這樣)。
+     * 併成一個 'not enabled' 會讓 Owner 不知道該做什麼。
+     *
+     * ⛔ 只回欄位名稱與布林狀態,不解密、不輸出任何值。
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function channelReadiness(IntegrationProvider $provider, bool $strict): array
+    {
+        try {
+            $missing = LiveIntegration::missingFields($provider);
+            $enabledByOwner = LiveIntegration::enabledByOwner($provider);
+            $live = LiveIntegration::availableToCustomer($provider);
+
+            $value = 'credential='.($missing === [] ? 'complete' : 'missing:'.implode(',', $missing))
+                .';owner_switch='.($enabledByOwner ? 'on' : 'off')
+                .';live='.($live ? 'yes' : 'no');
+
+            return [$value, $live ? 'ok' : ($strict ? 'blocker' : 'blocked')];
+        } catch (Throwable) {
+            return ['unavailable', 'blocker'];
+        }
     }
 
     /** @return array{0: string, 1: string} */

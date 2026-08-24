@@ -53,7 +53,18 @@ class IssueInvoiceForOrder implements ShouldBeUnique, ShouldQueue
         return 'invoice-order-'.$this->orderId;
     }
 
-    public function handle(CreateInvoiceForPaidOrder $create, IssueInvoice $issue): void
+    /**
+     * ⛔ `IssueInvoice` 刻意不從方法簽章注入,而是在確定要開票之後才解析。
+     *
+     * 它依賴 `InvoiceGateway`,而那個 binding 在「發票通道未啟用」時會拋出
+     * ——那是正確的:staging／正式站沒有可用設定時,不得默默降級成一個什麼都
+     * 不開的 Fake。但若在方法簽章上注入,container 會在進入方法主體之前就
+     * 解析它,於是這個 job 在 Owner 只開付款、沒開發票時直接爆掉。
+     *
+     * ⛔ 而那正是最不能爆的時刻:錢已經收了。付款成功與開立發票是兩件事,
+     * 發票通道關著時付款仍然必須算成功,發票停在 pending_configuration。
+     */
+    public function handle(CreateInvoiceForPaidOrder $create): void
     {
         $order = Order::find($this->orderId);
 
@@ -68,6 +79,7 @@ class IssueInvoiceForOrder implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $issue->handle($invoice);
+        // 走到這裡才需要 gateway;⛔ 在此之前一次都不解析。
+        app(IssueInvoice::class)->handle($invoice);
     }
 }

@@ -1,17 +1,69 @@
 <x-filament-panels::page>
-    {{-- ⛔ 沒有「測試連線」「建立測試訂單」「開立測試發票」「啟用正式交易」按鈕：
-         本輪不允許任何外部呼叫，也不允許從畫面開啟正式交易。 --}}
-    <div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900
-                dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
-        <p class="font-bold">目前所有串接都是停用狀態。</p>
-        <p class="mt-1">
-            這一頁只負責安全保存金鑰。實際連線、測試與正式啟用需要另一次明確批准，
-            現在不會有任何對外請求。
-        </p>
-        <p class="mt-1">
-            金鑰以加密方式保存，儲存後不會再顯示。欄位留空代表沿用原本的金鑰；
-            要更換時才填入新值。
-        </p>
+    {{-- ⛔ 沒有「測試連線」按鈕：那會產生一次真實對外請求，而「我看看能不能連」
+         不該是一個會送出憑證的動作。也沒有端點欄位：一個可以在後台輸入的網址，
+         等於這台伺服器會帶著我們的金鑰去連任何有人填進去的主機。 --}}
+
+    @if (! $this->outboundAllowed())
+        <div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900
+                    dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+            <p class="font-bold">這是本機／測試環境，不會對外送出任何請求。</p>
+            <p class="mt-1">
+                下方的開關可以照常操作並保存，但實際收款、開立發票只會在正式站上發生。
+            </p>
+        </div>
+    @endif
+
+    {{-- 通道狀態與開關。⛔ 「已設定」「Owner 已啟用」「現在真的可以收款」是
+         三件不同的事，分開顯示，才不會出現畫面說在收款、實際上沒有的情況。 --}}
+    <div class="mb-6 space-y-3">
+        @foreach ($this->channelStates() as $state)
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border
+                        border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+                <div class="min-w-0">
+                    <p class="font-bold text-gray-950 dark:text-white">{{ $state['label'] }}</p>
+
+                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                        @if (! $state['configured'])
+                            {{-- ⛔ 只列欄位名稱，不列值、不列長度、不列末幾碼。 --}}
+                            尚未填寫：{{ implode('、', $state['missing']) }}
+                        @elseif ($state['live'])
+                            設定完整，目前<span class="font-bold text-green-700 dark:text-green-400">已啟用</span>。
+                        @elseif ($state['enabled'])
+                            設定完整、已啟用，但此環境不會對外送出請求。
+                        @else
+                            設定完整，目前<span class="font-bold">停用</span>中。
+                        @endif
+                    </p>
+                </div>
+
+                @if ($state['togglable'])
+                    @if ($state['enabled'])
+                        {{-- ⛔ 停用永遠可按，不因設定不完整而被鎖住：最需要能關掉的
+                             時候，通常正是出了什麼事的時候。 --}}
+                        <x-filament::button
+                            color="danger"
+                            wire:click="toggleChannel('{{ $state['provider']->value }}', false)"
+                            wire:loading.attr="disabled">
+                            停用
+                        </x-filament::button>
+                    @else
+                        {{-- 設定不完整時不給按，但這只是提示：真正的規則在後端，
+                             一份手寫的 Livewire payload 從來不經過畫面。 --}}
+                        <x-filament::button
+                            color="primary"
+                            :disabled="! $state['configured']"
+                            wire:click="toggleChannel('{{ $state['provider']->value }}', true)"
+                            wire:loading.attr="disabled">
+                            啟用
+                        </x-filament::button>
+                    @endif
+                @else
+                    <span class="text-sm text-gray-500 dark:text-gray-400">
+                        自動派單另有批准流程，不在這裡開關。
+                    </span>
+                @endif
+            </div>
+        @endforeach
     </div>
 
     <form wire:submit="save">
@@ -20,5 +72,10 @@
         <div class="mt-6">
             <x-filament::button type="submit">儲存</x-filament::button>
         </div>
+
+        <p class="mt-3 text-sm text-gray-600 dark:text-gray-400">
+            金鑰以加密方式保存，儲存後只顯示 {{ \App\Filament\Pages\ManageIntegrationSettings::MASK }}，
+            不會再顯示真值。欄位留空代表沿用原本的金鑰；要更換時才填入新值。
+        </p>
     </form>
 </x-filament-panels::page>

@@ -103,23 +103,31 @@ class CreateInvoiceForPaidOrder
         /*
          * ⛔ 「資料庫裡有 credential」不等於「可以開發票」。
          *
-         * 總開關、環境與端點白名單都必須成立，否則這張發票應該停在
+         * Owner 的後台開關、環境與端點白名單都必須成立，否則這張發票應該停在
          * pending_configuration，而不是排進一個注定失敗的工作。
          *
          * ⛔ 這個判斷刻意不因 local／testing 而放寬：M3B-A 已驗收的保證是
          * 「沒有可用設定就停在 pending_configuration」，那與跑在哪個環境無關。
-         * 用 Fake gateway 的測試仍會自己建立一組可用的 sandbox 設定。
+         *
+         * ⛔ 發票通道關閉時,付款仍然可以成功——只是這張發票停在
+         * pending_configuration,而不是假裝已開立。
          */
         return InvoiceSandboxGuard::setting() !== null;
     }
 
-    /** 測試與 adapter 需要知道目前該用哪個環境。 */
+    /**
+     * 測試與 adapter 需要知道目前該用哪一列設定。
+     *
+     * ⛔ M4C:只有 Production 一個答案。Owner 不再區分測試／正式,回 Sandbox
+     * 就是回一列 adapter 永遠不會讀到的設定。
+     *
+     * ⛔ 與 gatewayIsConfigured() 用同一道 gate：環境、Owner 開關與端點白名單
+     * 都必須成立，不能只因為資料庫有一筆 credential 就說「可以開票」。
+     */
     public static function activeEnvironment(): ?IntegrationEnvironment
     {
-        // ⛔ 與 gatewayIsConfigured() 用同一道 gate：總開關、環境與端點白名單
-        // 都必須成立，不能只因為資料庫有一筆 credential 就說「可以開票」。
         return InvoiceSandboxGuard::setting() !== null
-            ? IntegrationEnvironment::Sandbox
+            ? IntegrationEnvironment::Production
             : null;
     }
 }

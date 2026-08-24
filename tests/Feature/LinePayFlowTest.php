@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -34,21 +35,22 @@ use Tests\TestCase;
  */
 class LinePayFlowTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
-    private const BASE = 'https://sandbox-api-pay.line.me';
+    private const BASE = 'https://api-pay.line.me';
 
     protected function setUp(): void
     {
         parent::setUp();
 
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
 
         // R2：sandbox 付款預設關閉，測試必須明確開啟。
-        config()->set('integrations.payments.sandbox_enabled', true);
 
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Production)
             ->create(['identifier' => 'channel-0001']);
 
         $setting->credentials = ['ChannelSecret' => 'test-channel-secret-0001'];
@@ -83,7 +85,7 @@ class LinePayFlowTest extends TestCase
                 'returnMessage' => 'Success.',
                 'info' => array_merge([
                     'transactionId' => '2026081700000001',
-                    'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/web/payment/wait?t=abc'],
+                    'paymentUrl' => ['web' => 'https://web-pay.line.me/web/payment/wait?t=abc'],
                 ], $info),
             ]),
         ]);

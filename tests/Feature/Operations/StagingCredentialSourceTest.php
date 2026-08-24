@@ -177,7 +177,8 @@ class StagingCredentialSourceTest extends TestCase
 
         $this->app->instance('encrypter', $real);
 
-        $check = collect($report['checks'])->firstWhere('key', 'credential_themostpanel_production');
+        // ⛔ M4C：credential 檢查全部只看 production 那一列，key 不再帶環境後綴。
+        $check = collect($report['checks'])->firstWhere('key', 'credential_themostpanel');
         // ⛔ stored,不是 unavailable:presence 與可解密是兩回事。
         $this->assertSame('present;enabled=yes;encrypted_payload=stored;identifier=not-required', $check['value']);
 

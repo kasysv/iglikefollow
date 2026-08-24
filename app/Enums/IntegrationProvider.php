@@ -95,12 +95,16 @@ enum IntegrationProvider: string
     {
         return match ($this) {
             /*
-             * ⛔ 沒有 sandbox：這裡輸入的就是正式帳戶的 key。
+             * ⛔ 這裡輸入的就是正式帳戶的 key。
              *
              * 目前它只會被唯讀探針使用（services／balance／單筆 status），
-             * 而且探針另有預設關閉的開關。⛔ 儲存 key 不會讓自動派單變成可能。
+             * 而且探針另有預設關閉的開關。⛔ 儲存 key 不會讓自動派單變成可能，
+             * 而自動派單的批准仍必須是一次 reviewed 的 code 變更。
+             *
+             * ⛔ M4C 移除了「沒有測試環境」這句:後台已不再區分測試／正式,
+             * 留著那個對比會讓人以為其他 provider 有一個測試環境可以選。
              */
-            self::TheMostPanel => '沒有測試環境，這裡輸入的是正式帳戶金鑰；'
+            self::TheMostPanel => '這裡輸入的是正式帳戶金鑰；'
                 .'目前僅供唯讀查詢使用，不會啟用自動派單。',
             default => null,
         };

@@ -22,6 +22,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -40,6 +41,7 @@ use Tests\TestCase;
  */
 class EcpayInvoiceAdapterTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private const MERCHANT = '2000132';
@@ -48,19 +50,19 @@ class EcpayInvoiceAdapterTest extends TestCase
 
     private const HASH_IV = 'q9jcZX8Ib9LM8wYk';
 
-    private const ISSUE = 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue';
+    private const ISSUE = 'https://einvoice.ecpay.com.tw/B2CInvoice/Issue';
 
-    private const QUERY = 'https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue';
+    private const QUERY = 'https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue';
 
     protected function setUp(): void
     {
         parent::setUp();
 
         Http::preventStrayRequests();
-        config()->set('integrations.invoice.sandbox_enabled', true);
+        $this->runningAsLiveSite();
 
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production)
             ->create(['identifier' => self::MERCHANT]);
 
         $setting->credentials = ['HashKey' => self::HASH_KEY, 'HashIV' => self::HASH_IV];
@@ -506,16 +508,24 @@ class EcpayInvoiceAdapterTest extends TestCase
     public function test_a_disabled_flag_sends_nothing(): void
     {
         Http::fake();
-        config()->set('integrations.invoice.sandbox_enabled', false);
+        // ⛔ M4C:關閉發票＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
 
         $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isFailed());
         Http::assertNothingSent();
     }
 
-    public function test_production_sends_nothing(): void
+    /**
+     * ⛔ 本機／測試環境永遠不得開立真實發票。
+     *
+     * M4C 之後 production 是允許的環境（那正是 Owner 營運的地方），剩下的
+     * 環境邊界是這一條：本機不得送出。發票是一份真實的稅務文件，一張在開發
+     * 機器上開出來的發票，是有人要去作廢的。
+     */
+    public function test_a_local_machine_sends_nothing(): void
     {
         Http::fake();
-        $this->app->detectEnvironment(fn () => 'production');
+        $this->runningAsLiveSite('local');
 
         $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isFailed());
         Http::assertNothingSent();
@@ -530,24 +540,31 @@ class EcpayInvoiceAdapterTest extends TestCase
         Http::assertNothingSent();
     }
 
+    /**
+     * ⛔ 每一個都不是白名單裡的那一個字串,所以都必須被拒絕。
+     *
+     * M4C 之後合法值換成正式端點,所以「stage 主機」現在是被拒絕的一方——
+     * 而它值得留著:一份還指著 stage 的設定在正式站上,代表發票會開到測試
+     * 環境去,而後台看起來一切正常。
+     */
     public static function rejectedEndpointProvider(): array
     {
         return [
             'blank' => [''],
-            'production host' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Issue'],
-            'lookalike host' => ['https://einvoice-stage.ecpay.com.tw.evil.example.com/B2CInvoice/Issue'],
+            'stage host' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
+            'lookalike host' => ['https://einvoice.ecpay.com.tw.evil.example.com/B2CInvoice/Issue'],
             'arbitrary host' => ['https://evil.example.com/B2CInvoice/Issue'],
-            'non https' => ['http://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
+            'non https' => ['http://einvoice.ecpay.com.tw/B2CInvoice/Issue'],
             // ⛔ 同一台主機、不同 operation：作廢發票絕不能因為主機對就送出去。
-            'same host invalid path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid'],
-            'same host query path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
-            'same host root' => ['https://einvoice-stage.ecpay.com.tw/'],
-            'trailing slash' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue/'],
-            'query string' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue?debug=1'],
-            'fragment' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue#f'],
-            'userinfo' => ['https://user@einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
-            'explicit port' => ['https://einvoice-stage.ecpay.com.tw:8443/B2CInvoice/Issue'],
-            'uppercased path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/ISSUE'],
+            'same host invalid path' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Invalid'],
+            'same host query path' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'same host root' => ['https://einvoice.ecpay.com.tw/'],
+            'trailing slash' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Issue/'],
+            'query string' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Issue?debug=1'],
+            'fragment' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Issue#f'],
+            'userinfo' => ['https://user@einvoice.ecpay.com.tw/B2CInvoice/Issue'],
+            'explicit port' => ['https://einvoice.ecpay.com.tw:8443/B2CInvoice/Issue'],
+            'uppercased path' => ['https://einvoice.ecpay.com.tw/B2CInvoice/ISSUE'],
         ];
     }
 
@@ -556,7 +573,7 @@ class EcpayInvoiceAdapterTest extends TestCase
     public function test_a_non_allowlisted_endpoint_sends_nothing(string $endpoint): void
     {
         Http::fake();
-        config()->set('integrations.endpoints.ecpay_invoice.sandbox', $endpoint);
+        config()->set('integrations.endpoints.ecpay_invoice.production', $endpoint);
 
         $this->assertTrue($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isFailed());
         Http::assertNothingSent();
@@ -566,18 +583,18 @@ class EcpayInvoiceAdapterTest extends TestCase
     {
         return [
             'blank' => [''],
-            'production host' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue'],
-            'lookalike host' => ['https://einvoice-stage.ecpay.com.tw.evil.example.com/B2CInvoice/GetIssue'],
+            'stage host' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'lookalike host' => ['https://einvoice.ecpay.com.tw.evil.example.com/B2CInvoice/GetIssue'],
             'arbitrary host' => ['https://evil.example.com/B2CInvoice/GetIssue'],
-            'non https' => ['http://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'non https' => ['http://einvoice.ecpay.com.tw/B2CInvoice/GetIssue'],
             // ⛔ 查詢端點被換成 Issue 就會變成「重開一張」，這是最危險的一種錯配。
-            'same host issue path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Issue'],
-            'same host invalid path' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/Invalid'],
-            'trailing slash' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue/'],
-            'query string' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue?debug=1'],
-            'fragment' => ['https://einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue#f'],
-            'userinfo' => ['https://user@einvoice-stage.ecpay.com.tw/B2CInvoice/GetIssue'],
-            'explicit port' => ['https://einvoice-stage.ecpay.com.tw:8443/B2CInvoice/GetIssue'],
+            'same host issue path' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Issue'],
+            'same host invalid path' => ['https://einvoice.ecpay.com.tw/B2CInvoice/Invalid'],
+            'trailing slash' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue/'],
+            'query string' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue?debug=1'],
+            'fragment' => ['https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue#f'],
+            'userinfo' => ['https://user@einvoice.ecpay.com.tw/B2CInvoice/GetIssue'],
+            'explicit port' => ['https://einvoice.ecpay.com.tw:8443/B2CInvoice/GetIssue'],
         ];
     }
 
@@ -589,7 +606,7 @@ class EcpayInvoiceAdapterTest extends TestCase
     #[DataProvider('rejectedQueryEndpointProvider')]
     public function test_a_non_allowlisted_query_endpoint_is_never_called(string $endpoint): void
     {
-        config()->set('integrations.endpoints.ecpay_invoice_query.sandbox', $endpoint);
+        config()->set('integrations.endpoints.ecpay_invoice_query.production', $endpoint);
 
         Http::fake([
             self::ISSUE => Http::response($this->reply($this->successInner(), transCode: 99)),

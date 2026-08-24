@@ -3,9 +3,10 @@
 namespace App\Services\Payments;
 
 use App\DTO\LinePayResponse;
-use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
+use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -51,11 +52,10 @@ class LinePayClient
      */
     private function call(string $uri, array $body, int $timeout): LinePayResponse
     {
-        // ⛔ 最靠近網路的一層也要擋：關閉或 production 時，一個 request 都不送。
-        if (! SandboxGuard::enabled()) {
-            return LinePayResponse::unavailable();
-        }
-
+        /*
+         * ⛔ 最靠近網路的一層也要擋。`setting()` 已涵蓋環境、Owner 開關與
+         * credential 完整度:任一不成立就一個 request 都不送。
+         */
         $setting = $this->setting();
 
         if ($setting === null) {
@@ -64,9 +64,12 @@ class LinePayClient
 
         $channelId = (string) $setting->identifier;
         $secret = $setting->secret('ChannelSecret');
-        $base = rtrim((string) config('integrations.endpoints.line_pay.sandbox'), '/');
 
-        if ($secret === null || $channelId === '' || $base === '') {
+        // ⛔ base 必須與版本控制中的白名單完全一致,不做 rtrim／正規化:
+        // 需要被「整理」才符合的值,本身就不是白名單裡的那一個。
+        $base = ProviderEndpoints::linePayApi();
+
+        if ($secret === null || $channelId === '' || $base === null) {
             return LinePayResponse::unavailable();
         }
 
@@ -113,13 +116,9 @@ class LinePayClient
         return LinePayResponse::fromArray($json);
     }
 
+    /** Owner 維護的唯一一套正式設定;⛔ 環境或開關任一不成立即 null。 */
     private function setting(): ?IntegrationSetting
     {
-        $setting = IntegrationSetting::query()
-            ->where('provider', IntegrationProvider::LinePay)
-            ->where('environment', IntegrationEnvironment::Sandbox)
-            ->first();
-
-        return $setting?->isUsable() ? $setting : null;
+        return LiveIntegration::setting(IntegrationProvider::LinePay);
     }
 }

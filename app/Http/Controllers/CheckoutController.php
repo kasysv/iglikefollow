@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\Payments\PaymentGatewayRegistry;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
 use Illuminate\Http\RedirectResponse;
@@ -24,22 +25,23 @@ class CheckoutController extends Controller
     /**
      * Where the selection surfaces may run.
      *
-     * ⛔ `staging` is included because staging exists precisely to rehearse the
-     * real purchase path; without it `POST /checkout/start` 404s and the flow
-     * cannot be exercised at all (Owner reproduced exactly that on
-     * staging.iglikefollow.com).
+     * ⛔ M4C:`production` 已加入。Owner 的網站是要真的營運的,而選商品這一步
+     * 在正式站 404 就等於沒有網站。這個清單管的是「選購介面在哪裡可以出現」,
+     * 不是「錢可不可以移動」。
      *
-     * ⛔ `production` is deliberately absent, and this list is the only thing
-     * that changed: choosing a product is still not the same as paying for one.
-     * Whether money may move is decided elsewhere — `SandboxGuard` (which
-     * refuses production outright) and the payment registry — so widening this
-     * list cannot start a real transaction.
+     * ⛔ 錢可不可以移動由完全不同的地方決定:`LiveIntegration`(環境可外呼＋
+     * Owner 已開啟＋credential 齊全)。所以放寬這個清單不會、也不可能讓一筆
+     * 交易在 Owner 沒有開關的情況下成立。
+     *
+     * ⛔ 這個清單保留下來而不是直接刪掉,是因為它仍然有作用:任何未列出的
+     * 環境(例如某個一次性的 CLI env)仍然 404,而不是靜默地提供一個結帳頁。
      */
-    private const ALLOWED_ENVIRONMENTS = ['local', 'testing', 'staging'];
+    private const ALLOWED_ENVIRONMENTS = ['local', 'testing', 'staging', 'production'];
 
     public function __construct(
         private readonly CatalogRepository $catalog,
         private readonly CheckoutSession $checkout,
+        private readonly PaymentGatewayRegistry $payments,
     ) {}
 
     /**
@@ -112,12 +114,22 @@ class CheckoutController extends Controller
 
         $variant = $selection['variant'];
 
+        /*
+         * 可用的付款方式由 registry 決定,⛔ 不在 view 裡自己算一次。
+         *
+         * 兩邊各算一次的結果是:畫面上顯示得出來、送出後被後端拒絕——而客人
+         * 已經填完整張表單、按下「前往付款」了。`payments.start` 讀的是同一個
+         * 方法,所以前後端不可能不一致。
+         */
         return $this->noindex(view('storefront.checkout', [
             'variant' => $variant,
             'service' => $variant->service,
             'platform' => $variant->service->platform,
             'quantity' => $selection['quantity'],
             'amount' => $selection['amount'],
+            'availablePayments' => $this->payments->availableProviders(),
+            // ⛔ mock 只存在於 local／testing,它會直接把訂單標成付款成功。
+            'mockAvailable' => app()->environment(['local', 'testing']),
         ]));
     }
 

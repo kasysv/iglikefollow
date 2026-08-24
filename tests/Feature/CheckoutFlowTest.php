@@ -524,19 +524,32 @@ class CheckoutFlowTest extends TestCase
      * 常數或共用方法時失敗,卻對「production 其實被放行了」這種真正危險的
      * 改動毫無感覺——它測的是文字,不是邊界。
      */
-    public function test_neither_checkout_surface_is_reachable_in_production(): void
+    /**
+     * M4C 又把這條線挪了一次:正式站必須能選購。
+     *
+     * 舊規則讓 `production` 的整條選購介面 404,而那等於沒有網站。選商品這一步
+     * 與「錢可不可以移動」是兩件事,後者由 Owner 的後台開關決定。
+     *
+     * ⛔ 但 mock 仍然只限 local／testing:它會直接把訂單標成付款成功,在正式站
+     * 上那就是「假裝收到錢」。⛔ 而且這一整段必須 0 筆訂單:沒有開啟任何付款
+     * 通道時,選購走得到,付款走不到。
+     */
+    public function test_the_selection_surface_works_in_production_but_the_mock_does_not(): void
     {
         $this->app->detectEnvironment(fn () => 'production');
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
-        $this->get('/checkout')->assertNotFound();
         $this->post('/checkout/start', [
             'variant' => $this->variant()->id,
             'quantity' => 1000,
-        ])->assertNotFound();
-        $this->post('/checkout/return')->assertNotFound();
+        ])->assertRedirect('/checkout');
+
+        $this->get('/checkout')->assertOk();
+
+        // ⛔ mock 在正式站上必須不存在。
         $this->post('/checkout/mock', $this->completeCheckoutPayload())->assertNotFound();
 
+        // ⛔ 沒有任何通道開啟,所以一筆訂單都不該存在。
         $this->assertDatabaseCount('orders', 0);
     }
 

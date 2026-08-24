@@ -16,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -33,19 +34,20 @@ use Tests\TestCase;
  */
 class PaymentResponseShapeTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
-    private const BASE = 'https://sandbox-api-pay.line.me';
+    private const BASE = 'https://api-pay.line.me';
 
     protected function setUp(): void
     {
         parent::setUp();
 
         Http::preventStrayRequests();
-        config()->set('integrations.payments.sandbox_enabled', true);
+        $this->runningAsLiveSite();
 
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Production)
             ->create(['identifier' => 'channel-0001']);
 
         $setting->credentials = ['ChannelSecret' => 'test-channel-secret-0001'];
@@ -103,7 +105,7 @@ class PaymentResponseShapeTest extends TestCase
 
         $this->fakeRequest([
             'transactionId' => $transactionId,
-            'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/x'],
+            'paymentUrl' => ['web' => 'https://web-pay.line.me/x'],
         ]);
 
         $result = app(LinePayGateway::class)->initiate($attempt);
@@ -131,7 +133,7 @@ class PaymentResponseShapeTest extends TestCase
 
         $this->fakeRequest([
             'transactionId' => '2026081700000001',
-            'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/x'],
+            'paymentUrl' => ['web' => 'https://web-pay.line.me/x'],
         ]);
 
         $result = app(LinePayGateway::class)->initiate($attempt);
@@ -147,7 +149,7 @@ class PaymentResponseShapeTest extends TestCase
         // LINE Pay 的交易編號在 JSON 中可能是數字。
         $this->fakeRequest([
             'transactionId' => 2026081700000001,
-            'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/x'],
+            'paymentUrl' => ['web' => 'https://web-pay.line.me/x'],
         ]);
 
         $result = app(LinePayGateway::class)->initiate($attempt);
@@ -295,16 +297,27 @@ class PaymentResponseShapeTest extends TestCase
 
     // ==================================== R4-3：redirect host 逐一反證
 
+    /**
+     * ⛔ 每一個都不是白名單裡的主機，所以都必須被拒絕。
+     *
+     * M4C 之後合法值換成正式付款頁 `web-pay.line.me`，所以 sandbox 主機現在
+     * 是被拒絕的一方——而它值得留著：一個把付款中的客人導去測試環境的回應，
+     * 客人會在那裡輸入真的卡號。
+     */
     public static function rejectedRedirectProvider(): array
     {
         return [
-            'production web host' => ['https://web-pay.line.me/web/payment'],
-            'production short host' => ['https://pay.line.me/web/payment'],
+            'sandbox web host' => ['https://sandbox-web-pay.line.me/web/payment'],
+            'short host' => ['https://pay.line.me/web/payment'],
             // API 端點不是給人看的頁面。
-            'sandbox api host' => ['https://sandbox-api-pay.line.me/v4/payments'],
+            'api host' => ['https://api-pay.line.me/v4/payments'],
             'arbitrary host' => ['https://evil.example.com/collect'],
-            'lookalike host' => ['https://sandbox-web-pay.line.me.evil.example.com/x'],
-            'non https' => ['http://sandbox-web-pay.line.me/x'],
+            'lookalike host' => ['https://web-pay.line.me.evil.example.com/x'],
+            'non https' => ['http://web-pay.line.me/x'],
+            // ⛔ userinfo：真正的主機是 evil.example，只比對前綴的寫法會被騙過去。
+            'userinfo' => ['https://web-pay.line.me@evil.example/x'],
+            // ⛔ 自訂 port 不是官方付款頁。
+            'explicit port' => ['https://web-pay.line.me:8443/web/payment'],
         ];
     }
 
@@ -333,7 +346,7 @@ class PaymentResponseShapeTest extends TestCase
 
         $this->fakeRequest([
             'transactionId' => '2026081700000001',
-            'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/web/payment/wait?t=abc'],
+            'paymentUrl' => ['web' => 'https://web-pay.line.me/web/payment/wait?t=abc'],
         ]);
 
         $this->assertTrue(app(LinePayGateway::class)->initiate($attempt)->isRedirect());

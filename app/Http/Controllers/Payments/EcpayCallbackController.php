@@ -4,15 +4,14 @@ namespace App\Http\Controllers\Payments;
 
 use App\Actions\Orders\MarkPaymentUncertain;
 use App\Actions\Orders\RecordPaymentResult;
-use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\PaymentFailureReason;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Models\IntegrationSetting;
 use App\Models\PaymentAttempt;
+use App\Services\Integrations\LiveIntegration;
 use App\Services\Payments\EcpayCheckMac;
-use App\Services\Payments\SandboxGuard;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
@@ -43,12 +42,14 @@ class EcpayCallbackController extends Controller
 
     public function __invoke(Request $request): Response
     {
-        // ⛔ 公開路由，不經過 registry：這裡必須自己擋下 sandbox 關閉與
-        // production 的情況，否則整條 callback 就是繞過開關的後門。
-        if (! SandboxGuard::enabled()) {
-            return $this->reject();
-        }
-
+        /*
+         * ⛔ 公開路由，不經過 registry：這裡必須自己判斷通道是否可用，
+         * 否則整條 callback 就是繞過 Owner 開關的後門。
+         *
+         * `setting()` 一次涵蓋:環境可外呼、Owner 已開啟綠界付款、
+         * MerchantID 與兩個 secret 齊全。⛔ 沒有第二個「總開關」檢查——
+         * 兩份規則就是兩份會各自漂移的規則。
+         */
         $payload = $request->all();
 
         $setting = $this->setting();
@@ -193,14 +194,15 @@ class EcpayCallbackController extends Controller
         );
     }
 
+    /**
+     * Owner 維護的唯一一套正式設定;⛔ 環境或開關任一不成立即 null。
+     *
+     * ⛔ 這與 `EcpayPaymentGateway` 讀的是同一個來源。callback 若讀另一組
+     * credential,驗簽就會用錯的 HashKey——正確的付款結果反而被拒。
+     */
     private function setting(): ?IntegrationSetting
     {
-        $setting = IntegrationSetting::query()
-            ->where('provider', IntegrationProvider::EcpayPayment)
-            ->where('environment', IntegrationEnvironment::Sandbox)
-            ->first();
-
-        return $setting?->isUsable() ? $setting : null;
+        return LiveIntegration::setting(IntegrationProvider::EcpayPayment);
     }
 
     /** 綠界要求成功時回應純文字 `1|OK`。 */

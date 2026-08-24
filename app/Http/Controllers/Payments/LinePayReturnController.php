@@ -5,13 +5,14 @@ namespace App\Http\Controllers\Payments;
 use App\Actions\Orders\MarkPaymentUncertain;
 use App\Actions\Orders\RecordPaymentResult;
 use App\DTO\LinePayResponse;
+use App\Enums\IntegrationProvider;
 use App\Enums\PaymentFailureReason;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
+use App\Services\Integrations\LiveIntegration;
 use App\Services\Payments\LinePayClient;
-use App\Services\Payments\SandboxGuard;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -37,7 +38,7 @@ class LinePayReturnController extends Controller
         $order = Order::where('reference', $reference)->firstOrFail();
 
         // ⛔ 公開路由，不經過 registry：關閉或 production 時 0 呼叫、0 寫入。
-        if (! SandboxGuard::enabled()) {
+        if (LiveIntegration::setting(IntegrationProvider::LinePay) === null) {
             return $this->toStatus($order);
         }
 
@@ -130,7 +131,7 @@ class LinePayReturnController extends Controller
     {
         $order = Order::where('reference', $reference)->firstOrFail();
 
-        if (! SandboxGuard::enabled()) {
+        if (LiveIntegration::setting(IntegrationProvider::LinePay) === null) {
             return $this->toStatus($order);
         }
 

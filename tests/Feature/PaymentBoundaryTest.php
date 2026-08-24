@@ -20,6 +20,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -36,9 +37,10 @@ use Tests\TestCase;
  */
 class PaymentBoundaryTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
-    private const BASE = 'https://sandbox-api-pay.line.me';
+    private const BASE = 'https://api-pay.line.me';
 
     private const HASH_KEY = 'test-hash-key-0001';
 
@@ -51,16 +53,16 @@ class PaymentBoundaryTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
-        config()->set('integrations.payments.sandbox_enabled', true);
+        $this->runningAsLiveSite();
 
         $ecpay = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
             ->create(['identifier' => self::MERCHANT]);
         $ecpay->credentials = ['HashKey' => self::HASH_KEY, 'HashIV' => self::HASH_IV];
         $ecpay->save();
 
         $line = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Production)
             ->create(['identifier' => 'channel-0001']);
         $line->credentials = ['ChannelSecret' => 'test-channel-secret-0001'];
         $line->save();
@@ -102,7 +104,8 @@ class PaymentBoundaryTest extends TestCase
     public function test_the_ecpay_callback_is_dead_when_sandbox_is_off(): void
     {
         $attempt = $this->attempt();
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
 
         $before = DB::table('payment_attempts')->get()->toJson();
 
@@ -114,22 +117,45 @@ class PaymentBoundaryTest extends TestCase
         $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
     }
 
-    public function test_the_ecpay_callback_is_dead_in_production(): void
+    /**
+     * M4C 反轉了這一條:production 是 Owner 真正營運的環境,callback 必須活著。
+     *
+     * ⛔ 這不是把防線拆掉,是換掉依據。舊規則「production 一律拒絕」的結果是
+     * 正式站永遠收不到款;現在拒絕的依據是 Owner 的後台開關,而下面兩個測試
+     * 證明「開關關著」與「本機」兩種情況仍然一個位元組都不寫。
+     */
+    public function test_the_ecpay_callback_is_alive_in_production(): void
     {
         $attempt = $this->attempt();
-        $this->app->detectEnvironment(fn () => 'production');
+        $this->runningAsLiveSite('production');
 
         $this->postJson('/payments/ecpay/callback', $this->signed($attempt))
-            ->assertDontSee('1|OK');
+            ->assertOk()->assertSee('1|OK');
 
-        // ⛔ production 不看 feature flag，一律拒絕。
+        $this->assertSame(PaymentStatus::Succeeded, $attempt->fresh()->status);
+    }
+
+    public function test_the_ecpay_callback_is_dead_on_a_local_machine(): void
+    {
+        $attempt = $this->attempt();
+
+        // ⛔ 本機永遠不得參與真實金流，即使資料庫裡的通道是開著的。
+        $this->runningAsLiveSite('local');
+
+        $before = DB::table('payment_attempts')->get()->toJson();
+
+        $this->postJson('/payments/ecpay/callback', $this->signed($attempt))
+            ->assertOk()->assertDontSee('1|OK');
+
+        $this->assertSame($before, DB::table('payment_attempts')->get()->toJson());
         $this->assertSame(PaymentStatus::Pending, $attempt->fresh()->status);
     }
 
     public function test_the_ecpay_adapter_refuses_when_resolved_directly(): void
     {
         $attempt = $this->attempt();
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
 
         // ⛔ 繞過 registry 直接從 container 取出。
         $result = app(EcpayPaymentGateway::class)->initiate($attempt);
@@ -140,7 +166,8 @@ class PaymentBoundaryTest extends TestCase
     public function test_the_line_adapter_refuses_when_resolved_directly(): void
     {
         $attempt = $this->attempt('line-pay');
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
         Http::fake();
 
         $result = app(LinePayGateway::class)->initiate($attempt);
@@ -150,10 +177,17 @@ class PaymentBoundaryTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_the_line_adapter_refuses_in_production(): void
+    /**
+     * ⛔ 本機／測試環境永遠不得送出真實付款請求。
+     *
+     * 這是 M4C 之後剩下的那一道環境邊界,而且它是技術邊界、不是營運開關:
+     * 資料庫裡的通道開著也不行。少了它,任何在本機跑起來的開發環境只要有
+     * 一份正式 credential 就會開始真的收款。
+     */
+    public function test_the_line_adapter_refuses_on_a_local_machine(): void
     {
         $attempt = $this->attempt('line-pay');
-        $this->app->detectEnvironment(fn () => 'production');
+        $this->runningAsLiveSite('local');
         Http::fake();
 
         $this->assertTrue(app(LinePayGateway::class)->initiate($attempt)->isFailed());
@@ -164,7 +198,8 @@ class PaymentBoundaryTest extends TestCase
     {
         $attempt = $this->attempt('line-pay');
         $attempt->forceFill(['provider_reference' => 'TXN-1'])->save();
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
         Http::fake();
 
         $url = "/payments/linepay/{$attempt->order->reference}/confirm"
@@ -180,7 +215,8 @@ class PaymentBoundaryTest extends TestCase
     {
         $attempt = $this->attempt('line-pay');
         $attempt->forceFill(['provider_reference' => 'TXN-1'])->save();
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
 
         $url = "/payments/linepay/{$attempt->order->reference}/cancel"
             ."?orderId={$attempt->reference}&transactionId=TXN-1";
@@ -249,7 +285,7 @@ class PaymentBoundaryTest extends TestCase
         Http::fake([
             self::BASE.'/v4/payments/request' => Http::response([
                 'returnCode' => '0000',
-                'info' => ['paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/x']],
+                'info' => ['paymentUrl' => ['web' => 'https://web-pay.line.me/x']],
             ], 200),
         ]);
 
@@ -307,7 +343,7 @@ class PaymentBoundaryTest extends TestCase
                 'returnCode' => '0000',
                 'info' => [
                     'transactionId' => '123',
-                    'paymentUrl' => ['web' => 'https://sandbox-web-pay.line.me/x'],
+                    'paymentUrl' => ['web' => 'https://web-pay.line.me/x'],
                 ],
             ], 500),
         ]);

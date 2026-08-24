@@ -7,37 +7,25 @@ use App\Actions\Orders\MarkPaymentUncertain;
 use App\Actions\Payments\FailPaymentInitiation;
 use App\Contracts\PaymentGateway;
 use App\DTO\PaymentInitiation;
+use App\Enums\IntegrationProvider;
 use App\Enums\PaymentFailureReason;
 use App\Models\PaymentAttempt;
+use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
 
 /**
- * LINE Pay Online API v4, sandbox.
+ * LINE Pay Online API v4.
  *
  * Unlike ECPay this starts with a server-side call: we ask LINE Pay to create
  * a payment, they answer with a transaction id and a URL to send the customer
  * to. Only the transaction id is worth keeping — it is what the later confirm
  * call is made against.
+ *
+ * ⛔ 導向網址的白名單放在 `ProviderEndpoints`,與端點白名單同一個檔案:兩者
+ * 都在回答「這台伺服器可以把東西交給誰」,分散在兩處就會有一個被忘記更新。
  */
 class LinePayGateway implements PaymentGateway
 {
-    /**
-     * The only host this sandbox adapter may send a customer to.
-     *
-     * ⛔ An allowlist, because this URL comes from an HTTP response and we send
-     * a paying customer to it. Without the check a spoofed response turns
-     * checkout into an open redirect — arriving exactly when the customer
-     * expects to type card details.
-     *
-     * ⛔ Exactly one host, and it is the sandbox *payment page*. The production
-     * hosts do not belong to this environment, and `sandbox-api-pay.line.me` is
-     * the API endpoint, not somewhere a person should ever be sent. Listing
-     * production here "for later" would mean a production redirect silently
-     * passing a sandbox-only check the day someone flips an environment.
-     */
-    private const ALLOWED_REDIRECT_HOSTS = [
-        'sandbox-web-pay.line.me',
-    ];
-
     public function __construct(
         private readonly LinePayClient $client,
         private readonly MarkPaymentPending $markPending,
@@ -52,8 +40,26 @@ class LinePayGateway implements PaymentGateway
 
     public function initiate(PaymentAttempt $attempt): PaymentInitiation
     {
-        // ⛔ adapter 自己也要擋：直接從 container 取出時不會經過 registry。
-        if (! SandboxGuard::enabled()) {
+        /*
+         * ⛔ adapter 自己也要擋：直接從 container 取出時不會經過 registry。
+         *
+         * 這裡問的是完整的通道可用性(環境＋Owner 開關＋credential 齊全),
+         * 與 client 內同一個判斷同源;⛔ 不是一個只看環境的近似檢查。
+         */
+        if (LiveIntegration::setting(IntegrationProvider::LinePay) === null) {
+            /*
+             * ⛔ 必須把已 claim 的 attempt 收斂成 failed,不能只回一個 failed
+             * initiation。
+             *
+             * 留在 pending 的 attempt 會被 resolver 正確地擋下,於是這張訂單
+             * 再也付不了款——連換一家 provider 都不行。claim 一旦取得,就有
+             * 責任放掉。
+             *
+             * ⛔ 安全的前提是「一個 request 都還沒送出」:通道不可用時我們連
+             * 撥號都沒撥,對方那邊什麼都沒發生,所以判定為確定失敗是正確的。
+             */
+            $this->failInitiation->handle($attempt, PaymentFailureReason::ProviderUnavailable);
+
             return PaymentInitiation::failed(PaymentFailureReason::ProviderUnavailable);
         }
 
@@ -129,15 +135,15 @@ class LinePayGateway implements PaymentGateway
         return PaymentInitiation::redirect($url);
     }
 
-    /** ⛔ 只接受 HTTPS 與白名單主機，不接受任意 provider 回傳的網址。 */
+    /**
+     * ⛔ 只接受 HTTPS 與白名單主機，不接受任意 provider 回傳的網址。
+     *
+     * 判斷本身在 `ProviderEndpoints`:那裡也擋掉 userinfo 與自訂 port,
+     * 因為 `https://web-pay.line.me@evil.example/` 的真正主機是後者,
+     * 而只看字串前綴的寫法會被它騙過去。
+     */
     private function redirectIsAllowed(string $url): bool
     {
-        $parts = parse_url($url);
-
-        if (! is_array($parts) || ($parts['scheme'] ?? '') !== 'https') {
-            return false;
-        }
-
-        return in_array(strtolower($parts['host'] ?? ''), self::ALLOWED_REDIRECT_HOSTS, true);
+        return ProviderEndpoints::redirectIsAllowed($url);
     }
 }

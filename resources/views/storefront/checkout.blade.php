@@ -36,17 +36,20 @@
         {{-- 表單 POST 的目的地。這只決定送去哪裡：兩條路徑背後的驗證與建單完全相同。
 
              ⛔ mock 只存在於 local／testing，它會直接把訂單標成付款成功。
-             在 staging 指向它等於「假裝收到錢」，而那正是 staging 最不該出現
-             的東西；mock route 自己也有 environment guard，這裡不指過去是為了
-             不讓畫面先給出一個必定 404 的按鈕。
+             在 staging／正式站指向它等於「假裝收到錢」，而那是最不該出現的東西；
+             mock route 自己也有 environment guard，這裡不指過去是為了不讓畫面
+             先給出一個必定 404 的按鈕。
 
-             ⛔ staging 且 sandbox 未開啟時仍送往 payments.start:該路徑由既有
-             registry／SandboxGuard 安全拒絕並帶回可理解的錯誤訊息,
-             ⛔ 不建單、不呼叫任何 provider、不退回 Fake 假裝成功。 --}}
-        @php($mockAvailable = app()->environment(['local', 'testing']))
-        @php($paymentsEnabled = config('integrations.payments.sandbox_enabled'))
+             ⛔ 有任何真實付款方式可用時一律走 payments.start，即使在 local：
+             那條路徑會由 registry 依 Owner 的後台開關安全拒絕並帶回可理解的
+             錯誤訊息，⛔ 不建單、不呼叫任何 provider、不退回 Fake 假裝成功。
 
-        <form action="{{ $paymentsEnabled || ! $mockAvailable ? route('payments.start') : route('checkout.mock') }}"
+             `$availablePayments` 與 `$mockAvailable` 都來自 controller，
+             ⛔ view 不自己判斷付款方式是否可用：兩邊各算一次就會出現畫面能選、
+             送出被拒的情況。 --}}
+        @php($paymentsAvailable = $availablePayments !== [])
+
+        <form action="{{ $paymentsAvailable || ! $mockAvailable ? route('payments.start') : route('checkout.mock') }}"
               method="post" class="space-y-8">
             @csrf
 
@@ -192,20 +195,52 @@
                 </div>
             </section>
 
-            {{-- 4. 付款方式：與電子發票選擇互相獨立。 --}}
+            {{-- 4. 付款方式：與電子發票選擇互相獨立。
+
+                 ⛔ 只顯示 Owner 已開啟且設定完整的方式。一個顯示得出來卻會被
+                 後端拒絕的選項，代價是客人填完整張表單、按下付款、才看到
+                 「無法使用」。
+
+                 ⛔ 不可用的方式不是「顯示成灰色的 radio」而是不存在：一個
+                 disabled 的 radio 在偽造的 POST 裡照樣可以被送出來，而看起來
+                 可選的灰色選項只會讓人一直點。後端另有同一份判斷把關。 --}}
+            @php($paymentLabels = ['line-pay' => 'LINE Pay', 'ecpay' => '綠界付款'])
+
+            {{-- 畫面上實際列出的付款方式。
+
+                 ⛔ 有真實通道時只列 Owner 已開啟的那些;mock（僅 local／testing
+                 存在）沒有通道概念,兩種都列——mock 的 POST 一樣要求 payment
+                 欄位,藏起 radio 會讓本機流程根本送不出去。
+
+                 用 array_intersect 以 $paymentLabels 的順序呈現,顯示順序不因
+                 registry 內部順序改變而變。 --}}
+            @php($displayPayments = $paymentsAvailable
+                ? array_values(array_intersect(array_keys($paymentLabels), $availablePayments))
+                : ($mockAvailable ? array_keys($paymentLabels) : []))
+
             <section class="surface p-5 sm:p-7" aria-labelledby="payment-title">
                 <h2 id="payment-title" class="text-lg font-bold tracking-[-0.02em]">4. 付款方式</h2>
 
-                <div class="mt-5 grid gap-2 sm:grid-cols-2">
-                    <label class="payment-card">
-                        <input type="radio" name="payment" value="line-pay" @checked(old('payment', 'line-pay') === 'line-pay')>
-                        <span class="font-bold">LINE Pay</span>
-                    </label>
-                    <label class="payment-card">
-                        <input type="radio" name="payment" value="ecpay" @checked(old('payment') === 'ecpay')>
-                        <span class="font-bold">綠界付款</span>
-                    </label>
-                </div>
+                @if ($displayPayments === [])
+                    {{-- ⛔ 一般顧客看得懂的說法：不提環境、旗標、credential 或
+                         後台狀態。也⛔ 不先建立訂單再回錯誤。 --}}
+                    <p class="mt-4 rounded-lg bg-black/[0.03] p-4 text-sm leading-6 text-black/70">
+                        目前付款方式暫未開放，請稍後再試或聯絡客服。
+                    </p>
+                @else
+                    <div class="mt-5 grid gap-2 sm:grid-cols-2">
+                        @foreach ($displayPayments as $method)
+                            <label class="payment-card">
+                                {{-- 沒有先前選擇時預選第一個：只有一種可用時它就是
+                                     唯一選項，不該還要客人點一下。 --}}
+                                <input type="radio" name="payment" value="{{ $method }}"
+                                       @checked(old('payment', $displayPayments[0]) === $method)>
+                                <span class="font-bold">{{ $paymentLabels[$method] ?? $method }}</span>
+                            </label>
+                        @endforeach
+                    </div>
+                @endif
+
                 @error('payment') <p class="mt-2 text-sm text-red-700">{{ $message }}</p> @enderror
             </section>
 
@@ -217,11 +252,34 @@
                 <p class="mt-2 text-sm leading-6 text-black/65">金額由伺服器依目前單價重新計算。</p>
 
                 {{-- R4:顧客語氣;本機不會真實扣款由既有 flags/mock gate 保證,⛔ 不靠文案。
-                     M2-D-A:結帳頁唯一的購買動作,套 accent。 --}}
-                <button type="submit" class="primary-button primary-button--purchase mt-5">前往付款</button>
+                     M2-D-A:結帳頁唯一的購買動作,套 accent。
 
+                     ⛔ 送不出去時 disabled：讓它可按的結果是先建立一張訂單、
+                     再回一個錯誤，而那張訂單留在資料庫裡。付款方式都關著時，
+                     正確的行為是根本不開始。
+
+                     `$submittable` 與上面 form action 用同一個條件：只要表單有
+                     一個真的能處理它的目的地（真實付款方式，或 local 的 mock），
+                     按鈕就該可按。⛔ 後端 payments.start 另有同一份判斷，
+                     安全性不依賴這個屬性。 --}}
+                @php($submittable = $paymentsAvailable || $mockAvailable)
+
+                <button type="submit"
+                        class="primary-button primary-button--purchase mt-5"
+                        @disabled(! $submittable)>
+                    前往付款
+                </button>
+
+                {{-- ⛔ R4 核准的顧客語氣文案逐字保留；M4C 不改公開交易文案。
+                     只在真的無法送出時換成一句同樣顧客語氣的說明——留著
+                     「支援 LINE Pay、綠界付款」而畫面上兩個都選不到，那句話
+                     就成了假的。 --}}
                 <p class="mt-4 text-sm leading-6 text-black/65">
-                    支援 LINE Pay、綠界付款；付款成功後自動處理，並開立電子發票。
+                    @if ($submittable)
+                        支援 LINE Pay、綠界付款；付款成功後自動處理，並開立電子發票。
+                    @else
+                        付款方式恢復後即可下單，屆時會開立電子發票。
+                    @endif
                 </p>
             </div>
         </form>

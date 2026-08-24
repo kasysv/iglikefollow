@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Enums\IntegrationProvider;
 use App\Models\ServiceVariant;
 use Database\Seeders\CatalogSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -19,6 +21,7 @@ use Tests\TestCase;
  */
 class CheckoutInvoiceTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -114,6 +117,16 @@ class CheckoutInvoiceTest extends TestCase
 
     public function test_the_checkout_page_ships_every_step_in_the_initial_html(): void
     {
+        /*
+         * ⛔ 付款方式必須有一個是可用的,`name="payment"` 才會存在。
+         *
+         * M4C 之後結帳頁只顯示 Owner 已開啟的付款方式:一個顯示得出來卻會被
+         * 後端拒絕的選項,代價是客人填完整張表單才看到「無法使用」。所以這裡
+         * 先把通道開起來,再驗整張表單都在初始 HTML 裡。
+         */
+        $this->runningAsLiveSite();
+        $this->enableChannel(IntegrationProvider::EcpayPayment, '3000001');
+
         $html = $this->checkoutHtml();
 
         foreach ([
@@ -126,6 +139,22 @@ class CheckoutInvoiceTest extends TestCase
         ] as $field) {
             $this->assertStringContainsString($field, $html, "結帳頁初始 HTML 缺少 {$field}");
         }
+    }
+
+    /**
+     * ⛔ 付款方式全關時,結帳頁不得提供一個送得出去的付款 radio。
+     *
+     * 這是上一個測試的反面,而且它才是預設狀態:一個 disabled 的 radio 在偽造
+     * 的 POST 裡照樣可以被送出來,所以不可用的方式必須根本不存在。
+     */
+    public function test_the_checkout_page_offers_no_payment_radio_when_every_channel_is_off(): void
+    {
+        $this->runningAsLiveSite();
+
+        $html = $this->checkoutHtml();
+
+        $this->assertStringNotContainsString('name="payment"', $html);
+        $this->assertStringContainsString('目前付款方式暫未開放', $html);
     }
 
     public function test_the_checkout_page_shows_the_product_summary(): void
@@ -463,6 +492,7 @@ class CheckoutInvoiceTest extends TestCase
     {
         Http::preventStrayRequests();
 
+        // ⛔ 刻意留在 testing 環境：mock 只存在於 local／testing。
         // ⛔ 本輪不呼叫綠界／LINE Pay／統編／載具任何 API。
         $this->submit([
             'invoice_kind' => 'business',

@@ -18,6 +18,7 @@ use App\Services\Payments\EcpayCheckMac;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -30,6 +31,7 @@ use Tests\TestCase;
  */
 class PaymentRetryTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private const HASH_KEY = 'test-hash-key-0001';
@@ -43,12 +45,12 @@ class PaymentRetryTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
 
         // R2：sandbox 付款預設關閉，測試必須明確開啟。
-        config()->set('integrations.payments.sandbox_enabled', true);
 
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
             ->create(['identifier' => self::MERCHANT]);
 
         $setting->credentials = ['HashKey' => self::HASH_KEY, 'HashIV' => self::HASH_IV];

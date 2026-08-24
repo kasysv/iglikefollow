@@ -43,8 +43,6 @@ class StagingDeploymentArtifactsTest extends TestCase
         $env = $this->artifact('staging.env.example');
 
         foreach ([
-            'PAYMENTS_SANDBOX_ENABLED=false',
-            'INVOICE_SANDBOX_ENABLED=false',
             'FULFILLMENT_DISPATCH_ENABLED=false',
             'FULFILLMENT_STAGING_THEMOSTPANEL_DISPATCH_ENABLED=false',
             'FULFILLMENT_STATUS_POLLING_ENABLED=false',
@@ -57,6 +55,30 @@ class StagingDeploymentArtifactsTest extends TestCase
         ] as $line) {
             $this->assertStringContainsString($line, $env, $line);
         }
+    }
+
+    /**
+     * ⛔ M4C:付款／發票的舊 env 旗標不得再出現在範本裡。
+     *
+     * runtime 已完全不讀它們;範本若還列著 `PAYMENTS_SANDBOX_ENABLED=false`,
+     * 部署的人會以為那一行就是「付款關閉」的證據——一個看起來通過、實際上
+     * 什麼都沒驗到的檢查。真正的開關在 Owner 的後台,證據由
+     * `app:staging-readiness` 逐通道回報。
+     */
+    public function test_the_deprecated_payment_flags_are_not_offered_by_the_template(): void
+    {
+        $env = $this->artifact('staging.env.example');
+
+        foreach ([
+            'PAYMENTS_SANDBOX_ENABLED=',
+            'INVOICE_SANDBOX_ENABLED=',
+            'INVOICE_GATEWAY=',
+        ] as $line) {
+            $this->assertStringNotContainsString($line, $env, $line);
+        }
+
+        // 範本必須指向真正的確認方式。
+        $this->assertStringContainsString('app:staging-readiness', $env);
     }
 
     /** ⛔ secret 欄位只有 placeholder;沒有任何看似真值的內容。 */

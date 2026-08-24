@@ -19,6 +19,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -44,16 +45,17 @@ use Tests\TestCase;
  */
 class PaymentConvergenceTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
-    private const BASE = 'https://sandbox-api-pay.line.me';
+    private const BASE = 'https://api-pay.line.me';
 
     protected function setUp(): void
     {
         parent::setUp();
 
         Http::preventStrayRequests();
-        config()->set('integrations.payments.sandbox_enabled', true);
+        $this->runningAsLiveSite();
         $this->seed(CatalogSeeder::class);
     }
 
@@ -70,7 +72,7 @@ class PaymentConvergenceTest extends TestCase
     private function configureLine(bool $enabled = true): IntegrationSetting
     {
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Production)
             ->create(['identifier' => 'channel-0001']);
 
         $setting->credentials = ['ChannelSecret' => 'test-channel-secret-0001'];
@@ -85,7 +87,7 @@ class PaymentConvergenceTest extends TestCase
     private function configureEcpay(bool $enabled = true): IntegrationSetting
     {
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
             ->create(['identifier' => '3000001']);
 
         $setting->credentials = ['HashKey' => 'test-hash-key-0001', 'HashIV' => 'test-hash-iv-0001'];
@@ -179,7 +181,7 @@ class PaymentConvergenceTest extends TestCase
     public function test_a_blank_ecpay_endpoint_converges_to_failed(): void
     {
         $this->configureEcpay();
-        config()->set('integrations.endpoints.ecpay_payment.sandbox', '');
+        config()->set('integrations.endpoints.ecpay_payment.production', '');
 
         $order = $this->order();
         $attempt = $this->resolve()->handle($order, 'ecpay');
@@ -315,9 +317,23 @@ class PaymentConvergenceTest extends TestCase
         ];
     }
 
+    /**
+     * 通道是開著的、credential 齊全,但端點設定被改壞——initiation 中途失敗。
+     *
+     * ⛔ M4C 之後「完全沒有開通道」不再走到這裡:那種情況 controller 在建立
+     * 任何訂單之前就拒絕了(見 test_a_disabled_channel_creates_no_order)。
+     * 這個測試要驗的是另一件事,而且它仍然重要:訂單已經建立、attempt 已經
+     * claim 之後失敗時,訂單不得被鎖死。
+     *
+     * ⛔ 留在 pending 的 attempt 會被 resolver 正確地擋下,於是那張訂單再也
+     * 付不了款——連換一家 provider 都不行。
+     */
     public function test_the_controller_leaves_a_retryable_order_after_a_failed_start(): void
     {
-        // credential 缺失：整條 controller 走完後，訂單仍必須是可再付款的。
+        $this->configureEcpay();
+        // ⛔ 端點不符白名單:adapter 會在送出任何東西之前放棄。
+        config()->set('integrations.endpoints.ecpay_payment.production', '');
+
         $this->post('/payments/start', $this->startCheckout())->assertRedirect();
 
         $order = Order::latest('id')->firstOrFail();
@@ -329,12 +345,27 @@ class PaymentConvergenceTest extends TestCase
         $this->assertNotNull($this->resolve()->handle($order, 'line-pay'));
     }
 
+    /**
+     * ⛔ 通道全關時,連訂單都不該建立。
+     *
+     * 先建單再回錯誤,會在資料庫留下一張永遠不會被付款的訂單,而後台看起來
+     * 像有人下了單。正確的行為是根本不開始。
+     */
+    public function test_a_disabled_channel_creates_no_order(): void
+    {
+        $this->post('/payments/start', $this->startCheckout())->assertRedirect('/checkout');
+
+        $this->assertSame(0, Order::count());
+        $this->assertSame(0, PaymentAttempt::count());
+    }
+
     // ==================================== 6. guard 關閉時不得取得 claim
 
     public function test_a_disabled_sandbox_never_claims_an_attempt(): void
     {
         $this->configureEcpay();
-        config()->set('integrations.payments.sandbox_enabled', false);
+        // ⛔ M4C:關閉付款＝Owner 在後台停用那一列,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->update(['is_enabled' => false]);
 
         $this->post('/payments/start', $this->startCheckout())->assertRedirect();
 

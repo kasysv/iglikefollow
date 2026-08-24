@@ -13,6 +13,7 @@ use App\Models\IntegrationSetting;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
 use App\Models\ServiceVariant;
+use App\Services\Integrations\ProviderEndpoints;
 use App\Services\Payments\EcpayPaymentGateway;
 use App\Services\Payments\LinePayGateway;
 use App\Services\Payments\PaymentGatewayRegistry;
@@ -23,6 +24,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -35,6 +37,7 @@ use Tests\TestCase;
  */
 class PaymentSafetyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -42,6 +45,7 @@ class PaymentSafetyTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
         $this->seed(CatalogSeeder::class);
     }
 
@@ -50,80 +54,95 @@ class PaymentSafetyTest extends TestCase
         return app(PaymentGatewayRegistry::class);
     }
 
-    private function enableSandbox(): void
-    {
-        config()->set('integrations.payments.sandbox_enabled', true);
-    }
-
+    /** Owner 已開啟綠界付款,credential 齊全。 */
     private function configureEcpay(): void
     {
-        $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
-            ->create(['identifier' => '3000001']);
-
-        $setting->credentials = ['HashKey' => 'k', 'HashIV' => 'v'];
-        $setting->save();
-
-        DB::table('integration_settings')->where('id', $setting->id)->update(['is_enabled' => true]);
+        $this->enableChannel(IntegrationProvider::EcpayPayment, '3000001');
     }
 
     // ============================================ 1. 預設關閉
 
-    public function test_sandbox_payments_are_off_by_default(): void
+    /**
+     * ⛔ 填了 credential 不等於開始收款:還要 Owner 明確按下啟用。
+     *
+     * M4C 之後這一條的依據換了(從 env 旗標換成後台開關),但要證明的事完全
+     * 沒變:把金鑰存進資料庫這個動作本身,不得讓任何一筆交易變成可能。
+     */
+    public function test_a_configured_but_disabled_channel_is_unavailable(): void
     {
-        // ⛔ 填了 credential 也不等於開始送出請求。
-        $this->configureEcpay();
+        $this->configureChannelWithoutEnabling(IntegrationProvider::EcpayPayment, '3000001');
 
-        $this->assertFalse($this->registry()->sandboxEnabled());
+        $this->assertFalse($this->registry()->availableToCustomer('ecpay'));
         $this->assertNull($this->registry()->for('ecpay'));
     }
 
-    public function test_an_unconfigured_provider_fails_closed(): void
+    /** ⛔ 完全沒有設定時同樣不可用,而且不是丟例外。 */
+    public function test_a_channel_with_no_row_at_all_is_unavailable(): void
     {
-        $this->enableSandbox();
-
-        // 開關開了，但沒有 credential。
-        $gateway = $this->registry()->for('ecpay');
-        $this->assertNotNull($gateway);
-
-        $attempt = PaymentAttempt::factory()->create([
-            'order_id' => Order::factory()->create()->id,
-            'provider' => 'ecpay',
-        ]);
-
-        // ⛔ 誠實失敗，不假裝付款開始了。
-        $this->assertTrue($gateway->initiate($attempt)->isFailed());
+        $this->assertFalse($this->registry()->availableToCustomer('ecpay'));
+        $this->assertNull($this->registry()->for('ecpay'));
     }
 
-    public function test_a_disabled_credential_fails_closed(): void
+    /**
+     * 半套 credential:Owner 的開關開著,但金鑰不全。
+     *
+     * ⛔ 必須誠實失敗,不假裝付款開始了——半套的金鑰只會在對方系統得到一個
+     * 看不懂的錯誤,而客人已經離開結帳頁了。
+     */
+    public function test_a_half_configured_provider_fails_closed(): void
     {
-        $this->enableSandbox();
-
-        // 有 credential 但沒有啟用。
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
             ->create(['identifier' => '3000001']);
-        $setting->credentials = ['HashKey' => 'k', 'HashIV' => 'v'];
+
+        // ⛔ 只有一半的金鑰;繞過 model 直接開啟,模擬偽造或資料損壞。
+        $setting->credentials = ['HashKey' => 'k'];
         $setting->save();
+        DB::table('integration_settings')->where('id', $setting->id)->update(['is_enabled' => true]);
+
+        $this->assertNull($this->registry()->for('ecpay'));
 
         $attempt = PaymentAttempt::factory()->create([
             'order_id' => Order::factory()->create()->id,
             'provider' => 'ecpay',
         ]);
 
-        $this->assertTrue($this->registry()->for('ecpay')->initiate($attempt)->isFailed());
+        // ⛔ 直接從 container 取出 adapter 也一樣拒絕。
+        $this->assertTrue(app(EcpayPaymentGateway::class)->initiate($attempt)->isFailed());
+    }
+
+    /**
+     * 有 credential 但 Owner 沒有啟用。
+     *
+     * ⛔ registry 必須回 null(而不是回一個會失敗的 adapter):通道關著的時候
+     * 連 adapter 都不該存在,否則「拿得到 adapter」就成了一個看起來可以付款
+     * 的訊號。⛔ 直接從 container 取出 adapter 也一樣拒絕。
+     */
+    public function test_a_disabled_credential_fails_closed(): void
+    {
+        $this->configureChannelWithoutEnabling(IntegrationProvider::EcpayPayment, '3000001');
+
+        $attempt = PaymentAttempt::factory()->create([
+            'order_id' => Order::factory()->create()->id,
+            'provider' => 'ecpay',
+        ]);
+
+        $this->assertNull($this->registry()->for('ecpay'));
+        $this->assertTrue(app(EcpayPaymentGateway::class)->initiate($attempt)->isFailed());
     }
 
     public function test_an_unknown_provider_has_no_adapter(): void
     {
-        $this->enableSandbox();
+        $this->enableAllChannels();
 
         $this->assertNull($this->registry()->for('some-other-provider'));
     }
 
     public function test_a_disabled_registry_returns_nothing_rather_than_a_stand_in(): void
     {
-        $this->configureEcpay();
+        // credential 齊全但 Owner 沒有啟用——這才是「關閉」的狀態。
+        $this->configureChannelWithoutEnabling(IntegrationProvider::EcpayPayment, '3000001');
+        $this->configureChannelWithoutEnabling(IntegrationProvider::LinePay, 'channel-0001');
 
         // ⛔ 關閉時回 null，⛔ 不回一個「會成功」的替身：
         // 靜靜假裝付款成功，比明確拒絕危險得多。
@@ -134,7 +153,7 @@ class PaymentSafetyTest extends TestCase
 
     public function test_the_registry_only_knows_the_two_real_adapters(): void
     {
-        $this->enableSandbox();
+        $this->enableAllChannels();
 
         $this->assertInstanceOf(
             EcpayPaymentGateway::class,
@@ -146,23 +165,53 @@ class PaymentSafetyTest extends TestCase
         );
     }
 
-    // ============================================ 2. production 永遠拒絕
+    // ============================================ 2. 環境邊界
 
-    public function test_production_is_refused_even_when_enabled(): void
+    /**
+     * ⛔ 本機／測試環境永遠不可用,即使 Owner 的通道是開著的。
+     *
+     * M4C 反轉了原本的「production 一律拒絕」:那讓正式站永遠收不到款。
+     * 剩下的環境邊界是這一條,而它是技術邊界,不是 Owner 的營運開關——
+     * 少了它,任何開發機器只要有一份正式 credential 就會開始真的收款。
+     */
+    public function test_a_local_machine_is_refused_even_when_the_owner_enabled_it(): void
     {
-        $this->enableSandbox();
-        $this->app->detectEnvironment(fn () => 'production');
+        $this->enableAllChannels();
+        $this->runningAsLiveSite('local');
 
-        // ⛔ 這一輪只做 sandbox：改一個 config 值不該就開始收真錢。
         $this->assertNull($this->registry()->for('ecpay'));
         $this->assertNull($this->registry()->for('line-pay'));
+        $this->assertFalse($this->registry()->outboundAllowed());
     }
 
-    public function test_no_production_endpoint_is_configured(): void
+    /** ⛔ production 是 Owner 營運的環境,開關開著就必須可用。 */
+    public function test_production_is_usable_once_the_owner_enables_it(): void
     {
-        foreach (config('integrations.endpoints') as $provider => $environments) {
-            $this->assertSame('', $environments['production'] ?? '', "{$provider} 不得有 production 端點");
-        }
+        $this->enableAllChannels();
+        $this->runningAsLiveSite('production');
+
+        $this->assertInstanceOf(EcpayPaymentGateway::class, $this->registry()->for('ecpay'));
+        $this->assertInstanceOf(LinePayGateway::class, $this->registry()->for('line-pay'));
+    }
+
+    /**
+     * ⛔ 交易端點必須恰好是官方正式網址,而且固定在版本控制中。
+     *
+     * 這一條取代了舊的「production 端點必須為空」:端點不再是開關,它是
+     * SSRF 邊界。可以由後台輸入的網址,等於這台伺服器會帶著我們的金鑰去連
+     * 任何有人填進去的主機。
+     */
+    public function test_the_transaction_endpoints_are_exactly_the_official_ones(): void
+    {
+        $endpoints = config('integrations.endpoints');
+
+        $this->assertSame(ProviderEndpoints::ECPAY_PAYMENT, $endpoints['ecpay_payment']['production']);
+        $this->assertSame(ProviderEndpoints::LINE_PAY_API, $endpoints['line_pay']['production']);
+        $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_ISSUE, $endpoints['ecpay_invoice']['production']);
+        $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_QUERY, $endpoints['ecpay_invoice_query']['production']);
+
+        // ⛔ 自動派單仍未獲批准,production 端點必須維持空字串。
+        $this->assertSame('', $endpoints['themostpanel']['production']);
     }
 
     // ============================================ 3. 啟動付款的授權
@@ -197,7 +246,7 @@ class PaymentSafetyTest extends TestCase
 
     public function test_the_form_cannot_choose_its_own_price(): void
     {
-        $this->enableSandbox();
+        $this->enableAllChannels();
         $this->configureEcpay();
 
         $form = $this->startCheckout();
@@ -217,7 +266,7 @@ class PaymentSafetyTest extends TestCase
 
     public function test_the_form_cannot_set_the_order_status(): void
     {
-        $this->enableSandbox();
+        $this->enableAllChannels();
         $this->configureEcpay();
 
         $form = $this->startCheckout();
@@ -234,7 +283,7 @@ class PaymentSafetyTest extends TestCase
 
     public function test_starting_a_payment_never_marks_it_paid(): void
     {
-        $this->enableSandbox();
+        $this->enableAllChannels();
         $this->configureEcpay();
 
         $this->post('/payments/start', $this->startCheckout());

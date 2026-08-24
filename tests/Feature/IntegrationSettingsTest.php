@@ -11,6 +11,9 @@ use App\Models\AdminAuditLog;
 use App\Models\IntegrationSetting;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
+use App\Services\Invoices\InvoiceSandboxGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -18,6 +21,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Symfony\Component\HttpKernel\Exception\HttpException;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -30,6 +34,7 @@ use Tests\TestCase;
  */
 class IntegrationSettingsTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -331,15 +336,80 @@ class IntegrationSettingsTest extends TestCase
 
     // ============================================ 6. 啟用限制與 SSRF
 
-    public function test_production_cannot_be_enabled(): void
+    /**
+     * M4C 反轉了這一條：Owner 必須能自己開啟正式通道。
+     *
+     * 舊規則是「production 不得被啟用」，其代價是 Owner 在後台按了開關卻沒有
+     * 反應，然後有人回來改 `.env` 或發一次版——那正是 Owner 明確要求消除的。
+     *
+     * ⛔ 換掉的只有「誰可以決定」，不是「有沒有規則」：下面幾個測試證明
+     * credential 不齊、sandbox 列、非 Owner 與自動派單仍然全部被擋。
+     */
+    public function test_production_can_be_enabled_once_it_is_fully_configured(): void
     {
         $setting = IntegrationSetting::factory()
             ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
             ->configured()->create();
 
+        $setting->update(['is_enabled' => true]);
+
+        $this->assertTrue($setting->fresh()->is_enabled);
+    }
+
+    /**
+     * ⛔ credential 不齊時不得開啟，而且規則在 model 層。
+     *
+     * 前端 disabled 擋不住 `$setting->update(['is_enabled' => true])`，
+     * 也擋不住一份手寫的 Livewire payload。
+     */
+    public function test_an_incompletely_configured_channel_cannot_be_enabled(): void
+    {
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Production)
+            ->create(['identifier' => 'MERCHANT-1']);
+
+        // ⛔ 只有一半的金鑰。
+        $setting->credentials = ['HashKey' => 'k'];
+        $setting->save();
+
         $this->expectException(ValidationException::class);
 
-        // ⛔ 前端 disabled 擋不住這種寫法，所以規則在 model 層。
+        $setting->update(['is_enabled' => true]);
+    }
+
+    /** ⛔ 缺少的欄位名稱必須寫在訊息裡，否則 Owner 只能逐欄猜。 */
+    public function test_the_refusal_names_the_missing_fields_without_any_value(): void
+    {
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::LinePay, IntegrationEnvironment::Production)
+            ->create(['identifier' => 'channel-1']);
+
+        try {
+            $setting->update(['is_enabled' => true]);
+            $this->fail('缺少 Channel Secret 時不應該可以啟用');
+        } catch (ValidationException $e) {
+            $message = $e->validator->errors()->first();
+
+            $this->assertStringContainsString('Channel Secret', $message);
+            // ⛔ 訊息不得含任何值。
+            $this->assertStringNotContainsString('channel-1', $message);
+        }
+    }
+
+    /**
+     * ⛔ sandbox 列不得被開啟。
+     *
+     * runtime 只讀 production 列，所以一列開著的 sandbox 設定在後台看起來像
+     * 「已啟用」，實際上永遠不會被讀到——那是一個會讓人以為已經開始收款的顯示。
+     */
+    public function test_a_sandbox_row_cannot_be_enabled(): void
+    {
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::EcpayPayment, IntegrationEnvironment::Sandbox)
+            ->configured()->create();
+
+        $this->expectException(ValidationException::class);
+
         $setting->update(['is_enabled' => true]);
     }
 
@@ -383,54 +453,79 @@ class IntegrationSettingsTest extends TestCase
     }
 
     /**
-     * ⛔ 只有已核對過的 sandbox 端點可以存在。
+     * ⛔ 交易端點必須恰好是官方正式網址，而且固定在版本控制中。
      *
-     * M3B-B1 批准了綠界 stage 與 LINE Pay sandbox，所以這兩個不再是空的；
-     * 其餘一律留空——⛔ 端點不得「先填好等人誤用」，尤其是 production。
+     * 這一條取代了舊的「所有 production 端點必須為空」。端點不再是開關——
+     * 它是 SSRF 邊界：一個可以在後台輸入的網址，等於這台伺服器會帶著我們的
+     * 金鑰去連任何有人填進去的主機。真正的開關是 Owner 的後台切換。
      */
-    public function test_only_approved_sandbox_endpoints_exist(): void
+    public function test_the_transaction_endpoints_are_exactly_the_official_ones(): void
     {
         $endpoints = config('integrations.endpoints');
 
-        // 已批准：綠界 stage 與 LINE Pay sandbox。
-        $this->assertStringStartsWith('https://payment-stage.ecpay.com.tw/', $endpoints['ecpay_payment']['sandbox']);
-        $this->assertSame('https://sandbox-api-pay.line.me', $endpoints['line_pay']['sandbox']);
+        $this->assertSame(ProviderEndpoints::ECPAY_PAYMENT, $endpoints['ecpay_payment']['production']);
+        $this->assertSame(ProviderEndpoints::LINE_PAY_API, $endpoints['line_pay']['production']);
+        $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_ISSUE, $endpoints['ecpay_invoice']['production']);
+        $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_QUERY, $endpoints['ecpay_invoice_query']['production']);
 
-        // ⛔ 所有 production 端點仍為空。
-        foreach ($endpoints as $provider => $environments) {
-            $this->assertSame('', $environments['production'] ?? '', "{$provider} 的 production 端點不得填入");
-        }
-
-        // B2 已批准綠界 stage 發票端點；⛔ 只接受官方 stage 主機。
-        $this->assertStringStartsWith(
-            'https://einvoice-stage.ecpay.com.tw/',
-            $endpoints['ecpay_invoice']['sandbox']
-        );
-        // ⛔ TheMostPanel 完全未證實，仍留空。
+        // ⛔ TheMostPanel 自動派單仍未獲批准，production 端點必須維持空字串。
         $this->assertSame('', $endpoints['themostpanel']['production']);
     }
 
-    public function test_only_sandbox_payments_are_enablable(): void
+    /**
+     * ⛔ 端點不可由資料庫或後台提供。
+     *
+     * `ProviderEndpoints` 用整串精確比對:設定值被改成任何其他東西時,adapter
+     * 在送出一個位元組之前就 fail closed。
+     */
+    public function test_a_tampered_endpoint_fails_closed(): void
+    {
+        config()->set('integrations.endpoints.ecpay_payment.production', 'https://evil.example.com/pay');
+        $this->assertNull(ProviderEndpoints::ecpayPayment());
+
+        config()->set('integrations.endpoints.line_pay.production', 'https://api-pay.line.me/');
+        // ⛔ 只差一個尾斜線也拒絕:需要被「整理」才符合的值,不是白名單裡的那一個。
+        $this->assertNull(ProviderEndpoints::linePayApi());
+    }
+
+    /**
+     * ⛔ 付款與發票已不再受 code 層 allowlist 約束，但自動派單仍然是。
+     *
+     * 這是 M4C 唯一保留在版本控制裡的啟用批准:開啟派單會開始對外花錢下單,
+     * 那還不是 Owner 的營運決定。
+     */
+    public function test_only_dispatch_still_needs_a_code_level_approval(): void
     {
         $enablable = config('integrations.enablable');
 
-        // 已批准的 sandbox 付款測試。
-        $this->assertTrue($enablable['ecpay_payment']['sandbox']);
-        $this->assertTrue($enablable['line_pay']['sandbox']);
+        $this->assertFalse($enablable['themostpanel']['production']);
 
-        // ⛔ 任何 production 都不得被啟用。
-        foreach ($enablable as $provider => $environments) {
-            $this->assertFalse($environments['production'] ?? false, "{$provider} production 不得可啟用");
-        }
-
-        // ⛔ 發票與 TheMostPanel 本輪都不開放。
-        $this->assertFalse($enablable['ecpay_invoice']['sandbox']);
+        // ⛔ 付款與發票的鍵必須已被移除,不是設成 true:留著一個 true 會讓人
+        // 以為必須先在 code 裡開一次,而 runtime 其實已經不再讀它。
+        $this->assertArrayNotHasKey('ecpay_payment', $enablable);
+        $this->assertArrayNotHasKey('line_pay', $enablable);
+        $this->assertArrayNotHasKey('ecpay_invoice', $enablable);
     }
 
-    public function test_sandbox_payments_are_off_by_default(): void
+    /**
+     * ⛔ 已 deprecated 的 sandbox 旗標不得再否決 Owner 的後台開關。
+     *
+     * 這是這一輪最重要的回歸:Owner 之前點綠界付款得到「付款方式目前無法
+     * 使用」,根因就是這兩個預設為 false 的旗標。把它們明確設成 false,通道
+     * 仍然必須可用——否則就是同一個問題換個地方再發生一次。
+     */
+    public function test_the_deprecated_sandbox_flags_cannot_override_the_owner_switch(): void
     {
-        // ⛔ 總開關預設關閉：填了 credential 也不等於開始送出請求。
-        $this->assertFalse(config('integrations.payments.sandbox_enabled'));
+        config()->set('integrations.payments.sandbox_enabled', false);
+        config()->set('integrations.invoice.sandbox_enabled', false);
+        config()->set('integrations.invoice.gateway', 'fake');
+
+        $this->runningAsLiveSite();
+        $this->enableAllChannels();
+
+        $this->assertTrue(LiveIntegration::availableToCustomer(IntegrationProvider::EcpayPayment));
+        $this->assertTrue(LiveIntegration::availableToCustomer(IntegrationProvider::LinePay));
+        $this->assertNotNull(InvoiceSandboxGuard::setting());
     }
 
     public function test_a_raw_response_cannot_be_stored_as_a_test_message(): void

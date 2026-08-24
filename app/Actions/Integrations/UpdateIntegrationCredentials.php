@@ -25,6 +25,14 @@ use Illuminate\Validation\ValidationException;
  */
 class UpdateIntegrationCredentials
 {
+    /**
+     * 後台顯示已設定密鑰時使用的固定遮罩。
+     *
+     * ⛔ 常數定義在這裡而不是只在 Filament 頁面上:擋下它是寫入層的責任。
+     * 只在頁面上比對,等於這道防線只保護走過那個頁面的請求。
+     */
+    public const MASK = '********';
+
     public function __construct(private readonly RecordCredentialAudit $audit) {}
 
     /**
@@ -77,6 +85,23 @@ class UpdateIntegrationCredentials
                 }
 
                 $value = trim($value);
+
+                /*
+                 * ⛔ 遮罩字串永遠不會被當成新密鑰寫入。
+                 *
+                 * 後台顯示已設定的欄位為固定的 `********`。真正的密鑰不會回灌
+                 * 到輸入框,所以正常操作根本不會送出這個字串——但一份手寫的
+                 * Livewire payload、一個自動填表的瀏覽器擴充,或某天有人「照著
+                 * 畫面上看到的」貼回來,都可能送進來。真的存下去,結果是這個
+                 * 通道帶著八個星號去簽章,對方回一個看不懂的錯誤,而後台顯示
+                 * 「已設定」。
+                 *
+                 * ⛔ no-op 而不是丟例外:這不是 Owner 的操作錯誤,他很可能只是
+                 * 改了另一個欄位就按儲存。當成「沒有變更」處理最接近他的意圖。
+                 */
+                if ($value === self::MASK) {
+                    continue;
+                }
 
                 if (($credentials[$key] ?? null) === $value) {
                     continue;

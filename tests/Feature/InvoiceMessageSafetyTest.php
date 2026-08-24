@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Livewire;
 use ReflectionClass;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -45,6 +46,7 @@ use Tests\TestCase;
  */
 class InvoiceMessageSafetyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     /** 這些字串代表憑證與個資；⛔ 任何一個出現在落盤或畫面上都是外洩。 */
@@ -64,9 +66,9 @@ class InvoiceMessageSafetyTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+        $this->runningAsLiveSite();
 
         // B2：發票 sandbox 總開關預設關閉，測試需明確開啟。
-        config()->set('integrations.invoice.sandbox_enabled', true);
     }
 
     private function paidOrder(): Order
@@ -82,7 +84,7 @@ class InvoiceMessageSafetyTest extends TestCase
     private function pendingInvoice(): Invoice
     {
         $setting = IntegrationSetting::factory()
-            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Sandbox)
+            ->forProvider(IntegrationProvider::EcpayInvoice, IntegrationEnvironment::Production)
             ->configured()->create();
 
         DB::table('integration_settings')->where('id', $setting->id)->update(['is_enabled' => true]);

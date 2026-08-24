@@ -38,9 +38,23 @@ grep -Eq '^APP_URL=https://' "${APP_DIR}/.env"; check "APP_URL 為 https://" $?
 env_is ALLOW_INDEXING false; check "ALLOW_INDEXING=false(staging 不可被索引)" $?
 grep -Eq '^QUEUE_CONNECTION=(database|redis)\s*$' "${APP_DIR}/.env"; check "QUEUE_CONNECTION 非 sync" $?
 env_is FULFILLMENT_DRIVER disabled; check "FULFILLMENT_DRIVER=disabled(default)" $?
-for FLAG in PAYMENTS_SANDBOX_ENABLED INVOICE_SANDBOX_ENABLED FULFILLMENT_DISPATCH_ENABLED FULFILLMENT_STAGING_THEMOSTPANEL_DISPATCH_ENABLED FULFILLMENT_STATUS_POLLING_ENABLED; do
+
+# 履約／派單／輪詢仍由 env 旗標控制,default off。
+for FLAG in FULFILLMENT_DISPATCH_ENABLED FULFILLMENT_STAGING_THEMOSTPANEL_DISPATCH_ENABLED FULFILLMENT_STATUS_POLLING_ENABLED; do
     env_is "$FLAG" false; check "${FLAG}=false(default off)" $?
 done
+
+# ---- 付款／發票:⛔ 不再以 env 旗標宣稱「一定關閉」(M4C) ----
+#
+# ⛔ PAYMENTS_SANDBOX_ENABLED／INVOICE_SANDBOX_ENABLED 已 deprecated,runtime
+# 完全不讀它們。把 `=false` 當成「付款一定關閉」的證據,是一個看起來通過、
+# 實際上什麼都沒驗到的檢查——而它會讓人以為部署是安全的。
+#
+# 真正的關閉證據是 production `integration_settings` 沒有任何啟用列。這件事
+# 只有應用程式自己答得出來(需要解密與 provider 規則),所以交給
+# `app:staging-readiness` 逐通道回報,⛔ 不在 shell 裡重寫一份會漂移的判斷。
+echo "  note: 付款／發票是否關閉,請以 'php artisan app:staging-readiness' 的"
+echo "        channel_* 逐項結果為準;⛔ env 旗標已不再是證據。"
 
 # APP_KEY:⛔ 只驗 presence(鍵存在且值非空),完全不輸出值。
 grep -Eq '^APP_KEY=.+$' "${APP_DIR}/.env"; check "APP_KEY 已設定(只驗有/無)" $?
