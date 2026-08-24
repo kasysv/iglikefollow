@@ -215,15 +215,29 @@ class M2aRevisionTest extends TestCase
         ]);
     }
 
-    public function test_default_quantity_off_step_is_rejected(): void
+    /**
+     * ⛔ M3A:default 只需落在範圍內。
+     *
+     * 原測試主張 155 必須被拒絕(不是 100 的倍數);現在它合法,而超出
+     * 範圍的 default 仍然必須被拒絕。
+     */
+    public function test_an_in_range_default_is_accepted_and_out_of_range_is_not(): void
     {
+        $variant = ServiceVariant::factory()->create([
+            'min_quantity' => 100,
+            'max_quantity' => 1000,
+            'step_quantity' => 100,   // legacy;不得再影響任何事
+            'default_quantity' => 155,
+        ]);
+
+        $this->assertSame(155, (int) $variant->default_quantity);
+
         $this->expectException(ValidationException::class);
 
         ServiceVariant::factory()->create([
             'min_quantity' => 100,
             'max_quantity' => 1000,
-            'step_quantity' => 100,
-            'default_quantity' => 155,
+            'default_quantity' => 1001,
         ]);
     }
 

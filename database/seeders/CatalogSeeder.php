@@ -141,7 +141,13 @@ class CatalogSeeder extends Seeder
                 'quantity_unit' => $unit,
                 'min_quantity' => $variantData['quantity']['min'],
                 'max_quantity' => $variantData['quantity']['max'],
-                'step_quantity' => $variantData['quantity']['step'],
+                /*
+                 * ⛔ M3A:一律寫入 1。`step_quantity` 是 legacy 欄位(DB 仍
+                 * NOT NULL),已不限制顧客能買什麼;沿用 fixture 裡的舊 step
+                 * 只會在資料裡留下一個看起來仍然生效的倍數限制。
+                 * ⛔ fixture 本身不動——它同時是內容來源,不在本輪範圍。
+                 */
+                'step_quantity' => 1,
                 'default_quantity' => $variantData['quantity']['default'],
                 'unit_price' => $variantData['quantity']['unit_price'],
                 'currency' => 'TWD',

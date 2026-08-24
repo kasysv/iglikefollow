@@ -21,10 +21,14 @@ use App\Models\ServiceVariant;
  * QuantityCompatibility) and must additionally fit the site's unsigned
  * 32-bit quantity columns before any cast to int happens.
  *
- * ⛔ The provider has no trustworthy step contract, so `step_quantity` is
- * never guessed at or changed: the target keeps the variant's existing step,
- * and if the new range contains no multiple of that step the whole target is
- * rejected instead of "fixing" the step.
+ * ⛔ M3A: `step_quantity` plays no part. Customers may buy any integer in
+ * range, so the target is simply the provider's own min/max, and the default
+ * moves only if it falls outside that range — never to satisfy a multiple.
+ * The legacy column is left exactly as it is: this action does not read it,
+ * write it, or reason about it.
+ *
+ * ⛔ INVALID_SITE_STEP and NO_PURCHASABLE_STEP are retained as constants for
+ * compatibility but can no longer be produced.
  */
 final class ProviderBoundsTarget
 {
@@ -53,7 +57,7 @@ final class ProviderBoundsTarget
         public readonly ?int $targetDefault,
         /** provider min 為 0,本站目標最小值提升為 1。 */
         public readonly bool $minZeroLifted,
-        /** 原 default 不符新範圍或 step,已調整為範圍內第一個合法 step 倍數。 */
+        /** 原 default 落在新範圍外,已調整為新的最小值。 */
         public readonly bool $defaultAdjusted,
         /** 固定本地 reason code;⛔ 永不含 provider 值。 */
         public readonly ?string $reason,
@@ -87,30 +91,20 @@ final class ProviderBoundsTarget
             return self::rejected(self::EMPTY_TARGET_RANGE);
         }
 
-        $step = (int) $variant->step_quantity;
-
-        if ($step < 1) {
-            // ⛔ corrupt step 不是套用的理由,也絕不代為「修正」。
-            return self::rejected(self::INVALID_SITE_STEP);
-        }
-
-        // 新範圍內第一個合法 step 倍數;不存在就整個拒絕。
-        $first = intdiv($targetMin + $step - 1, $step) * $step;
-
-        if ($first > $targetMax) {
-            return self::rejected(self::NO_PURCHASABLE_STEP);
-        }
-
+        /*
+         * ⛔ M3A:不再做 step 對齊。顧客可買範圍內任何整數,所以新範圍的
+         * 第一個可購數量就是 targetMin,而 default 只在「跑出新範圍」時才調整
+         * ——不是因為它不是某個數字的倍數。舊的對齊會把 provider min 10
+         * 抬成 100,等於代 provider 收窄了它自己願意接的範圍。
+         */
         $currentDefault = (int) $variant->default_quantity;
-        $defaultStillValid = $currentDefault >= $targetMin
-            && $currentDefault <= $targetMax
-            && $currentDefault % $step === 0;
+        $defaultStillValid = $currentDefault >= $targetMin && $currentDefault <= $targetMax;
 
         return new self(
             ok: true,
             targetMin: $targetMin,
             targetMax: $targetMax,
-            targetDefault: $defaultStillValid ? $currentDefault : $first,
+            targetDefault: $defaultStillValid ? $currentDefault : $targetMin,
             minZeroLifted: $minZeroLifted,
             defaultAdjusted: ! $defaultStillValid,
             reason: null,

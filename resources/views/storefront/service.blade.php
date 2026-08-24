@@ -2,11 +2,11 @@
     $variants = $service->variants;
     $default = $variants->firstWhere('is_featured', true) ?? $variants->first();
     $unit = $default?->quantity_unit ?? '個';
-    // Alpine 需要 min/max/step/單價 才能在前端試算；⛔ 實際金額仍由後端重算。
+    // Alpine 需要 min/max/單價 才能在前端試算；⛔ 實際金額仍由後端重算。
+    // ⛔ M3A:不再送出 step —— 它已不是購買規則,送出去只會被誤用成限制。
     $bounds = $variants->mapWithKeys(fn ($v) => [$v->id => [
         'min' => (int) $v->min_quantity,
         'max' => (int) $v->max_quantity,
-        'step' => (int) $v->step_quantity,
         'default' => (int) $v->default_quantity,
         'unit_price' => (float) $v->unit_price,
         // 服務項目簡介同時給 Alpine 切換用；⛔ 仍以下方 server-rendered 版本為主。
@@ -86,7 +86,18 @@
         </section>
     @else
     {{-- 服務頁只管選品：服務項目、數量與即時試算。
-         付款方式與電子發票狀態已移到 /checkout，⛔ 這裡不再持有。 --}}
+         付款方式與電子發票狀態已移到 /checkout，⛔ 這裡不再持有。
+
+         estimate() 用的是與伺服器同一條 half-up 規則，且同樣不讓 binary float
+         決定進位：單價先化成整數 mills（×10000 後的 Math.round 只是消掉 IEEE
+         表示誤差，不是金額的四捨五入），再用整數餘數判斷。
+         ⛔ 直接寫 Math.round(q * unit_price) 會在 .5 邊界漂移。
+         ⛔ 這只是試算；伺服器重算的金額才是唯一真實來源。
+
+         valid：M3A 起範圍內任何正整數皆可，⛔ 不再檢查倍數。
+
+         ⛔ 這段說明放在 Blade 註解而不是 x-data 內的 JS 註解：x-data 會整段
+         輸出到 HTML，交易關鍵字禁詞掃描會（正確地）抓到它。 --}}
     <div x-data="{
             variant: '{{ $default->id }}',
             bounds: {{ Illuminate\Support\Js::from($bounds) }},
@@ -95,11 +106,14 @@
             selectVariant(key) { this.variant = key; this.quantity = this.bounds[key].default },
             get estimate() {
                 const q = Number(this.quantity) || 0
-                return Math.round(q * this.b.unit_price).toLocaleString()
+                const mills = Math.round(this.b.unit_price * 10000) * q
+                const whole = Math.floor(mills / 10000)
+                const remainder = mills - whole * 10000
+                return (remainder * 2 >= 10000 ? whole + 1 : whole).toLocaleString()
             },
             get valid() {
                 const q = Number(this.quantity)
-                return Number.isInteger(q) && q >= this.b.min && q <= this.b.max && q % this.b.step === 0
+                return Number.isInteger(q) && q >= this.b.min && q <= this.b.max
             }
          }">
         <section class="mx-auto grid max-w-[1320px] items-start gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[1fr_450px] lg:gap-12">
@@ -223,15 +237,17 @@
                         </label>
                         <input id="quantity" name="quantity" type="number" inputmode="numeric" required
                                x-model="quantity"
-                               :min="b.min" :max="b.max" :step="b.step"
+                               {{-- ⛔ M3A:step 固定為 1。原本綁 b.step 時,瀏覽器會把
+                                    「有效值」定義成倍數,Owner 輸入 100 才會被提示
+                                    最近有效值是 10 與 110。 --}}
+                               :min="b.min" :max="b.max" step="1"
                                value="{{ old('quantity', $startQuantity) }}"
                                aria-describedby="quantity-hint"
                                class="min-h-14 w-full rounded-2xl border border-black/15 bg-white px-4 py-3 text-base tabular-nums">
                         <p id="quantity-hint" class="mt-2 text-sm leading-6 text-black/65">
                             可輸入 <span x-text="Number(b.min).toLocaleString()">{{ number_format($default->min_quantity) }}</span>
                             至 <span x-text="Number(b.max).toLocaleString()">{{ number_format($default->max_quantity) }}</span>
-                            <span x-text="b.unit">{{ $unit }}</span>，需為
-                            <span x-text="b.step">{{ $default->step_quantity }}</span> 的倍數。
+                            <span x-text="b.unit">{{ $unit }}</span>之間的任意整數。
                         </p>
                         <p class="mt-2 text-sm" x-show="!valid" x-cloak>
                             <span class="text-red-700">數量不符合此服務項目的可購買範圍。</span>

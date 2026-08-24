@@ -277,7 +277,8 @@ class FulfillmentMappingForm
         $site = '本站:'.($variant->service?->platform?->name ?? '—')
             .'／'.($variant->service?->name ?? '—')
             .'／'.$variant->label
-            .';設定 min '.$variant->min_quantity.'／max '.$variant->max_quantity.'/step '.(int) $variant->step_quantity
+            // ⛔ M3A:step 已不是購買規則,不再顯示。
+            .';設定 min '.$variant->min_quantity.'／max '.$variant->max_quantity
             .';實際可購 '.($assessment->siteFirstPurchasable === null
                 ? '無(設定不合規)'
                 : $assessment->siteFirstPurchasable.'–'.$assessment->siteLastPurchasable).'。';
@@ -330,10 +331,10 @@ class FulfillmentMappingForm
 
         $target = ProviderBoundsTarget::compute($variant, $service);
 
+        // ⛔ M3A:不再顯示「間隔」——它已不影響顧客能買什麼。
         $current = '本站現值:min '.(int) $variant->min_quantity
             .'／max '.(int) $variant->max_quantity
-            .'／預設 '.(int) $variant->default_quantity
-            .'／間隔 '.(int) $variant->step_quantity.'。';
+            .'／預設 '.(int) $variant->default_quantity.'。';
 
         $api = 'API 目錄:min '.$service->minimum_quantity_raw
             .'／max '.$service->maximum_quantity_raw

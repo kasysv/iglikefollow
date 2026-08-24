@@ -115,18 +115,16 @@ class ServiceVariantForm
                             },
                         ]),
 
-                    TextInput::make('step_quantity')
-                        ->label('數量間隔')
-                        ->helperText('客人只能買這個數字的倍數。填 100 代表只能買 100、200、300…；填 1 代表任何數字都可以。')
-                        ->numeric()
-                        ->required()
-                        ->default(1)
-                        ->minValue(1),
+                    /*
+                     * ⛔ M3A:「數量間隔」輸入已移除。客人可買最少與最多之間的
+                     * 任何整數,這個欄位不再有可設定的意義;留著只會讓 Owner 以為
+                     * 自己還能限制倍數。legacy DB 欄位保留但不再顯示或編輯。
+                     */
 
                     // 預設數量必須真的買得到，⛔ 否則客人一進頁面就是無效狀態。
                     TextInput::make('default_quantity')
                         ->label('預設數量')
-                        ->helperText('客人打開頁面時，數量欄位預先帶的數字。必須在最少與最多之間，而且是「數量間隔」的倍數。')
+                        ->helperText('客人打開頁面時，數量欄位預先帶的數字。必須在最少與最多之間。')
                         ->numeric()
                         ->required()
                         ->minValue(1)
@@ -134,7 +132,6 @@ class ServiceVariantForm
                             fn ($get) => function (string $attribute, $value, $fail) use ($get) {
                                 $min = $get('min_quantity');
                                 $max = $get('max_quantity');
-                                $step = (int) $get('step_quantity');
 
                                 if (filled($min) && (int) $value < (int) $min) {
                                     $fail('預設數量不能小於最少買多少。');
@@ -144,12 +141,6 @@ class ServiceVariantForm
 
                                 if (filled($max) && (int) $value > (int) $max) {
                                     $fail('預設數量不能大於最多買多少。');
-
-                                    return;
-                                }
-
-                                if ($step > 0 && ((int) $value) % $step !== 0) {
-                                    $fail("預設數量必須是數量間隔（{$step}）的倍數。");
                                 }
                             },
                         ]),
@@ -249,33 +240,35 @@ class ServiceVariantForm
             return;
         }
 
-        // firstNonIntegerQuantity() 讀 raw unit_price，故用 setRawAttributes 塞入表單當下的值。
+        // firstUnpayableQuantity() 讀 raw unit_price，故用 setRawAttributes 塞入表單當下的值。
+        // ⛔ M3A:不再需要 step_quantity——它已不影響任何購買規則。
         $probe = new ServiceVariant;
         $probe->setRawAttributes([
             'unit_price' => (string) $value,
             'min_quantity' => (int) ($get('min_quantity') ?: 1),
             'max_quantity' => (int) ($get('max_quantity') ?: 1),
-            'step_quantity' => (int) ($get('step_quantity') ?: 1),
         ], true);
 
         if ($probe->min_quantity > $probe->max_quantity) {
             return; // 範圍本身有錯，由數量欄位的規則回報。
         }
 
-        // 範圍內連一個 step 倍數都沒有：客人買不到任何數量。
         if ($probe->firstPurchasableQuantity() === null) {
-            $fail("在 {$probe->min_quantity} 到 {$probe->max_quantity} 之間沒有任何 "
-                ."{$probe->step_quantity} 的倍數，客人買不到任何數量。");
+            $fail("在 {$probe->min_quantity} 到 {$probe->max_quantity} 之間沒有任何可購買的數量。");
 
             return;
         }
 
-        $offending = $probe->firstNonIntegerQuantity();
+        /*
+         * ⛔ M3A:小數台幣已改為 half-up 四捨五入,不再是錯誤。這裡只擋
+         * 「四捨五入後不足 1 元」與「溢位」——那兩件事四捨五入救不了。
+         */
+        $offending = $probe->firstUnpayableQuantity();
 
         if ($offending !== null) {
             $amount = Money::format($rate * $offending);
-            $fail("單價 {$value} × 數量 {$offending} = {$amount} 元，不是整數新台幣，客人無法付款。"
-                .'請調整單價，或把數量間隔改成能整除的數字。');
+            $fail("單價 {$value} × 數量 {$offending} = {$amount} 元，四捨五入後不足 1 元或超出可計算範圍，"
+                .'客人無法付款。請調高單價，或提高最少購買數量。');
         }
     }
 }

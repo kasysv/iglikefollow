@@ -35,7 +35,8 @@
             <div>SKU:{{ $card['sku'] }}</div>
             <div>名稱:{{ $card['label'] }}</div>
             <div>計價率:NT$ {{ $card['unitPrice'] }} / {{ $card['quantityUnit'] }}</div>
-            <div>min {{ $card['min'] }}／max {{ $card['max'] }}／step {{ $card['step'] }}</div>
+            {{-- ⛔ M3A:step 已不是購買規則,不再顯示。 --}}
+            <div>min {{ $card['min'] }}／max {{ $card['max'] }}</div>
             <div>
                 實際可購:
                 @if ($card['siteFirst'] === null)

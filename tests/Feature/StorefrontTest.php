@@ -296,12 +296,30 @@ class StorefrontTest extends TestCase
             ->assertSessionHasErrors('quantity');
     }
 
-    public function test_checkout_start_rejects_quantity_not_matching_step(): void
+    /**
+     * ⛔ M3A:這正是 Owner 回報的缺陷。
+     *
+     * 155 曾因「不是 step 的倍數」被拒絕;現在範圍內任何整數都可買。
+     */
+    public function test_checkout_start_accepts_any_integer_in_range(): void
     {
         $this->post('/checkout/start', [
             'variant' => $this->followersVariantId(),
             'quantity' => 155,
-        ])->assertSessionHasErrors('quantity');
+        ])->assertSessionHasNoErrors()->assertRedirect('/checkout');
+    }
+
+    /** ⛔ 但範圍本身沒有被放寬。 */
+    public function test_checkout_start_still_rejects_a_quantity_outside_the_range(): void
+    {
+        $variant = ServiceVariant::query()->findOrFail($this->followersVariantId());
+
+        foreach ([(int) $variant->min_quantity - 1, (int) $variant->max_quantity + 1] as $bad) {
+            $this->post('/checkout/start', [
+                'variant' => $variant->id,
+                'quantity' => $bad,
+            ])->assertSessionHasErrors('quantity');
+        }
     }
 
     public function test_mock_checkout_recalculates_amount_server_side(): void

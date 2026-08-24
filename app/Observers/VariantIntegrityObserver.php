@@ -46,14 +46,12 @@ class VariantIntegrityObserver
     {
         $min = (int) $variant->min_quantity;
         $max = (int) $variant->max_quantity;
-        $step = (int) $variant->step_quantity;
         $default = (int) $variant->default_quantity;
 
-        if ($step < 1) {
-            throw ValidationException::withMessages([
-                'step_quantity' => '數量間隔必須至少為 1。',
-            ]);
-        }
+        /*
+         * ⛔ M3A:不再驗 `step_quantity`。它是 legacy 欄位,已不影響任何
+         * 購買規則,因此把它做成儲存條件只會擋下本來完全正常的商品。
+         */
 
         /*
          * ⛔ R1:0 永遠不是可購數量(checkout 根層拒絕 quantity <= 0),
@@ -78,11 +76,7 @@ class VariantIntegrityObserver
             ]);
         }
 
-        if ($default % $step !== 0) {
-            throw ValidationException::withMessages([
-                'default_quantity' => "預設數量必須是數量間隔（{$step}）的倍數。",
-            ]);
-        }
+        // ⛔ M3A:預設數量不再需要是任何數字的倍數,只要落在範圍內。
     }
 
     /**
@@ -109,10 +103,10 @@ class VariantIntegrityObserver
     /**
      * The allowed range must contain at least one quantity someone can buy.
      *
-     * Customers may only buy multiples of the step, so min 101 with step 100
-     * and max 199 offers nothing at all: 100 is below the minimum and 200 is
-     * above the maximum. ⛔ Saving that would publish a variant with no valid
-     * purchase, which fails at checkout instead of at configuration time.
+     * ⛔ M3A: with every integer purchasable this can now only fail when the
+     * range itself is empty. The check stays because `min <= max` is enforced
+     * on the raw columns while this asks the model the same question the
+     * storefront will — one answer, not two.
      */
     private function assertRangeContainsAPurchasableQuantity(ServiceVariant $variant): void
     {
@@ -122,26 +116,25 @@ class VariantIntegrityObserver
 
         $min = (int) $variant->min_quantity;
         $max = (int) $variant->max_quantity;
-        $step = (int) $variant->step_quantity;
 
         throw ValidationException::withMessages([
-            'step_quantity' => "在 {$min} 到 {$max} 之間沒有任何 {$step} 的倍數，客人買不到任何數量。"
-                .'請調整最少／最多買多少，或改小數量間隔。',
+            'min_quantity' => "在 {$min} 到 {$max} 之間沒有任何可購買的數量，請調整最少／最多買多少。",
         ]);
     }
 
     /**
-     * Every quantity the customer may pick must come to whole NT dollars.
+     * Every quantity the customer may pick must actually be chargeable.
      *
-     * A rate of 0.59 with a step of 100 is fine — every step lands on a whole
-     * dollar. A rate of 0.59 with a step of 1 is not: 0.59 × 101 is NT$59.59,
-     * which cannot be charged. Catching it here means the fault is reported to
-     * whoever set the price, instead of surfacing later as a customer who
-     * cannot check out or an order for a rounded amount.
+     * ⛔ M3A: this no longer means "lands on a whole dollar" — fractional
+     * totals are rounded half-up now, so NT$0.59 × 101 = NT$59.59 → NT$60 is
+     * fine. What is still a configuration fault is a range whose smallest
+     * order rounds to less than NT$1 (a free order), or whose largest
+     * overflows. Reporting it here means the price setter hears about it,
+     * rather than a customer discovering it at checkout.
      */
     private function assertEveryQuantityIsPayable(ServiceVariant $variant): void
     {
-        $offending = $variant->firstNonIntegerQuantity();
+        $offending = $variant->firstUnpayableQuantity();
 
         if ($offending === null) {
             return;
@@ -151,7 +144,8 @@ class VariantIntegrityObserver
 
         throw ValidationException::withMessages([
             'unit_price' => "單價 {$variant->unit_price} × 數量 {$offending} = {$amount} 元，"
-                .'不是整數新台幣，客人無法付款。請調整單價，或把數量間隔改成能整除的數字。',
+                .'四捨五入後不足 1 元或超出可計算範圍，客人無法付款。'
+                .'請調高單價，或提高最少購買數量。',
         ]);
     }
 }

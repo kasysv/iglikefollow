@@ -131,10 +131,12 @@ class ProviderBoundsAdminTest extends TestCase
         $this->assertSame(5000, (int) $variant->fresh()->max_quantity);
     }
 
-    public function test_an_out_of_range_default_is_adjusted_to_the_first_legal_step_multiple(): void
+    /** ⛔ M3A:default 跑出新範圍時調整為新的 min,不再對齊倍數。 */
+    public function test_an_out_of_range_default_is_adjusted_to_the_new_minimum(): void
     {
         $this->availableService('424242', '2050', '9000');
         $variant = $this->draftVariant();
+        $stepBefore = (int) $variant->step_quantity;
 
         Livewire::test(CreateFulfillmentMapping::class)
             ->fillForm([
@@ -146,9 +148,10 @@ class ProviderBoundsAdminTest extends TestCase
 
         $variant->refresh();
         $this->assertSame(2050, (int) $variant->min_quantity);
-        // ≥2050 的第一個 100 倍數;⛔ step 本身不變。
-        $this->assertSame(2100, (int) $variant->default_quantity);
-        $this->assertSame(100, (int) $variant->step_quantity);
+        // ⛔ 直接用新 min,不再抬高到 2100。
+        $this->assertSame(2050, (int) $variant->default_quantity);
+        // ⛔ legacy step 欄位仍完全不被此動作改動。
+        $this->assertSame($stepBefore, (int) $variant->step_quantity);
     }
 
     public function test_apply_and_enable_in_the_same_submit_is_rejected_whole(): void
@@ -298,12 +301,17 @@ class ProviderBoundsAdminTest extends TestCase
         $this->assertSame($before, $variant->fresh()->getAttributes());
     }
 
-    public function test_a_range_with_no_legal_step_multiple_rejects_the_whole_submit(): void
+    /**
+     * ⛔ M3A:窄範圍現在可以套用——範圍內每個整數都買得到。
+     *
+     * 原測試主張 [101,199] 必須整筆拒絕(沒有 100 的倍數)。那是 legacy step
+     * 造成的假性錯誤:供應商願意接的範圍被我們自己拒收。
+     */
+    public function test_a_narrow_range_is_now_applied_instead_of_rejected(): void
     {
-        // step 100 在 [101,199] 內沒有任何倍數;⛔ 不改 step,整筆拒絕。
         $this->availableService('424242', '101', '199');
         $variant = $this->draftVariant();
-        $before = $variant->fresh()->getAttributes();
+        $stepBefore = (int) $variant->step_quantity;
 
         Livewire::test(CreateFulfillmentMapping::class)
             ->fillForm([
@@ -311,25 +319,33 @@ class ProviderBoundsAdminTest extends TestCase
                 'provider_service_id' => '424242',
             ])
             ->call('create')
-            ->assertHasFormErrors(['apply_provider_bounds']);
+            ->assertHasNoFormErrors();
 
-        $this->assertSame(0, FulfillmentMapping::query()->count());
-        $this->assertSame($before, $variant->fresh()->getAttributes());
+        $variant->refresh();
+        $this->assertSame(101, (int) $variant->min_quantity);
+        $this->assertSame(199, (int) $variant->max_quantity);
+        $this->assertSame(101, (int) $variant->default_quantity);
+        // ⛔ legacy step 欄位不被改動。
+        $this->assertSame($stepBefore, (int) $variant->step_quantity);
     }
 
     public function test_an_observer_rejection_rolls_back_mapping_and_variant_together(): void
     {
         /*
-         * 已發布款式,單價 0.0001:目前唯一可購數量 10000 可整除成整數
-         * 台幣。套用後範圍 [5000,15000] 會讓 5000 成為可購數量,但
-         * 0.0001×5000 不是整數台幣 → VariantIntegrityObserver 拒絕,
-         * ⛔ mapping 與 variant 必須一起 rollback。
+         * ⛔ M3A:小數台幣已不是拒絕理由(改為 half-up),所以原本的
+         * 「0.0001×5000 不是整數」不再會觸發 observer。四捨五入救不了的
+         * 只剩「金額不足 1 元」:
+         *
+         * 已發布款式,單價 0.0001、最低 10000 → 1 元,剛好可售。套用後
+         * 範圍 [1,15000] 會讓最低量變成 1 → 0.0001 元,四捨五入為 0
+         * → VariantIntegrityObserver 拒絕,⛔ mapping 與 variant 必須
+         * 一起 rollback。
          */
-        $this->availableService('424242', '5000', '15000');
+        $this->availableService('424242', '1', '15000');
         $variant = ServiceVariant::factory()->create([
             'min_quantity' => 10000,
             'max_quantity' => 10000,
-            'step_quantity' => 5000,
+            'step_quantity' => 1,
             'default_quantity' => 10000,
             'unit_price' => '0.0001',
             'status' => 'published',

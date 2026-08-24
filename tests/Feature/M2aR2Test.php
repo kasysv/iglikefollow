@@ -389,18 +389,37 @@ class M2aR2Test extends TestCase
             ->assertHasFormErrors(['default_quantity']);
     }
 
-    public function test_the_form_still_rejects_a_default_quantity_off_the_step(): void
+    /**
+     * ⛔ M3A:default 只需落在範圍內,不再需要是任何數字的倍數。
+     *
+     * 原測試主張 155 必須被拒絕(不是 100 的倍數)。現在它合法;真正該
+     * 被拒絕的是跑出範圍的 default。
+     */
+    public function test_the_form_accepts_any_in_range_default_but_rejects_out_of_range(): void
     {
         $this->actingAsOwner();
         [, $service] = $this->twoServices();
 
+        // 155 在 [100,1000] 內 → 通過。
         Livewire::test(CreateServiceVariant::class)
             ->fillForm([
                 'service_id' => $service->id,
-                'label' => '不整除', 'unit_price' => 1, 'quantity_unit' => '個',
-                'min_quantity' => 100, 'max_quantity' => 1000, 'step_quantity' => 100,
+                'label' => '任意整數', 'unit_price' => 1, 'quantity_unit' => '個',
+                'min_quantity' => 100, 'max_quantity' => 1000,
                 'default_quantity' => 155, 'currency' => 'TWD',
                 'status' => 'draft', 'sort_order' => 0,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        // ⛔ 超出範圍仍然拒絕。
+        Livewire::test(CreateServiceVariant::class)
+            ->fillForm([
+                'service_id' => $service->id,
+                'label' => '超出範圍', 'unit_price' => 1, 'quantity_unit' => '個',
+                'min_quantity' => 100, 'max_quantity' => 1000,
+                'default_quantity' => 1001, 'currency' => 'TWD',
+                'status' => 'draft', 'sort_order' => 1,
             ])
             ->call('create')
             ->assertHasFormErrors(['default_quantity']);

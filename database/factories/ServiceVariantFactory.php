@@ -16,7 +16,9 @@ class ServiceVariantFactory extends Factory
             'quantity_unit' => 'x',
             'min_quantity' => 100,
             'max_quantity' => 10000,
-            'step_quantity' => 100,
+            // ⛔ M3A:legacy 欄位(DB 仍 NOT NULL),已不影響購買規則。
+            // 新資料一律 1,不再暗示任何倍數限制。
+            'step_quantity' => 1,
             'default_quantity' => 1000,
             'unit_price' => 0.5,
             'currency' => 'TWD',

@@ -7,7 +7,6 @@ use App\Actions\Orders\RecordPaymentResult;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Events\OrderPaid;
-use App\Exceptions\NonIntegerAmountException;
 use App\Exceptions\UnsellablePriceException;
 use App\Models\Order;
 use App\Models\OrderEvent;
@@ -281,57 +280,104 @@ class OrderTransactionIntegrityTest extends TestCase
     }
 
     /**
-     * ⛔ 取代舊的 `half a dollar rounds up`。
+     * ⛔ M3A:小數台幣改為 half-up 四捨五入,不再拋錯。
      *
-     * 台幣沒有小數收款：0.0005 × 1000 = NT$0.5 不是「四捨五入成 1 元」，
-     * 而是一個根本收不到的金額。靜默進位會讓客人被收一筆商品從沒公告過的
-     * 價格，所以現在必須拋出錯誤。
+     * Owner 決定顧客可買範圍內任何整數,小數金額因此成為常態而非設定錯誤。
+     * 0.59 × 1001 = 590.59 → NT$591。
      */
-    public function test_an_amount_that_is_not_whole_dollars_is_refused_not_rounded(): void
+    public function test_a_fractional_amount_is_rounded_half_up(): void
     {
         $variant = $this->variant();
 
-        $this->expectException(NonIntegerAmountException::class);
-
-        Money::total($variant->unitPriceMills(), 1001); // 0.59 × 1001 = 590.59
+        $this->assertSame(591, Money::total($variant->unitPriceMills(), 1001));
     }
 
-    public function test_the_rounding_boundary_is_rejected_in_both_directions(): void
+    /**
+     * ⛔ 精確的 half-up 邊界:餘數 4,999 捨去、5,000 進位。
+     *
+     * 這是本輪金額規則的核心,⛔ 必須直接構造餘數驗證,不能只用「看起來
+     * 像 .5」的十進位數字帶過,也不得是 banker's rounding。
+     */
+    public function test_the_half_up_boundary_is_exact_in_both_directions(): void
     {
-        // 0.5 元與 1.5 元都收不到；⛔ 兩者都不得被進位成 1 或 2。
+        // 餘數 4,999 → 捨去。
+        $this->assertSame(1, Money::total(Money::toMills('1.4999'), 1));
+
+        // 餘數 5,000 → 進位。
+        $this->assertSame(2, Money::total(Money::toMills('1.5000'), 1));
+
+        // ⛔ banker's rounding 會把 2.5 收成 2;half-up 必須是 3。
+        $this->assertSame(3, Money::total(Money::toMills('2.5000'), 1));
+
+        // 0.0005 × 1000 = 0.5 元 → 1 元;0.0015 × 1000 = 1.5 元 → 2 元。
+        $this->assertSame(1, Money::total(Money::toMills('0.0005'), 1000));
+        $this->assertSame(2, Money::total(Money::toMills('0.0015'), 1000));
+
+        // divides() 仍只回答「是否剛好整除」;⛔ 與可否販售是兩個問題。
         $this->assertFalse(Money::divides(Money::toMills('0.0005'), 1000));
-        $this->assertFalse(Money::divides(Money::toMills('0.0015'), 1000));
-
-        // 剛好整除才是可收款的金額。
         $this->assertTrue(Money::divides(Money::toMills('0.0005'), 2000));
-        $this->assertSame(1, Money::total(Money::toMills('0.0005'), 2000));
     }
 
-    public function test_a_variant_offering_an_unpayable_quantity_cannot_be_saved(): void
+    /** ⛔ 四捨五入後不足 1 元仍然拒絕:不建 NT$0 訂單,也不暗自墊到 1。 */
+    public function test_an_amount_rounding_to_zero_is_still_refused(): void
+    {
+        // 0.0001 × 1 = 0.0001 元 → 四捨五入為 0。
+        $this->expectException(UnsellablePriceException::class);
+
+        Money::total(Money::toMills('0.0001'), 1);
+    }
+
+    public function test_a_variant_whose_minimum_rounds_to_zero_cannot_be_saved(): void
     {
         $variant = $this->variant();
 
-        // 0.59 元／個搭配階距 1：買 1001 個就是 590.59 元，收不到。
+        // ⛔ M3A:0.59 × 1001 = 590.59 已經合法(四捨五入 591)。
+        // 四捨五入救不了的只剩「最低數量的金額仍不足 1 元」。
         $this->expectException(ValidationException::class);
 
-        $variant->forceFill(['step_quantity' => 1, 'min_quantity' => 1000])->save();
+        $variant->forceFill([
+            'unit_price' => '0.0001',
+            'min_quantity' => 1,
+            'default_quantity' => 1,
+        ])->save();
     }
 
-    public function test_checkout_refuses_a_quantity_that_is_not_whole_dollars(): void
+    /**
+     * ⛔ M3A:小數金額不再被 checkout 拒絕,但「四捨五入後收不到錢」仍然是。
+     *
+     * 用既有髒資料模擬:單價 0.0001、最低 1 → 買 1 個是 0 元,必須擋下且
+     * 不留下任何 order／item／attempt。
+     */
+    public function test_checkout_refuses_a_quantity_whose_amount_rounds_to_zero(): void
     {
         $variant = $this->variant();
 
         // 繞過後台驗證直接寫入不合規設定，模擬既有髒資料。
         DB::table('service_variants')->where('id', $variant->id)
-            ->update(['step_quantity' => 1, 'min_quantity' => 1000]);
+            ->update(['unit_price' => '0.0001', 'step_quantity' => 1, 'min_quantity' => 1]);
 
-        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1001])
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1])
             ->assertRedirect();
 
         // ⛔ 不建任何 order／item／attempt。
         $this->assertSame(0, Order::count());
         $this->assertSame(0, OrderItem::count());
         $this->assertSame(0, PaymentAttempt::count());
+    }
+
+    /** ⛔ 相對地,會產生小數的數量現在必須被接受並四捨五入。 */
+    public function test_checkout_accepts_a_quantity_that_produces_a_fractional_amount(): void
+    {
+        $variant = $this->variant();   // 0.59／個
+
+        DB::table('service_variants')->where('id', $variant->id)
+            ->update(['step_quantity' => 1, 'min_quantity' => 10, 'max_quantity' => 10000]);
+
+        $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 101])
+            ->assertRedirect('/checkout');
+
+        // 0.59 × 101 = 59.59 → NT$60。
+        $this->assertSame(60, $variant->fresh()->amountFor(101));
     }
 
     public function test_a_four_decimal_price_survives_into_the_snapshot(): void
@@ -828,48 +874,58 @@ class OrderTransactionIntegrityTest extends TestCase
      * 購買規則是 `quantity % step === 0`，所以 min 不是 step 倍數時，
      * min 本身根本買不到。⛔ 驗證必須從第一個真正買得到的數量開始。
      */
-    public function test_validation_starts_at_the_first_purchasable_quantity(): void
+    /** ⛔ M3A:第一個可購數量就是 min 本身,legacy step 不得再抬高它。 */
+    public function test_validation_starts_at_the_minimum_quantity(): void
     {
-        // min 101、step 100 → 101 買不到，200 才是第一個合法數量。
+        // legacy step 100 仍在資料裡;min 101 現在就是第一個可購數量。
         $variant = $this->probeVariant('0.5000', 101, 200, 100);
 
-        $this->assertSame(200, $variant->firstPurchasableQuantity());
-        // ⛔ 不得回報 101：那是客人買不到的數量。
-        $this->assertNull($variant->firstNonIntegerQuantity());
-        $this->assertTrue($variant->quantityIsValid(200));
-        $this->assertSame(100, $variant->amountFor(200));
+        $this->assertSame(101, $variant->firstPurchasableQuantity());
+        $this->assertNull($variant->firstUnpayableQuantity());
+        $this->assertTrue($variant->quantityIsValid(101));
+
+        // 0.5 × 101 = 50.5 → half-up 為 51。
+        $this->assertSame(51, $variant->amountFor(101));
     }
 
-    public function test_a_range_containing_no_purchasable_quantity_is_refused(): void
+    /**
+     * ⛔ M3A:窄範圍不再是錯誤——[101,199] 內每個整數都買得到。
+     *
+     * 原測試主張這種設定必須被拒絕(沒有 100 的倍數),那正是 legacy step
+     * 造成的假性錯誤。真正該被拒絕的是空範圍。
+     */
+    public function test_a_narrow_range_is_now_purchasable(): void
     {
-        // 101 到 199 之間沒有任何 100 的倍數：客人買不到任何數量。
         $variant = $this->probeVariant('0.5000', 101, 199, 100);
 
-        $this->assertNull($variant->firstPurchasableQuantity());
+        $this->assertSame(101, $variant->firstPurchasableQuantity());
+        $this->assertTrue($variant->quantityIsValid(150));
 
+        // ⛔ 空範圍(max < min)仍然是結構錯誤。
         $saved = $this->variant();
         $this->expectException(ValidationException::class);
 
         $saved->forceFill([
-            'min_quantity' => 101, 'max_quantity' => 199,
-            'step_quantity' => 100, 'default_quantity' => 101,
+            'min_quantity' => 199, 'max_quantity' => 101, 'default_quantity' => 150,
         ])->save();
     }
 
+    /** ⛔ 回報的「收不到錢」數量必須是客人真的選得到的(在範圍內)。 */
     public function test_the_offending_quantity_reported_is_one_a_customer_could_pick(): void
     {
-        // rate 0.59、min 150、step 100 → 第一個合法量是 200，不是 150。
-        $variant = $this->probeVariant('0.5900', 150, 1000, 100);
+        // 0.0001／個、min 150:150 × 0.0001 = 0.015 元 → 四捨五入為 0。
+        $variant = $this->probeVariant('0.0001', 150, 1000, 100);
 
-        $offending = $variant->firstNonIntegerQuantity();
+        $offending = $variant->firstUnpayableQuantity();
 
-        // 回報的數量必須真的買得到（是 step 的倍數且在範圍內）。
-        if ($offending !== null) {
-            $this->assertSame(0, $offending % 100, "回報了買不到的數量 {$offending}");
-            $this->assertGreaterThanOrEqual(150, $offending);
-        }
+        $this->assertSame(150, $offending);
+        $this->assertGreaterThanOrEqual(150, $offending);
+        $this->assertLessThanOrEqual(1000, $offending);
 
-        $this->assertSame(200, $variant->firstPurchasableQuantity());
+        // 對照:單價正常時整段範圍都收得到錢。
+        $ok = $this->probeVariant('0.5900', 150, 1000, 100);
+        $this->assertNull($ok->firstUnpayableQuantity());
+        $this->assertSame(150, $ok->firstPurchasableQuantity());
     }
 
     // ==================================== R3-3 負數／零／overflow 不得繞過
@@ -920,11 +976,14 @@ class OrderTransactionIntegrityTest extends TestCase
     }
 
     /**
-     * ⛔ M4B-MAPPING-UI-B R1:corrupt step 不是照常計算的理由。step 0／
-     * 負值的 row(繞過 observer 直接寫入)在 checkout 根層只回 false——
-     * 絕不 Modulo-by-zero,也不產生任何 warning;checkout 入口不建 order。
+     * ⛔ M3A:legacy step 0／負值不得再影響任何事,也絕不產生 PHP error。
+     *
+     * 舊規則的除零風險來自 `quantity % step`;那段程式已經移除,所以正確
+     * 行為從「fail closed」變成「照常可購」——一筆 min/max 正常、只是舊
+     * step 為 0 的資料,顧客本來就該買得到。原本的安全性質(無 warning、
+     * 無 DivisionByZeroError)仍逐一斷言。
      */
-    public function test_a_corrupt_step_fails_closed_without_dividing_by_zero(): void
+    public function test_a_legacy_corrupt_step_is_ignored_without_any_php_error(): void
     {
         $variant = $this->variant();
 
@@ -935,27 +994,25 @@ class OrderTransactionIntegrityTest extends TestCase
             $fresh = ServiceVariant::query()->findOrFail($variant->id);
 
             set_error_handler(function (int $errno, string $errstr): bool {
-                $this->fail('⛔ corrupt step 產生了 PHP error:'.$errstr);
+                $this->fail('⛔ legacy step 產生了 PHP error:'.$errstr);
             });
 
             try {
-                $this->assertFalse($fresh->quantityIsValid(100));
-                $this->assertFalse($fresh->quantityIsValid(1000));
-                // ⛔ 不得把 step<1 正規化成 1:沒有合法 step 就沒有可購數量。
-                $this->assertNull($fresh->firstPurchasableQuantity());
+                // min 100／max 10000:範圍內任何整數皆可,與 step 無關。
+                $this->assertTrue($fresh->quantityIsValid(100));
+                $this->assertTrue($fresh->quantityIsValid(101));
+                $this->assertTrue($fresh->quantityIsValid(1000));
+                $this->assertSame(100, $fresh->firstPurchasableQuantity());
             } finally {
                 restore_error_handler();
             }
 
-            $this->post('/checkout/start', ['variant' => $variant->id, 'quantity' => 1000])
-                ->assertRedirect();
-
-            $this->assertSame(0, Order::count());
-            $this->assertSame(0, OrderItem::count());
+            // ⛔ 範圍外仍然拒絕。
+            $this->assertFalse($fresh->quantityIsValid(99));
         }
     }
 
-    /** ⛔ R1:legacy min 0 的第一個可購數量是第一個正 step 倍數,永遠不是 0。 */
+    /** ⛔ legacy min 0 的第一個可購數量必須是 1,永遠不是 0。 */
     public function test_a_zero_minimum_never_offers_zero_as_purchasable(): void
     {
         $variant = $this->variant();
@@ -966,7 +1023,7 @@ class OrderTransactionIntegrityTest extends TestCase
         $fresh = ServiceVariant::query()->findOrFail($variant->id);
 
         $this->assertFalse($fresh->quantityIsValid(0));
-        $this->assertSame((int) $fresh->step_quantity, $fresh->firstPurchasableQuantity());
+        $this->assertSame(1, $fresh->firstPurchasableQuantity());
         $this->assertGreaterThan(0, $fresh->firstPurchasableQuantity());
     }
 

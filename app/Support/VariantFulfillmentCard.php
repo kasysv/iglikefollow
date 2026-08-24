@@ -64,7 +64,6 @@ final class VariantFulfillmentCard
             'quantityUnit' => (string) $variant->quantity_unit,
             'min' => (int) $variant->min_quantity,
             'max' => (int) $variant->max_quantity,
-            'step' => (int) $variant->step_quantity,
             'defaultQuantity' => (int) $variant->default_quantity,
         ];
     }
@@ -75,8 +74,9 @@ final class VariantFulfillmentCard
      * ⛔ One algorithm only. With a provider row present, the bounds come from
      * the very assessment that decides enableability. Without one there is no
      * verdict to disagree with; the fallback mirrors QuantityCompatibility
-     * exactly (structure gate first, then firstPurchasableQuantity() and the
-     * same intdiv step multiple) — never `max(1, step)`, never another rule.
+     * exactly (structure gate first, then firstPurchasableQuantity()).
+     * ⛔ M3A: no step alignment anywhere — the last purchasable quantity is the
+     * maximum itself.
      *
      * @return array{0: ?int, 1: ?int}
      */
@@ -88,9 +88,8 @@ final class VariantFulfillmentCard
 
         $min = (int) $variant->min_quantity;
         $max = (int) $variant->max_quantity;
-        $step = (int) $variant->step_quantity;
 
-        if ($min < 1 || $max < $min || $step < 1) {
+        if ($min < 1 || $max < $min) {
             return [null, null];
         }
 
@@ -100,12 +99,12 @@ final class VariantFulfillmentCard
             return [null, null];
         }
 
-        return [$first, intdiv($max, $step) * $step];
+        return [$first, $max];
     }
 
     /**
      * 本站 default quantity 的整數台幣試算;⛔ 只用既有 Money 整數算法,
-     * 算不出整數(或任何設定問題)就不顯示,絕不四捨五入。
+     * 設定有問題就不顯示。⛔ M3A:小數台幣改為 half-up 四捨五入,由 Money 負責。
      */
     private static function defaultTotal(ServiceVariant $variant): ?int
     {

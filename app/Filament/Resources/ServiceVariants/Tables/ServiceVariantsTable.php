@@ -24,9 +24,9 @@ class ServiceVariantsTable
                 TextColumn::make('unit_price')->label('單價')
                     ->formatStateUsing(fn ($state, $record) => 'NT$'.number_format((float) $state, 2).'／'.$record->quantity_unit)
                     ->sortable(),
+                // ⛔ M3A:範圍內任何整數皆可,不再顯示「每 X 一階」。
                 TextColumn::make('min_quantity')->label('可購買範圍')
-                    ->formatStateUsing(fn ($state, $record) => number_format($state).'–'.number_format($record->max_quantity)
-                        .'（每 '.number_format($record->step_quantity).' 一階）'),
+                    ->formatStateUsing(fn ($state, $record) => number_format($state).'–'.number_format($record->max_quantity)),
                 IconColumn::make('is_featured')->label('預設')->boolean(),
                 TextColumn::make('status')->label('狀態')->badge()
                     ->formatStateUsing(fn (string $state) => match ($state) {

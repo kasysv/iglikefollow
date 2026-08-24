@@ -432,13 +432,14 @@ class FulfillmentMappingUiTest extends TestCase
             'maximum_quantity_raw' => '999999',
         ]);
         /*
-         * min 150/max 199/step 100:區間內沒有 step 倍數。
+         * ⛔ M3A:「沒有可購數量」現在只剩空範圍(max < min)一種——範圍內
+         * 每個整數都買得到,不再有「區間內沒有 step 倍數」這種情況。
          * VariantIntegrityObserver 已讓這種款式無法正常保存——⛔ 這裡以
          * withoutEvents 模擬 legacy／corrupt row,證明 guard 對「不該存在
          * 但存在」的資料仍 fail closed,不倚賴上游防線。
          */
         $variant = ServiceVariant::withoutEvents(fn () => ServiceVariant::factory()->create([
-            'min_quantity' => 150, 'max_quantity' => 199, 'step_quantity' => 100,
+            'min_quantity' => 199, 'max_quantity' => 150, 'step_quantity' => 1,
             'default_quantity' => 150,
         ]));
 
@@ -454,10 +455,15 @@ class FulfillmentMappingUiTest extends TestCase
         $this->assertSame(0, FulfillmentMapping::query()->count());
     }
 
-    /** step 讓實際範圍與 raw min/max 不同:只要覆蓋實際範圍就相容。 */
-    public function test_step_derived_effective_bounds_are_used_not_raw_min_max(): void
+    /**
+     * ⛔ M3A:實際範圍就是 raw min/max,legacy step 不得再收窄它。
+     *
+     * 原測試主張 provider 150–9950 可以承接 min 101／max 9999 的款式
+     * (因為 step 會把實際範圍縮成 200–9900)。那正是 Owner 回報缺陷的
+     * 同一個根:那個承諾是假的,顧客其實買得到 101。現在必須不相容。
+     */
+    public function test_the_raw_min_and_max_are_used_not_step_derived_bounds(): void
     {
-        // raw min 101 → 實際下限 200;raw max 9999 → 實際上限 9900。
         ProviderService::factory()->available()->create([
             'provider_service_id' => '85055',
             'minimum_quantity_raw' => '150',
@@ -467,12 +473,32 @@ class FulfillmentMappingUiTest extends TestCase
             'min_quantity' => 101, 'max_quantity' => 9999, 'step_quantity' => 100,
         ]);
 
+        // provider 最低 150 > 本站實際最低 101 → ⛔ 不得啟用。
         Livewire::test(CreateFulfillmentMapping::class)
             ->fillForm([
                 'service_variant_id' => $variant->id,
                 'provider_service_id' => '85055',
                 'is_enabled' => true,
                 // M2B:create 預設開啟「套用上下限」;此測試專測啟用路徑,明確關閉套用。
+                'apply_provider_bounds' => false,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+
+        // 供應商真的涵蓋 raw 範圍時才可啟用。
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '85056',
+            'minimum_quantity_raw' => '101',
+            'maximum_quantity_raw' => '9999',
+        ]);
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '85056',
+                'is_enabled' => true,
                 'apply_provider_bounds' => false,
             ])
             ->call('create')
@@ -485,7 +511,7 @@ class FulfillmentMappingUiTest extends TestCase
      * ⛔ R1/GPT end-to-end:step 0 corrupt row(繞過 observer)不得啟用,
      * summary 標「結構不合法」而不是把它顯示成「實際可購 100–10000」。
      */
-    public function test_a_corrupt_step_zero_variant_cannot_be_enabled_and_is_labelled(): void
+    public function test_a_legacy_step_zero_variant_is_now_usable_and_labelled_compatible(): void
     {
         ProviderService::factory()->available()->create([
             'provider_service_id' => '78088',
@@ -496,16 +522,19 @@ class FulfillmentMappingUiTest extends TestCase
             'step_quantity' => 0,
         ]));
 
+        // ⛔ M3A:step 已不參與任何計算,除零路徑不存在,因此這筆 min/max
+        // 正常的 legacy row 必須照常可啟用——否則升級後既有商品會無故失效。
         Livewire::test(CreateFulfillmentMapping::class)
             ->fillForm([
                 'service_variant_id' => $variant->id,
                 'provider_service_id' => '78088',
                 'is_enabled' => true,
+                'apply_provider_bounds' => false,
             ])
             ->call('create')
-            ->assertHasFormErrors(['provider_service_id']);
+            ->assertHasNoFormErrors();
 
-        $this->assertSame(0, FulfillmentMapping::query()->count());
+        $this->assertTrue(FulfillmentMapping::query()->sole()->is_enabled);
 
         $html = html_entity_decode(
             Livewire::test(CreateFulfillmentMapping::class)
@@ -518,10 +547,9 @@ class FulfillmentMappingUiTest extends TestCase
             'UTF-8',
         );
 
-        $this->assertStringContainsString('結構不合法', $html);
-        $this->assertStringContainsString('實際可購 無(設定不合規)', $html);
-        $this->assertStringNotContainsString('實際可購 100–10000', $html);
-        $this->assertStringNotContainsString('✔ 數量相容', $html);
+        $this->assertStringContainsString('✔ 數量相容', $html);
+        $this->assertStringContainsString('實際可購 100–10000', $html);
+        $this->assertStringNotContainsString('結構不合法', $html);
     }
 
     /** ⛔ R1:min 0 由 observer 直接拒絕;legacy row 也不得啟用或顯示「可購 0」。 */

@@ -41,8 +41,12 @@ class ServiceVariant extends Model
     /**
      * 數量邊界檢查；⛔ 伺服器端唯一真實來源，不信任前端送出的值。
      *
-     * 也包含「這個數量算得出整數台幣」——設定不合規時，⛔ 寧可讓客人買不到，
-     * 也不能靜默四捨五入成一個沒有公告過的金額。
+     * ⛔ M3A:最低量與最高量之間的**任何正整數**都合法。`step_quantity`
+     * 不再參與判斷——它正是 Owner 輸入 100 卻被瀏覽器導向 10／110 的來源。
+     * legacy 欄位仍留在 DB,但不得再限制顧客。
+     *
+     * 仍然保留的是「收不收得到錢」:四捨五入後不足 1 元或會溢位的數量依舊
+     * 買不到。⛔ 放寬倍數不等於放寬金額。
      */
     public function quantityIsValid(int $quantity): bool
     {
@@ -53,69 +57,47 @@ class ServiceVariant extends Model
             return false;
         }
 
-        $step = (int) $this->step_quantity;
-
-        /*
-         * ⛔ R1:corrupt step 不是照常計算的理由。step < 1 的款式沒有任何
-         * 合法數量——直接 false,絕不進 modulo(step 0 會 DivisionByZeroError,
-         * 而 checkout 根層不允許任何 warning／exception)。
-         */
-        if ($step < 1) {
-            return false;
-        }
-
         return $quantity >= $this->min_quantity
             && $quantity <= $this->max_quantity
-            && $quantity % $step === 0
-            && Money::divides($rate, $quantity)
             && Money::isPayable($rate, $quantity);
     }
 
     /**
      * The smallest quantity a customer can actually buy, if any.
      *
-     * ⛔ Not simply min_quantity: the purchase rule is `quantity % step === 0`,
-     * so when the minimum is not itself a multiple of the step — min 101 with
-     * step 100 — the minimum is not purchasable and the first real candidate is
-     * 200. Validating from the minimum would check quantities nobody can buy.
+     * ⛔ M3A: with the step rule gone this is simply the minimum — every
+     * integer in range is purchasable. It is kept as a named method rather than
+     * inlined because provider-compatibility and the fulfilment card both ask
+     * "what is the real lowest orderable quantity", and that question should
+     * have exactly one answer.
      *
-     * Returns null when the range contains no multiple of the step at all,
-     * which means the variant cannot be bought at any quantity.
+     * ⛔ Still clamped to at least 1: zero is never a purchasable quantity
+     * (`quantityIsValid()` rejects it), so a legacy `min_quantity` of 0 starts
+     * at 1, not 0. Returns null when the range itself is empty.
      */
     public function firstPurchasableQuantity(): ?int
     {
-        $min = (int) $this->min_quantity;
+        $min = max(1, (int) $this->min_quantity);
         $max = (int) $this->max_quantity;
-        $step = (int) $this->step_quantity;
 
-        /*
-         * ⛔ R1:step < 1 不得靜默正規化成 1——那會把 checkout 根本賣不了
-         * 的 corrupt 款式說成「可購」。沒有合法 step 就沒有可購數量。
-         */
-        if ($step < 1) {
-            return null;
-        }
-
-        /*
-         * >= min 的第一個「正」step 倍數。⛔ 0 永遠不是可購數量
-         * (quantityIsValid 拒絕 0),所以 legacy min 0 的起點是第一個
-         * 正倍數,不是 0。
-         */
-        $first = (int) (ceil(max($min, 1) / $step) * $step);
-
-        return $first <= $max ? $first : null;
+        return $min <= $max ? $min : null;
     }
 
     /**
-     * The first purchasable quantity whose amount is not whole NT dollars.
+     * The lowest quantity in range that cannot actually be charged, if any.
      *
-     * Checking every step up to max would be unbounded work for a large range,
-     * but it is not necessary: rate × quantity repeats its remainder against
-     * SCALE on a cycle of at most SCALE / gcd(rate × step, SCALE) steps, so a
-     * failure — if one exists at all — always appears within that many steps of
-     * the first purchasable quantity.
+     * ⛔ M3A: this used to find the first quantity producing a fractional TWD
+     * total, and that was a blocking fault. Fractional totals are now rounded
+     * half-up and are perfectly ordinary, so that question no longer decides
+     * anything. What still matters is the one thing rounding cannot fix: a
+     * total that rounds to less than NT$1, or one that overflows.
+     *
+     * Only the minimum needs testing. `rate × quantity` is monotonic in
+     * quantity for a positive rate, so if the smallest orderable quantity
+     * clears NT$1 every larger one does too — and overflow is checked at the
+     * maximum, the only place it can first appear.
      */
-    public function firstNonIntegerQuantity(): ?int
+    public function firstUnpayableQuantity(): ?int
     {
         $rate = $this->pendingUnitPriceMills();
 
@@ -127,24 +109,19 @@ class ServiceVariant extends Model
 
         $start = $this->firstPurchasableQuantity();
 
-        // 整段範圍都沒有合法數量，那不是「某個數量算不出整數」的問題。
+        // 整段範圍都沒有合法數量，那是另一個問題(結構),不在這裡報。
         if ($start === null) {
             return null;
         }
 
-        $max = (int) $this->max_quantity;
-        $step = max(1, (int) $this->step_quantity);
-
-        // 週期上限：超過這個步數後的餘數必定重複，⛔ 不需要掃到 max。
-        $period = intdiv(Money::SCALE, self::gcd($rate * $step, Money::SCALE));
-
-        for ($i = 0, $q = $start; $q <= $max && $i < $period; $i++, $q += $step) {
-            if (! Money::divides($rate, $q)) {
-                return $q;
-            }
+        if (! Money::isPayable($rate, $start)) {
+            return $start;
         }
 
-        return null;
+        // 溢位只可能最先出現在最大值。
+        $max = (int) $this->max_quantity;
+
+        return Money::isPayable($rate, $max) ? null : $max;
     }
 
     /**
@@ -163,15 +140,6 @@ class ServiceVariant extends Model
         }
 
         return Money::toMills($raw);
-    }
-
-    private static function gcd(int $a, int $b): int
-    {
-        while ($b !== 0) {
-            [$a, $b] = [$b, $a % $b];
-        }
-
-        return max(1, $a);
     }
 
     /**

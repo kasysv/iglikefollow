@@ -70,26 +70,33 @@ class ProviderBoundsTargetTest extends TestCase
         $this->assertSame(1000, $t->targetDefault);
     }
 
-    public function test_an_out_of_range_default_moves_to_the_first_legal_step_multiple(): void
+    /** ⛔ M3A:default 跑出新範圍時,調整為新的 min 本身,不再對齊倍數。 */
+    public function test_an_out_of_range_default_moves_to_the_new_minimum(): void
     {
         $t = ProviderBoundsTarget::compute(self::variant(100, 10000, 100, 1000), self::service('2050', '9000'));
 
         $this->assertTrue($t->ok);
         $this->assertSame(2050, $t->targetMin);
         $this->assertSame(9000, $t->targetMax);
-        // 1000 低於新 min:調整為 ≥2050 的第一個 100 倍數 = 2100。
-        $this->assertSame(2100, $t->targetDefault);
+        // 1000 低於新 min → 直接用新 min 2050;⛔ 不再抬高到 2100。
+        $this->assertSame(2050, $t->targetDefault);
         $this->assertTrue($t->defaultAdjusted);
     }
 
-    public function test_a_default_that_breaks_the_step_is_adjusted_even_inside_the_range(): void
+    /**
+     * ⛔ M3A:default 只要落在新範圍內就原封不動。
+     *
+     * 舊規則會因為「不是 step 倍數」而改掉一個完全合法的 default——那正是
+     * legacy step 在後台造成的多餘干預。
+     */
+    public function test_a_default_inside_the_range_is_left_alone_regardless_of_the_legacy_step(): void
     {
         $t = ProviderBoundsTarget::compute(self::variant(100, 10000, 300, 1000), self::service('500', '1500'));
 
         $this->assertTrue($t->ok);
-        // 1000 在 [500,1500] 內但不是 300 的倍數 → 第一個合法倍數 600。
-        $this->assertSame(600, $t->targetDefault);
-        $this->assertTrue($t->defaultAdjusted);
+        // 1000 在 [500,1500] 內 → 保留;⛔ 不因為不是 300 的倍數而被改成 600。
+        $this->assertSame(1000, $t->targetDefault);
+        $this->assertFalse($t->defaultAdjusted);
     }
 
     public function test_equal_bounds_that_fit_the_step_are_accepted(): void
@@ -113,22 +120,35 @@ class ProviderBoundsTargetTest extends TestCase
         $this->assertTrue($t->defaultAdjusted);
     }
 
-    public function test_a_range_with_no_legal_step_multiple_is_rejected_instead_of_touching_the_step(): void
+    /**
+     * ⛔ M3A:窄範圍不再被拒絕。
+     *
+     * [101,199] 內沒有任何 100 的倍數,舊規則因此整筆拒絕。現在範圍內每個
+     * 整數都可購,所以這是一個完全正常的目標範圍——供應商願意接的範圍不該
+     * 因為一個 legacy 欄位而被我們自己拒收。
+     */
+    public function test_a_narrow_range_is_now_accepted_because_every_integer_is_purchasable(): void
     {
-        // step 100 在 [101,199] 內沒有任何倍數;⛔ step 不得被「修正」。
         $t = ProviderBoundsTarget::compute(self::variant(100, 10000, 100, 1000), self::service('101', '199'));
 
-        $this->assertFalse($t->ok);
-        $this->assertSame(ProviderBoundsTarget::NO_PURCHASABLE_STEP, $t->reason);
-        $this->assertNull($t->targetMin);
+        $this->assertTrue($t->ok);
+        $this->assertSame(101, $t->targetMin);
+        $this->assertSame(199, $t->targetMax);
+        $this->assertSame(101, $t->targetDefault);
+        $this->assertTrue($t->defaultAdjusted);
     }
 
-    public function test_a_corrupt_site_step_fails_closed_without_guessing(): void
+    /** ⛔ M3A:legacy step 0 不再讓套用失敗——step 已不參與任何計算。 */
+    public function test_a_legacy_zero_step_no_longer_blocks_applying_bounds(): void
     {
         $t = ProviderBoundsTarget::compute(self::variant(100, 10000, 0, 1000), self::service('50', '5000'));
 
-        $this->assertFalse($t->ok);
-        $this->assertSame(ProviderBoundsTarget::INVALID_SITE_STEP, $t->reason);
+        $this->assertTrue($t->ok);
+        $this->assertSame(50, $t->targetMin);
+        $this->assertSame(5000, $t->targetMax);
+        // 1000 仍在 [50,5000] 內 → 保留。
+        $this->assertSame(1000, $t->targetDefault);
+        $this->assertFalse($t->defaultAdjusted);
     }
 
     public function test_provider_min_above_max_is_a_contradiction(): void

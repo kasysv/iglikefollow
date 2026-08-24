@@ -83,7 +83,8 @@ class CheckoutController extends Controller
 
         if (! $variant->quantityIsValid($quantity)) {
             throw ValidationException::withMessages([
-                'quantity' => "數量必須介於 {$variant->min_quantity} 至 {$variant->max_quantity} 之間，且為 {$variant->step_quantity} 的倍數。",
+                // ⛔ M3A:只說整數與上下限,不再提倍數。
+                'quantity' => "數量必須是介於 {$variant->min_quantity} 至 {$variant->max_quantity} 之間的整數。",
             ]);
         }
 

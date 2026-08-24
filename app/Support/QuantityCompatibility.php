@@ -8,12 +8,16 @@ use App\Models\ServiceVariant;
 /**
  * Can this provider service actually cover every quantity our variant sells?
  *
- * ⛔ The site's effective bounds are not the raw `min_quantity`/`max_quantity`:
- * a customer may only buy multiples of the step, so the real lower bound is
- * `firstPurchasableQuantity()` and the real upper bound is the largest step
- * multiple that fits under the maximum. A provider whose minimum sits above
- * our first purchasable quantity — or whose maximum sits below our last —
- * would take the customer's money and then have no way to dispatch.
+ * ⛔ M3A: customers may buy any integer in range, so the site's effective
+ * bounds are simply `min_quantity`/`max_quantity` — no step alignment. The
+ * legacy `step_quantity` is deliberately not consulted: treating it as real
+ * would compute a first bound of 100 for a min-10 variant, and narrow the last
+ * bound below the maximum a customer can genuinely order, either of which
+ * would mark a perfectly usable provider as incompatible.
+ *
+ * A provider whose minimum sits above our lowest orderable quantity — or whose
+ * maximum sits below our highest — would take the customer's money and then
+ * have no way to dispatch.
  *
  * ⛔ Provider bounds are canonical digit strings up to 64 chars and are never
  * cast to int or float: a 64-digit maximum overflows PHP integers, and a
@@ -44,7 +48,7 @@ final class QuantityCompatibility
         public readonly bool $compatible,
         /** 本站實際最低可購量;null = 整段範圍沒有任何可購數量。 */
         public readonly ?int $siteFirstPurchasable,
-        /** 本站實際最高可購量(≤ max 的最大 step 倍數)。 */
+        /** 本站實際最高可購量;⛔ M3A 起就是 max 本身。 */
         public readonly ?int $siteLastPurchasable,
         /** 固定本地 reason code;⛔ 永不含 provider 值。 */
         public readonly ?string $reason,
@@ -54,15 +58,14 @@ final class QuantityCompatibility
     {
         $min = (int) $variant->min_quantity;
         $max = (int) $variant->max_quantity;
-        $step = (int) $variant->step_quantity;
 
         /*
-         * ⛔ R1:先驗本站 local structure,再談 provider。GPT 反例證明
-         * `max(1, step)` 會把 step 0 的 corrupt 款式標成相容,而 checkout
-         * 對同一筆資料 Modulo-by-zero——結構不合法(min<1、max<min、
-         * step<1)直接以固定 reason 拒絕,不比較 provider、不標相容。
+         * ⛔ 先驗本站 local structure,再談 provider:結構不合法的款式
+         * (min<1、max<min)直接以固定 reason 拒絕,不比較 provider、不標相容。
+         * ⛔ M3A:`step_quantity` 已不是購買規則,因此不再是結構條件——
+         * legacy step 0 的舊資料不該讓一個正常商品被判為不相容。
          */
-        if ($min < 1 || $max < $min || $step < 1) {
+        if ($min < 1 || $max < $min) {
             return new self(false, null, null, self::INVALID_SITE_QUANTITY_STRUCTURE);
         }
 
@@ -73,7 +76,8 @@ final class QuantityCompatibility
             return new self(false, null, null, self::NO_PURCHASABLE_QUANTITY);
         }
 
-        $last = intdiv($max, $step) * $step;
+        // ⛔ M3A:最高可購量就是 max 本身,不再向下對齊到 step 倍數。
+        $last = $max;
 
         $providerMin = (string) $service->minimum_quantity_raw;
         $providerMax = (string) $service->maximum_quantity_raw;
@@ -99,8 +103,8 @@ final class QuantityCompatibility
     {
         return match ($this->reason) {
             null => '✔ 數量相容:供應商範圍可完整承接本站可購數量。',
-            self::INVALID_SITE_QUANTITY_STRUCTURE => '✘ 不相容:本站款式數量設定結構不合法(min/max/step),請先修正款式。',
-            self::NO_PURCHASABLE_QUANTITY => '✘ 不相容:本站款式的數量範圍內沒有任何可購數量(min/max/step 設定問題)。',
+            self::INVALID_SITE_QUANTITY_STRUCTURE => '✘ 不相容:本站款式數量設定結構不合法(最少／最多買多少),請先修正款式。',
+            self::NO_PURCHASABLE_QUANTITY => '✘ 不相容:本站款式的數量範圍內沒有任何可購數量,請檢查最少／最多買多少。',
             self::MALFORMED_PROVIDER_BOUNDS => '✘ 不相容:供應商數量欄位格式異常,無法安全比較。',
             self::PROVIDER_MINIMUM_TOO_HIGH => '✘ 不相容:供應商最低量高於本站實際最低可購量。',
             self::PROVIDER_MAXIMUM_TOO_LOW => '✘ 不相容:供應商最高量低於本站實際最高可購量。',

@@ -2,7 +2,6 @@
 
 namespace App\Support;
 
-use App\Exceptions\NonIntegerAmountException;
 use App\Exceptions\UnsellablePriceException;
 
 /**
@@ -22,10 +21,17 @@ use App\Exceptions\UnsellablePriceException;
  * calculation here works on integers. The internal unit is a "mill": one
  * ten-thousandth of a NT dollar, the full precision the price column can hold.
  *
- * ⛔ A product of rate × quantity that is not a whole number of dollars is NOT
- * rounded. Rounding would quietly turn a misconfigured product into a payable
- * order and charge the customer something the catalogue never advertised; the
- * fault belongs to the price/step configuration, so it is raised there.
+ * M3A: a product that is not a whole number of dollars is now rounded half-up
+ * to whole TWD rather than refused. Owner decided customers may buy any integer
+ * quantity, which makes fractional totals ordinary rather than a symptom of
+ * misconfiguration — NT$0.59 × 101 is NT$59.59, and the customer pays NT$60.
+ *
+ * ⛔ The rounding is integer arithmetic (`remainder * 2 >= SCALE`), never
+ * `round()` or a formatted string: `round()` takes a float, and a float is
+ * exactly what cannot be trusted at the .5 boundary this rule turns on.
+ * ⛔ Half-up, not banker's rounding — a total ending in .5 always goes up.
+ * ⛔ Rounding is not permission to charge nothing: a total that rounds down to
+ * zero is still refused, and there is deliberately no hidden NT$1 minimum.
  */
 class Money
 {
@@ -62,13 +68,14 @@ class Money
     }
 
     /**
-     * Total payable in whole NT dollars.
+     * Total payable in whole NT dollars, rounded half-up.
      *
-     * Both operands are integers, so the product is exact. If it does not
-     * divide into whole dollars the result is not payable in TWD at all, and
-     * ⛔ it is rejected rather than rounded — see the class comment.
+     * Both operands are integers, so the product is exact; only the final
+     * conversion to dollars rounds. ⛔ A total that rounds down to zero is
+     * refused rather than quietly becoming a free order or being nudged up to
+     * NT$1 — both would charge an amount the catalogue never advertised.
      *
-     * @throws NonIntegerAmountException
+     * @throws UnsellablePriceException
      */
     public static function total(int $unitPriceMills, int $quantity): int
     {
@@ -84,20 +91,46 @@ class Money
         }
 
         $mills = self::multiply($unitPriceMills, $quantity);
+        $dollars = self::roundMillsToDollars($mills);
 
-        if ($mills % self::SCALE !== 0) {
-            throw new NonIntegerAmountException($unitPriceMills, $quantity, $mills);
+        if ($dollars < 1) {
+            // ⛔ 四捨五入後不足 1 元:拒絕,不建 NT$0 訂單、也不暗自墊高到 1。
+            throw new UnsellablePriceException(
+                "四捨五入後的付款金額為 {$dollars} 元，低於可收款的最小金額。請調整單價或最低數量。"
+            );
         }
 
-        return intdiv($mills, self::SCALE);
+        return $dollars;
     }
 
     /**
-     * Would this rate and quantity produce a payable whole-dollar amount?
+     * Mills → whole dollars, half-up, using only integer arithmetic.
      *
-     * Callers that must not throw — a catalogue validator checking every step
-     * in a range, say — ask this first. ⛔ Says nothing about the amount being
-     * sellable; isPayable() answers that.
+     * ⛔ `remainder * 2 >= SCALE` rather than `remainder >= SCALE / 2`: SCALE is
+     * even today, but comparing doubled remainders keeps the rule exact even if
+     * it ever stops being, and never introduces a division that could truncate.
+     * ⛔ Never `round()`: it takes a float, and the .5 boundary is precisely
+     * where a float stops being trustworthy.
+     *
+     * Operands are positive everywhere this is reached (total() rejects
+     * non-positive input first), so no negative-half-up case arises.
+     */
+    private static function roundMillsToDollars(int $mills): int
+    {
+        $whole = intdiv($mills, self::SCALE);
+        $remainder = $mills % self::SCALE;
+
+        return $remainder * 2 >= self::SCALE ? $whole + 1 : $whole;
+    }
+
+    /**
+     * Does this rate and quantity land exactly on whole dollars?
+     *
+     * ⛔ M3A: this no longer decides whether something may be bought — a
+     * fractional total is now rounded, not refused. It is kept only for callers
+     * that genuinely want to know about exactness (diagnostics and the
+     * catalogue's own reporting), so that "is it exact" and "may it be sold"
+     * stay two separate questions. `isPayable()` answers the second.
      */
     public static function divides(int $unitPriceMills, int $quantity): bool
     {
@@ -108,12 +141,18 @@ class Money
         return self::multiply($unitPriceMills, $quantity) % self::SCALE === 0;
     }
 
-    /** Is this rate and quantity a positive, whole-dollar, in-range amount? */
+    /**
+     * Can this rate and quantity actually be charged?
+     *
+     * ⛔ M3A: "payable" now means the rounded total is at least NT$1 and does
+     * not overflow — exactness is no longer part of it. Callers that must not
+     * throw (the catalogue validator, checkout) ask this.
+     */
     public static function isPayable(int $unitPriceMills, int $quantity): bool
     {
         try {
             return self::total($unitPriceMills, $quantity) > 0;
-        } catch (NonIntegerAmountException|UnsellablePriceException) {
+        } catch (UnsellablePriceException) {
             return false;
         }
     }

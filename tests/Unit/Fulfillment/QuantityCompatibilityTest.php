@@ -81,32 +81,45 @@ class QuantityCompatibilityTest extends TestCase
         $this->assertSame(QuantityCompatibility::PROVIDER_MAXIMUM_TOO_LOW, $a->reason);
     }
 
-    /** ⛔ 本站自己沒有任何可購數量:無論供應商多寬都不得啟用。 */
+    /** ⛔ 本站自己沒有任何可購數量(範圍是空的):無論供應商多寬都不得啟用。 */
     public function test_a_variant_with_no_purchasable_quantity_is_incompatible(): void
     {
-        $a = QuantityCompatibility::assess(self::variant(150, 199, 100), self::service('1', '999999'));
+        // ⛔ M3A:範圍內任何整數皆可,因此「沒有可購數量」只剩 max < min 一種。
+        $a = QuantityCompatibility::assess(self::variant(199, 150, 1), self::service('1', '999999'));
 
         $this->assertFalse($a->compatible);
-        $this->assertSame(QuantityCompatibility::NO_PURCHASABLE_QUANTITY, $a->reason);
+        $this->assertSame(QuantityCompatibility::INVALID_SITE_QUANTITY_STRUCTURE, $a->reason);
         $this->assertNull($a->siteFirstPurchasable);
     }
 
     /**
-     * ⛔ 有效範圍是 step 倍數,不是 raw min/max:min 101/step 100 的實際
-     * 下限是 200,max 9999 的實際上限是 9900——供應商只要覆蓋實際範圍
-     * 就相容,即使覆蓋不了 raw 值。
+     * ⛔ M3A:有效範圍就是 raw min/max,不再向 step 倍數對齊。
+     *
+     * 這條測試原本主張相反的事(min 101／step 100 的實際下限是 200)。那正是
+     * Owner 回報缺陷的同一個根:legacy step 會把本站可買範圍說得比實際更窄。
      */
-    public function test_the_effective_bounds_are_step_multiples_not_raw_min_max(): void
+    public function test_the_effective_bounds_are_the_raw_min_and_max(): void
     {
-        // raw min 101 < provider min 150,但實際下限 200 >= 150 → 相容。
-        $low = QuantityCompatibility::assess(self::variant(101, 10000, 100), self::service('150', '10000'));
-        $this->assertTrue($low->compatible);
-        $this->assertSame(200, $low->siteFirstPurchasable);
+        // legacy step 100 仍在資料裡,但不得再影響判斷。
+        $a = QuantityCompatibility::assess(self::variant(101, 9999, 100), self::service('101', '9999'));
 
-        // raw max 9999 > provider max 9950,但實際上限 9900 <= 9950 → 相容。
+        $this->assertTrue($a->compatible);
+        $this->assertSame(101, $a->siteFirstPurchasable);
+        $this->assertSame(9999, $a->siteLastPurchasable);
+    }
+
+    /** ⛔ 供應商承接不了 raw 下限／上限時仍不相容:邊界沒有因此被放寬。 */
+    public function test_a_provider_that_cannot_cover_the_raw_range_is_still_incompatible(): void
+    {
+        // provider min 150 > 本站實際下限 101 → 不相容(舊規則會誤判為相容)。
+        $low = QuantityCompatibility::assess(self::variant(101, 10000, 100), self::service('150', '10000'));
+        $this->assertFalse($low->compatible);
+        $this->assertSame(QuantityCompatibility::PROVIDER_MINIMUM_TOO_HIGH, $low->reason);
+
+        // provider max 9950 < 本站實際上限 9999 → 不相容。
         $high = QuantityCompatibility::assess(self::variant(100, 9999, 100), self::service('10', '9950'));
-        $this->assertTrue($high->compatible);
-        $this->assertSame(9900, $high->siteLastPurchasable);
+        $this->assertFalse($high->compatible);
+        $this->assertSame(QuantityCompatibility::PROVIDER_MAXIMUM_TOO_LOW, $high->reason);
     }
 
     /** ⛔ 64 位數 bound 不得溢位:長度＋lexicographic,永不 cast。 */
@@ -158,14 +171,17 @@ class QuantityCompatibilityTest extends TestCase
     // ==================================== R1:local structure 先行
 
     /**
-     * ⛔ GPT 反例:step 0 曾被 `max(1, step)` 靜默修成 1 而標成相容,
-     * checkout 對同一資料卻 Modulo-by-zero。R1 之後結構先行:不比較
-     * provider、不標相容、無 warning。
+     * ⛔ M3A:legacy step 0 不再讓一個結構正常的款式變成不相容。
+     *
+     * 舊規則把 step 0 當成結構錯誤(當時是對的——checkout 會 Modulo-by-zero)。
+     * 現在 step 完全不參與購買規則,那個除零路徑已不存在,所以一筆 min/max
+     * 正常、只是 legacy step 為 0 的舊資料**必須照常可用**;否則升級後既有商品
+     * 會無故無法派單。原始的安全性質(不得產生 PHP error)仍然斷言。
      */
-    public function test_the_gpt_step_zero_probe_is_structurally_incompatible_without_warnings(): void
+    public function test_a_legacy_zero_step_no_longer_blocks_a_structurally_sound_variant(): void
     {
         set_error_handler(function (int $errno, string $errstr): bool {
-            $this->fail('⛔ corrupt structure 產生了 PHP error:'.$errstr);
+            $this->fail('⛔ legacy step 0 產生了 PHP error:'.$errstr);
         });
 
         try {
@@ -174,21 +190,22 @@ class QuantityCompatibilityTest extends TestCase
             restore_error_handler();
         }
 
-        $this->assertFalse($a->compatible);
-        $this->assertSame(QuantityCompatibility::INVALID_SITE_QUANTITY_STRUCTURE, $a->reason);
-        // ⛔ 不得回報任何「實際可購」數字:那正是原反例顯示 100–10000 的來源。
-        $this->assertNull($a->siteFirstPurchasable);
-        $this->assertNull($a->siteLastPurchasable);
+        $this->assertTrue($a->compatible);
+        $this->assertSame(100, $a->siteFirstPurchasable);
+        $this->assertSame(10000, $a->siteLastPurchasable);
     }
 
-    /** min<1、max<min、step<1:全部在 provider 比較之前以固定 reason 拒絕。 */
+    /**
+     * min<1、max<min:在 provider 比較之前以固定 reason 拒絕。
+     *
+     * ⛔ M3A:step 已從這份清單移除——它不再是結構條件(見上一個測試)。
+     */
     public function test_invalid_site_structures_are_rejected_before_provider_comparison(): void
     {
         $cases = [
-            'min zero' => self::variant(0, 10000, 100),
-            'negative min' => self::variant(-10, 10000, 100),
-            'negative step' => self::variant(100, 10000, -5),
-            'max below min' => self::variant(500, 100, 100),
+            'min zero' => self::variant(0, 10000, 1),
+            'negative min' => self::variant(-10, 10000, 1),
+            'max below min' => self::variant(500, 100, 1),
         ];
 
         foreach ($cases as $label => $variant) {

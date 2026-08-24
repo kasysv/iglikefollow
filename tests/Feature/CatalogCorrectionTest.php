@@ -40,13 +40,20 @@ class CatalogCorrectionTest extends TestCase
     }
 
     /** Force a broken combination past the observer, as pre-existing data would be. */
+    /**
+     * 把商品改成「已發布但收不到錢」。
+     *
+     * ⛔ M3A:原本的壞法(0.7 × 11 = 7.7 元)已經不算壞——小數台幣現在會
+     * half-up 成 NT$8。四捨五入救不了的只剩一種:最低數量的金額四捨五入
+     * 後仍不足 1 元。0.0001 × 1 = 0.0001 元 → 0 元,那才是真的收不到。
+     */
     private function breakVariantInDatabase(ServiceVariant $variant): void
     {
         DB::table('service_variants')->where('id', $variant->id)->update([
-            'unit_price' => '0.7000',
-            'min_quantity' => 10,
+            'unit_price' => '0.0001',
+            'min_quantity' => 1,     // 0.0001 × 1 → 四捨五入後 0 元
             'max_quantity' => 10000,
-            'step_quantity' => 1,   // 買 11 個 = 7.7 元，收不到
+            'step_quantity' => 1,
             'default_quantity' => 100,
             'status' => 'published',
         ]);
@@ -128,7 +135,7 @@ class CatalogCorrectionTest extends TestCase
     }
 
     #[DataProvider('correctedStepProvider')]
-    public function test_the_corrected_step_makes_every_quantity_payable(
+    public function test_every_quantity_in_range_is_payable(
         string $sku, string $rate, int $min, int $step
     ): void {
         $variant = new ServiceVariant;
@@ -139,27 +146,41 @@ class CatalogCorrectionTest extends TestCase
             'step_quantity' => $step,
         ], true);
 
-        // 整個範圍都算得出整數台幣。
-        $this->assertNull($variant->firstNonIntegerQuantity(), "{$sku} 仍有無法付款的數量");
-        $this->assertNotNull($variant->firstPurchasableQuantity());
-        $this->assertTrue($variant->quantityIsValid($variant->firstPurchasableQuantity()));
+        // ⛔ M3A:「算不出整數台幣」已不是缺陷(改為 half-up 四捨五入)。
+        // 現在要證明的是整段範圍都收得到錢。
+        $this->assertNull($variant->firstUnpayableQuantity(), "{$sku} 仍有收不到錢的數量");
+        $this->assertSame($min, $variant->firstPurchasableQuantity());
+        $this->assertTrue($variant->quantityIsValid($min));
     }
 
-    public function test_quantities_off_the_corrected_step_are_still_refused(): void
+    /**
+     * ⛔ M3A:範圍內任何整數皆可,但範圍本身沒有被放寬。
+     *
+     * 原測試主張 11 與 15 必須被拒絕(不是 10 的倍數)——那正是 Owner 回報的
+     * 缺陷。現在它們合法,而四捨五入後的金額必須精確。
+     */
+    public function test_any_integer_in_range_is_accepted_and_rounded_half_up(): void
     {
         $variant = new ServiceVariant;
         $variant->setRawAttributes([
             'unit_price' => '0.7000',
             'min_quantity' => 10,
             'max_quantity' => 10000,
-            'step_quantity' => 10,
+            'step_quantity' => 10,   // legacy;不得再影響任何事
         ], true);
 
-        // ⛔ 放寬 step 不代表放寬伺服器端檢查。
-        $this->assertFalse($variant->quantityIsValid(11));
-        $this->assertFalse($variant->quantityIsValid(15));
+        $this->assertTrue($variant->quantityIsValid(11));
+        $this->assertTrue($variant->quantityIsValid(15));
         $this->assertTrue($variant->quantityIsValid(20));
+
+        // 0.7 × 11 = 7.7 → 8;0.7 × 15 = 10.5 → 11(half-up);0.7 × 20 = 14。
+        $this->assertSame(8, $variant->amountFor(11));
+        $this->assertSame(11, $variant->amountFor(15));
         $this->assertSame(14, $variant->amountFor(20));
+
+        // ⛔ 範圍邊界仍然嚴格。
+        $this->assertFalse($variant->quantityIsValid(9));
+        $this->assertFalse($variant->quantityIsValid(10001));
     }
 
     // ============================================ 3. Seeder 不得覆寫後台資料
