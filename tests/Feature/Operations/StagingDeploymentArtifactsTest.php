@@ -81,6 +81,26 @@ class StagingDeploymentArtifactsTest extends TestCase
         $this->assertStringContainsString('app:staging-readiness', $env);
     }
 
+    /**
+     * ⛔ R2:runbook 不得再宣稱「全部能力 flag=false」——那與 Owner DB 開關
+     * 矛盾,會讓部署的人把一行沒有作用的 .env 當成「能力一定關閉」的證據。
+     */
+    public function test_the_runbook_points_at_the_owner_switch_not_the_flags(): void
+    {
+        $runbook = $this->artifact('staging-runbook.md');
+
+        $this->assertStringNotContainsString('全部能力 flag=false', $runbook);
+        $this->assertStringNotContainsString('FULFILLMENT_DRIVER=disabled、', $runbook);
+
+        // 開關的真正位置與真正的驗證方式。
+        $this->assertStringContainsString('integration_settings.is_enabled', $runbook);
+        $this->assertStringContainsString('app:staging-readiness', $runbook);
+        // ⛔ Owner 切開關不需要 queue:restart(R2 的核心保證)。
+        $this->assertStringContainsString('不需要', $runbook);
+        // ⛔ 沒有 SQL 開關指令。
+        $this->assertStringNotContainsString('UPDATE integration_settings', $runbook);
+    }
+
     /** ⛔ secret 欄位只有 placeholder;沒有任何看似真值的內容。 */
     public function test_the_env_template_contains_placeholders_only(): void
     {

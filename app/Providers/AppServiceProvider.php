@@ -152,6 +152,19 @@ class AppServiceProvider extends ServiceProvider
      * ⛔ local／testing 永遠拿不到 live-capable gateway:fake gateway 與
      * (僅 testing)注入式 fake transport 的 adapter 是唯二路徑,兩者都
      * 不可能產生真實外呼。
+     *
+     * ⛔ R2:transient(`bind`),不是 singleton。Queue worker 是長駐程序:
+     * singleton 會把「第一次解析當下的開關狀態」凍成整個 worker 生命週期的
+     * 事實——worker 在 OFF 時先碰過一筆履約工作,Owner 之後在後台切 ON,
+     * 同一個 worker 之後的每一筆 job 拿到的仍是舊的 Disabled,直到有人
+     * `queue:restart`。那正是「按了開關卻沒有反應」的 queue 版本,GPT 已用
+     * 獨立反證重現。兩個消費者(SubmitFulfillment／SyncFulfillmentState)
+     * 都是逐 job 解析的 action,gateway 的建構只是兩個小物件,每次重新決定
+     * 的成本可以忽略;⛔ 換來的是每一筆 job 都看得到 Owner 當下的決定。
+     *
+     * ⛔ 這不是唯一的防線,而是三層裡的第一層:action 在 claim 後、送出前
+     * 再讀一次 gate;credential source 在每次 submit／sync 時重新查 DB——
+     * 所以即使某處仍抓著舊的 live instance,ON→OFF 也在網路前停止。
      */
     private function bindFulfillmentGateway(): void
     {
@@ -166,7 +179,7 @@ class AppServiceProvider extends ServiceProvider
             fn () => TheMostPanelCurlCapability::fromRuntime(),
         );
 
-        $this->app->singleton(FulfillmentGateway::class, function () {
+        $this->app->bind(FulfillmentGateway::class, function () {
             /*
              * live 路徑:staging／production ＋ gate 全部成立。
              *

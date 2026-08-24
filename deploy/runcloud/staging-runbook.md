@@ -23,9 +23,23 @@ Owner 於部署後在 `/admin` 串接設定加密輸入。實際部署執行需�
 
 ## 2. .env(依 `staging.env.example`;只列非機密鍵)
 
-全部能力 flag=false、`FULFILLMENT_DRIVER=disabled`、
 `ALLOW_INDEXING=false`、`QUEUE_CONNECTION=database`、
-`DB_QUEUE_RETRY_AFTER=90`。⛔ secret 只在 RunCloud 端設定。
+`DB_QUEUE_RETRY_AFTER=90`、`THEMOSTPANEL_READ_ONLY_ENABLED=false`。
+⛔ secret 只在 RunCloud 端設定。
+
+⛔ **正式付款／發票／自動派單的營運開關不在 .env**(M4C+R1):它們在
+Owner 的 `/admin`「串接設定」,存於 production
+`integration_settings.is_enabled`。舊的
+`PAYMENTS_SANDBOX_ENABLED`／`INVOICE_SANDBOX_ENABLED`／`INVOICE_GATEWAY`／
+`FULFILLMENT_DISPATCH_ENABLED`／`FULFILLMENT_STAGING_THEMOSTPANEL_DISPATCH_ENABLED`／
+`FULFILLMENT_STATUS_POLLING_ENABLED` 已 deprecated,staging／production
+runtime 完全不讀;`FULFILLMENT_DRIVER` 只剩 local/testing 的測試路徑
+選擇作用。既有 .env 留著這些鍵不會有作用,也⛔ 不得把它們當成
+「能力一定關閉」的證據——部署後的真正狀態以
+`php artisan app:staging-readiness` 的 production integration rows、
+endpoint 與 runtime capability 逐項結果為準。
+⛔ runbook 不放任何 credential 值,也沒有任何 SQL 開關指令:開關只從
+`/admin` 切。
 
 ## 3. Queue worker(long-lived;依 `queue-worker.conf.example`)
 
@@ -42,12 +56,17 @@ php artisan queue:work database --sleep=3 --tries=3 --timeout=60 --max-time=3600
 - RunCloud Process Manager/Supervisor `autorestart=true`;
   **每次部署後必須 `php artisan queue:restart`**(deploy script 已含),
   否則舊 worker 繼續跑舊程式碼。
+- ⛔ 上一條只針對**程式碼更新**。Owner 在 `/admin` 切換付款/發票/自動
+  派單開關**不需要** `queue:restart`:長駐 worker 逐 job 重新解析
+  gateway 並重查 DB 開關(R2),切 ON 後下一筆 job 立即生效,切 OFF 後
+  已排入的 job 也在網路前停止。
 
 ## 4. Scheduler
 
 cron 每分鐘 `schedule:run`(依 `scheduler.cron.example`,placeholder
-path)。內含每 10 分鐘 `fulfillment:queue-status-sync`;gate(staging＋
-polling flag＋dispatch capability)未開時為 no-op。
+path)。內含每 10 分鐘 `fulfillment:queue-status-sync`;⛔ 輪詢跟隨
+Owner 的自動派單總開關(R1,無獨立 flag),開關未開或 runtime 條件
+未達時為 no-op。
 
 ## 5. 部署順序(詳見 plan §3;由 deploy script 落實)
 
