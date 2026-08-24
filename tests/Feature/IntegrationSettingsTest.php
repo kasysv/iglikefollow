@@ -413,15 +413,38 @@ class IntegrationSettingsTest extends TestCase
         $setting->update(['is_enabled' => true]);
     }
 
-    public function test_themostpanel_cannot_be_enabled(): void
+    /**
+     * R1 反轉了這一條:自動派單總開關也交給 Owner。
+     *
+     * ⛔ model 層仍然把守 credential 完整度與「只有 production 列」;端點與
+     * runtime 技術條件由 toggle action(Owner 的唯一路徑)與 dispatch gate
+     * (每次送出前)把關——所以一列被偽造 update 出來的 enabled row,在缺
+     * 技術條件時仍然一單都派不出去,LiveDispatchOwnerControlTest 另有反證。
+     */
+    public function test_themostpanel_can_be_enabled_once_configured(): void
     {
         $setting = IntegrationSetting::factory()
             ->forProvider(IntegrationProvider::TheMostPanel)
             ->configured()->create();
 
-        $this->expectException(ValidationException::class);
-
         $setting->update(['is_enabled' => true]);
+
+        $this->assertTrue($setting->fresh()->is_enabled);
+    }
+
+    /** ⛔ 但沒有 API Key 仍然開不了,而且訊息點名缺什麼。 */
+    public function test_themostpanel_cannot_be_enabled_without_a_key(): void
+    {
+        $setting = IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::TheMostPanel)
+            ->create();
+
+        try {
+            $setting->update(['is_enabled' => true]);
+            $this->fail('缺少 API Key 時不應該可以啟用');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('API Key', $e->validator->errors()->first());
+        }
     }
 
     public function test_themostpanel_has_no_sandbox(): void
@@ -468,8 +491,8 @@ class IntegrationSettingsTest extends TestCase
         $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_ISSUE, $endpoints['ecpay_invoice']['production']);
         $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_QUERY, $endpoints['ecpay_invoice_query']['production']);
 
-        // ⛔ TheMostPanel 自動派單仍未獲批准，production 端點必須維持空字串。
-        $this->assertSame('', $endpoints['themostpanel']['production']);
+        // R1:派單端點也固定為官方正式網址;開不開由 Owner 的總開關決定。
+        $this->assertSame(ProviderEndpoints::THEMOSTPANEL_DISPATCH, $endpoints['themostpanel']['production']);
     }
 
     /**
@@ -489,22 +512,16 @@ class IntegrationSettingsTest extends TestCase
     }
 
     /**
-     * ⛔ 付款與發票已不再受 code 層 allowlist 約束，但自動派單仍然是。
+     * ⛔ R1:code 層的 `enablable` allowlist 已整組移除——沒有任何 provider
+     * 需要 code 批准才能啟用。
      *
-     * 這是 M4C 唯一保留在版本控制裡的啟用批准:開啟派單會開始對外花錢下單,
-     * 那還不是 Owner 的營運決定。
+     * M4C 初版還留著 themostpanel 的鍵;Owner 隨後明確推翻「自動派單另需
+     * code 批准」。⛔ 整組必須是 null 而不是空陣列:留著一個空殼,下一個人
+     * 會以為還有東西在讀它。
      */
-    public function test_only_dispatch_still_needs_a_code_level_approval(): void
+    public function test_the_enablable_allowlist_is_gone_entirely(): void
     {
-        $enablable = config('integrations.enablable');
-
-        $this->assertFalse($enablable['themostpanel']['production']);
-
-        // ⛔ 付款與發票的鍵必須已被移除,不是設成 true:留著一個 true 會讓人
-        // 以為必須先在 code 裡開一次,而 runtime 其實已經不再讀它。
-        $this->assertArrayNotHasKey('ecpay_payment', $enablable);
-        $this->assertArrayNotHasKey('line_pay', $enablable);
-        $this->assertArrayNotHasKey('ecpay_invoice', $enablable);
+        $this->assertNull(config('integrations.enablable'));
     }
 
     /**

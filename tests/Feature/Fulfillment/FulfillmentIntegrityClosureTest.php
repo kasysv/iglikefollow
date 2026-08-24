@@ -28,6 +28,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -39,6 +40,7 @@ use Tests\TestCase;
  */
 class FulfillmentIntegrityClosureTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private const MARKER = 'FAKE-MARKER-SERVICE-77';
@@ -49,7 +51,7 @@ class FulfillmentIntegrityClosureTest extends TestCase
 
         Http::preventStrayRequests();
         config()->set('fulfillment.driver', 'fake');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
     }
 
     private function readyFulfillment(): FulfillmentOrder

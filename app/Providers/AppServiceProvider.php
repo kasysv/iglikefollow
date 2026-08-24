@@ -45,10 +45,11 @@ use App\Policies\ServiceVariantPolicy;
 use App\Policies\UserPolicy;
 use App\Services\Fulfillment\DisabledFulfillmentGateway;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelFulfillmentGateway;
+use App\Services\Fulfillment\TheMostPanelLiveCredentialSource;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
-use App\Services\Fulfillment\TheMostPanelStagingCredentialSource;
 use App\Services\Invoices\EcpayInvoiceGateway;
 use App\Services\Invoices\FakeInvoiceGateway;
 use App\Services\Invoices\InvoiceSandboxGuard;
@@ -139,22 +140,49 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Decide, in one place, what actually places supplier orders.
      *
-     * ⛔ Production gets the disabled gateway — bound, not thrown. Fulfilment
-     * runs from a queued job after a real payment; throwing here would turn a
-     * configuration mistake into a failing job on an order the customer has
-     * already paid for. The correct outcome is that nothing is dispatched and
-     * the row waits for a person, which is exactly what the disabled gateway
-     * produces.
+     * ⛔ 得不到條件時綁 Disabled,而不是拋出。履約在真實付款後的 queue job
+     * 裡執行;在這裡拋出會把一個設定問題變成「客人已付款、job 卻炸掉」。
+     * 正確的結果是什麼都不派、該列等人處理——Disabled gateway 就是這個行為。
      *
-     * ⛔ There is no `themostpanel` branch, so no config value can produce an
-     * HTTP client — M4A does not contain one. Real dispatch needs verified
-     * service ids, a proven status contract and a reconciliation procedure,
-     * none of which exist yet.
+     * ⛔ R1:staging 與 production 走同一條 live 路徑,條件就是
+     * `FulfillmentDispatchGate::enabled()`——與後台顯示、商品三態、queue
+     * re-check 完全同一份判斷,⛔ 這裡不自己再算一套。driver 與舊 env 旗標
+     * 對 live 路徑完全沒有作用。
+     *
+     * ⛔ local／testing 永遠拿不到 live-capable gateway:fake gateway 與
+     * (僅 testing)注入式 fake transport 的 adapter 是唯二路徑,兩者都
+     * 不可能產生真實外呼。
      */
     private function bindFulfillmentGateway(): void
     {
+        /*
+         * runtime 能力用 container 綁定:預設就是真實 runtime,但測試必須能
+         * 描述一個支援/不支援的環境,而不是被跑測試那台機器的 libcurl 版本
+         * 決定測試結果。⛔ 這不是旁路——它描述的是「機器長什麼樣」,不是
+         * 「可不可以送」;後者永遠由 gate 判斷。
+         */
+        $this->app->bind(
+            TheMostPanelCurlCapability::class,
+            fn () => TheMostPanelCurlCapability::fromRuntime(),
+        );
+
         $this->app->singleton(FulfillmentGateway::class, function () {
-            if ($this->app->environment('production')) {
+            /*
+             * live 路徑:staging／production ＋ gate 全部成立。
+             *
+             * ⛔ gate 包含 Owner 總開關、API Key 完整度、exact endpoint 與
+             * runtime 能力;credential source 固定讀 production row,每次
+             * submit 時重新查——所以 Owner 關掉開關後,連已解析的 gateway
+             * 都會在網路前拿到 null 而停止。
+             */
+            if ($this->app->environment('staging', 'production')) {
+                if (FulfillmentDispatchGate::enabled()) {
+                    return new TheMostPanelFulfillmentGateway(
+                        new TheMostPanelLiveCredentialSource,
+                        $this->app->make(TheMostPanelCurlCapability::class),
+                    );
+                }
+
                 return new DisabledFulfillmentGateway;
             }
 
@@ -168,34 +196,13 @@ class AppServiceProvider extends ServiceProvider
             /*
              * ⛔ DISPATCH-ADAPTER-A:themostpanel adapter 只在 testing 可
              * 解析,而且它的 credential source 與 transport 都必須由測試
-             * 明確綁定——沒有任何 production implementation 存在,local
-             * 也不在此分支內,`.env` 無法把它變成 live driver。
+             * 明確綁定;local 不在此分支內,`.env` 無法把它變成 live driver。
              */
             if (
                 config('fulfillment.driver') === 'themostpanel'
                 && $this->app->environment('testing')
             ) {
                 return $this->app->make(TheMostPanelFulfillmentGateway::class);
-            }
-
-            /*
-             * ⛔ M4C:staging 是唯一的 production-code 路徑,而且要 driver
-             * ＋staging dispatch flag 同時成立;credential source 固定為
-             * staging 實作(加密 setting 列),capability 由 runtime 實測。
-             * local、production 與未知 environment 永遠落到 Disabled。
-             */
-            if (
-                config('fulfillment.driver') === 'themostpanel'
-                && $this->app->environment('staging')
-                && (bool) config('fulfillment.staging.themostpanel_dispatch_enabled', false)
-                // ⛔ R1(P0-2):global dispatch 總開關也必須成立——container
-                // 本身就不交出 live-capable gateway,不只靠 action gate。
-                && (bool) config('fulfillment.dispatch_enabled', false)
-            ) {
-                return new TheMostPanelFulfillmentGateway(
-                    new TheMostPanelStagingCredentialSource,
-                    TheMostPanelCurlCapability::fromRuntime(),
-                );
             }
 
             // ⛔ 預設就是不派單。

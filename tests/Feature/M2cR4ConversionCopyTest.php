@@ -11,6 +11,7 @@ use Database\Seeders\CatalogSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\Concerns\IsolatesSnapshotStorage;
 use Tests\Concerns\SeedsThreadsCatalog;
 use Tests\TestCase;
@@ -24,6 +25,7 @@ use Tests\TestCase;
  */
 class M2cR4ConversionCopyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use IsolatesSnapshotStorage;
     use RefreshDatabase;
     use SeedsThreadsCatalog;

@@ -8,12 +8,14 @@ use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\TheMostPanelReadOnlyAction;
 use App\Models\IntegrationSetting;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelBoundedResponseStream;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Fulfillment\TheMostPanelResponseSizeGuard;
 use App\Services\Fulfillment\TheMostPanelResponseTooLarge;
 use App\Services\Fulfillment\TheMostPanelTransferState;
+use App\Services\Integrations\ProviderEndpoints;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -1051,9 +1053,9 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
 
         $this->probe()->probe(TheMostPanelReadOnlyAction::Services);
 
-        // ⛔ 有 key ≠ 可以派單：這兩件事由不同的開關控制。
-        $this->assertFalse(config('integrations.enablable.themostpanel.production'));
-        $this->assertFalse(config('fulfillment.dispatch_enabled'));
+        // ⛔ 有 key ≠ 可以派單:R1 之後由 Owner 的總開關(production row 的
+        // is_enabled)決定,而這個測試的 row 沒有被啟用——探針用過也一樣。
+        $this->assertFalse(FulfillmentDispatchGate::enabled());
     }
 
     /**
@@ -1063,9 +1065,18 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
      * production 一律為空，既有安全測試以此為不變式。把唯讀位址放進去，會讓
      * 「可以查詢」在設定上看起來等於「可以下單」——而 `add` 會真的花錢。
      */
-    public function test_the_read_only_endpoint_is_not_the_transaction_endpoint(): void
+    public function test_the_read_only_endpoint_is_a_separate_setting_from_the_transaction_endpoint(): void
     {
-        $this->assertSame('', config('integrations.endpoints.themostpanel.production'));
+        /*
+         * R1:交易端點的 production 不再是空字串——正式派單改由 Owner 總開關
+         * 決定,端點固定為官方網址。⛔ 仍然是兩個「分開的設定值」:唯讀探針
+         * 讀它自己的 `themostpanel_read_only.endpoint`,永遠不讀交易那一組;
+         * 兩者剛好同值,但改掉其中一個不會影響另一個的判斷。
+         */
+        $this->assertSame(
+            ProviderEndpoints::THEMOSTPANEL_DISPATCH,
+            config('integrations.endpoints.themostpanel.production'),
+        );
         $this->assertSame(self::ENDPOINT, config('integrations.themostpanel_read_only.endpoint'));
     }
 

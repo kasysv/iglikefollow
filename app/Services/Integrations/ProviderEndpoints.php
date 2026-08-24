@@ -34,6 +34,15 @@ class ProviderEndpoints
     public const ECPAY_INVOICE_QUERY = 'https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue';
 
     /**
+     * TheMostPanel 派單 API(R1)。
+     *
+     * ⛔ staging 與 production 用同一個正式端點、同一列 Owner credential、
+     * 同一個 Owner 總開關;不再依 APP_ENV 拼接 config key——那種寫法意味著
+     * 一個新環境名稱就是一個沒人 review 過的端點來源。
+     */
+    public const THEMOSTPANEL_DISPATCH = 'https://themostpanel.com/api/v2';
+
+    /**
      * 可以把付款中的客人導去的主機。
      *
      * ⛔ 這是 allowlist,因為這個網址來自 HTTP 回應,而我們要把一個正在付款的
@@ -88,6 +97,15 @@ class ProviderEndpoints
         return self::exact(
             (string) config('integrations.endpoints.ecpay_invoice_query.production'),
             self::ECPAY_INVOICE_QUERY,
+        );
+    }
+
+    /** TheMostPanel 派單端點;⛔ 不符白名單即 null,呼叫端 fail closed。 */
+    public static function theMostPanelDispatch(): ?string
+    {
+        return self::exact(
+            (string) config('integrations.endpoints.themostpanel.production'),
+            self::THEMOSTPANEL_DISPATCH,
         );
     }
 

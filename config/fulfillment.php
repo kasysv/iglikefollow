@@ -4,17 +4,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | 履約 driver
+    | 履約 driver — ⛔ R1 之後只剩「測試路徑選擇器」一個角色
     |--------------------------------------------------------------------------
     |
-    | ⛔ 只有兩個合法值：
+    | 合法值:
     |
-    |   disabled — 預設。永不連網、永不派單。
-    |   fake     — 只允許 local／testing，供測試使用。
+    |   disabled     — 預設。
+    |   fake         — 只在 local／testing 有意義:綁定 FakeFulfillmentGateway
+    |                  供本機開發與測試。
+    |   themostpanel — 只在 testing 有意義:adapter e2e 測試以注入式 fake
+    |                  transport 走完整流程。
     |
-    | ⛔ 這裡沒有、也不會有 `themostpanel`：M4A 沒有任何 HTTP client。真實派單
-    | 需要先驗證 service ID、target 轉換、狀態與錯誤 contract 以及人工對帳流程，
-    | 那是 M4B 與 M4C 的事，不是一個設定值可以打開的東西。
+    | ⛔ staging／production 完全不讀這個值。正式派單的唯一營運開關是 Owner
+    | 後台的自動派單總開關(production integration_settings.is_enabled),
+    | 加上版本控制中的 exact endpoint 與 runtime 能力——把 driver 改成任何
+    | 字串都不會影響正式站的行為。
     |
     */
 
@@ -22,13 +26,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | 自動派單總開關
+    | ⛔ DEPRECATED／IGNORED — 自動派單總開關已移至 Owner 後台(R1)
     |--------------------------------------------------------------------------
     |
-    | ⛔ 預設關閉，且與 mapping 的 is_enabled 是兩回事。
+    | `FULFILLMENT_DISPATCH_ENABLED` 與
+    | `FULFILLMENT_STAGING_THEMOSTPANEL_DISPATCH_ENABLED` 在 R1 之後不再參與
+    | 任何 runtime 決定。唯一的營運事實是 TheMostPanel production
+    | `integration_settings.is_enabled`(見 FulfillmentDispatchGate)。
     |
-    | mapping 啟用代表「這個對應是正確的」；這個開關才代表「可以真的送出去」。
-    | 兩者分開，是為了讓「設定看起來沒問題」不會被讀成「開始下單」。
+    | ⛔ 保留鍵只為相容既有部署的 .env 不致噴錯,值一律被忽略;已有測試證明
+    | 設成 false 也不會蓋過 Owner 的後台開關。⛔ 不要在新程式碼裡讀它們。
     |
     */
 
@@ -50,13 +57,12 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Staging 專用能力(M4C-STAGING-READINESS-A)
+    | ⛔ DEPRECATED／IGNORED — staging 專用旗標已無作用(R1)
     |--------------------------------------------------------------------------
     |
-    | ⛔ default off,而且只在 APP_ENV=staging 有意義:production 在 gate 與
-    | container 都無條件 fail closed,local 永遠拿不到真實 dispatch driver。
-    | 打開這個 flag 本身不夠——driver、endpoint、runtime capability、
-    | enabled credential 與 dispatch 總開關每一項都要另外成立。
+    | staging 與 production 現在走同一條路:同一列 Owner credential、同一個
+    | Owner 總開關、同一個 exact endpoint。一個只屬於 staging 的旗標已經沒有
+    | 對應的決定可做。保留鍵只為 .env 相容,值被忽略。
     |
     */
 
@@ -69,8 +75,12 @@ return [
     | 履約狀態輪詢(status polling)
     |--------------------------------------------------------------------------
     |
-    | ⛔ default off,只允許 staging。它只負責挑選可同步的履約列並排入
-    | SyncFulfillmentStatus jobs;自己永不呼叫 provider,也永不重送 add。
+    | ⛔ R1:輪詢跟隨自動派單總開關,不再有獨立的 env 旗標。Owner 打開
+    | 「自動派單」,輪詢就會開始;關掉,下一輪就排入 0。
+    | `FULFILLMENT_STATUS_POLLING_ENABLED` 已 deprecated/ignored,保留鍵
+    | 只為 .env 相容。
+    |
+    | 輪詢只查已有 provider order ID 的列;⛔ 永不呼叫 add、永不重送訂單。
     | interval 固定每 10 分鐘(scheduler 內寫死):在取得 provider
     | rate-limit contract 之前不開放調整。
     |

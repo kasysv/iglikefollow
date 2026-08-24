@@ -18,6 +18,7 @@ use App\Services\Fulfillment\FakeFulfillmentGateway;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -31,6 +32,7 @@ use Tests\TestCase;
  */
 class FulfillmentConcurrencyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -39,7 +41,7 @@ class FulfillmentConcurrencyTest extends TestCase
 
         Http::preventStrayRequests();
         config()->set('fulfillment.driver', 'fake');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
     }
 
     private function readyFulfillment(): FulfillmentOrder

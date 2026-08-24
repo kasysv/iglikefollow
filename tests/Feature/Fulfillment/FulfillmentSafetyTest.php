@@ -30,6 +30,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -37,6 +38,7 @@ use Tests\TestCase;
  */
 class FulfillmentSafetyTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -45,7 +47,7 @@ class FulfillmentSafetyTest extends TestCase
 
         Http::preventStrayRequests();
         config()->set('fulfillment.driver', 'fake');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
     }
 
     private function paidOrder(): Order
@@ -58,19 +60,49 @@ class FulfillmentSafetyTest extends TestCase
         ])->fresh();
     }
 
-    // ==================================== 1. production 一律不派單
+    // ==================================== 1. production 依 Owner 開關,不依 env
 
-    public function test_production_never_dispatches(): void
+    /**
+     * R1 反轉了舊的「production 一律不派單」:正式派單由 Owner 的總開關決定。
+     *
+     * ⛔ 反轉的只有依據,不是防線:下面兩個測試證明「開關關著」與「runtime
+     * 不支援」在 production 仍然是 false——而且這台機器的 libcurl 其實不支援,
+     * 所以 supported runtime 必須明確描述,不能靠跑測試的機器碰巧通過。
+     */
+    public function test_production_dispatches_only_when_the_owner_switch_and_runtime_hold(): void
     {
         $this->app->detectEnvironment(fn () => 'production');
+        $this->withSupportedDispatchRuntime();
 
-        // ⛔ 不論設定怎麼寫，production 都不得派單。
+        // setUp 已開 Owner 總開關 → 全部成立。
+        $this->assertTrue(FulfillmentDispatchGate::enabled());
+    }
+
+    public function test_production_never_dispatches_with_the_owner_switch_off(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        $this->withSupportedDispatchRuntime();
+
+        // ⛔ R1:關閉派單＝Owner 在後台停用總開關。
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
+
         $this->assertFalse(FulfillmentDispatchGate::enabled());
     }
 
-    public function test_production_gets_the_disabled_gateway(): void
+    public function test_production_never_dispatches_on_an_unsupported_runtime(): void
     {
         $this->app->detectEnvironment(fn () => 'production');
+        $this->withUnsupportedDispatchRuntime();
+
+        // Owner 開了也一樣:主機環境不支援安全傳輸限制就不送。
+        $this->assertFalse(FulfillmentDispatchGate::enabled());
+    }
+
+    public function test_production_gets_the_disabled_gateway_while_the_switch_is_off(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        $this->withSupportedDispatchRuntime();
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
         $this->app->forgetInstance(FulfillmentGateway::class);
 
         $this->assertInstanceOf(
@@ -89,23 +121,55 @@ class FulfillmentSafetyTest extends TestCase
         new FakeFulfillmentGateway;
     }
 
+    /**
+     * R1 的不派單矩陣:Owner 開關 × 測試 driver。
+     *
+     * ⛔ 舊矩陣的軸是兩個 env 旗標;現在唯一的營運開關是 Owner 的 DB 列,
+     * driver 只剩 local/testing 的測試路徑選擇作用。
+     *
+     * @return array<string, array{bool, string}>
+     */
     public static function nonDispatchingConfigProvider(): array
     {
         return [
-            'switch off' => ['fake', false],
-            'driver disabled' => ['disabled', true],
-            'both off' => ['disabled', false],
-            'unknown driver' => ['no-such-driver', true],
+            'owner switch off' => [false, 'fake'],
+            'driver disabled' => [true, 'disabled'],
+            'both off' => [false, 'disabled'],
+            'unknown driver' => [true, 'no-such-driver'],
         ];
     }
 
-    /** ⛔ 只有「driver=fake ＋ 開關開啟 ＋ 非 production」三者同時成立才可能派單。 */
+    /** ⛔ 「Owner 總開關＋可用的測試路徑」缺一即不派單。 */
     #[DataProvider('nonDispatchingConfigProvider')]
-    public function test_incomplete_configuration_never_dispatches(string $driver, bool $enabled): void
+    public function test_incomplete_configuration_never_dispatches(bool $switchOn, string $driver): void
     {
-        config()->set('fulfillment.driver', $driver);
-        config()->set('fulfillment.dispatch_enabled', $enabled);
+        if (! $switchOn) {
+            DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
+        }
 
+        config()->set('fulfillment.driver', $driver);
+
+        $this->assertFalse(FulfillmentDispatchGate::enabled());
+    }
+
+    /**
+     * ⛔ 已 deprecated 的 env 旗標不得再影響 gate——兩個方向都不行。
+     *
+     * 這是 Owner「按了開關卻沒反應」問題在派單上的翻版;釘住它,同一個問題
+     * 就不會換個地方再發生一次。
+     */
+    public function test_the_deprecated_dispatch_flags_change_nothing_in_either_direction(): void
+    {
+        // 開關開著(setUp),旗標全 false:仍然可派。
+        config()->set('fulfillment.dispatch_enabled', false);
+        config()->set('fulfillment.staging.themostpanel_dispatch_enabled', false);
+        config()->set('fulfillment.status_polling_enabled', false);
+        $this->assertTrue(FulfillmentDispatchGate::enabled());
+
+        // 開關關著,旗標全 true:仍然不可派。
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
+        config()->set('fulfillment.dispatch_enabled', true);
+        config()->set('fulfillment.staging.themostpanel_dispatch_enabled', true);
         $this->assertFalse(FulfillmentDispatchGate::enabled());
     }
 
@@ -120,7 +184,7 @@ class FulfillmentSafetyTest extends TestCase
     {
         $this->app['env'] = 'local';
         config()->set('fulfillment.driver', 'themostpanel');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
         $this->app->forgetInstance(FulfillmentGateway::class);
 
         $this->assertFalse(FulfillmentDispatchGate::enabled());

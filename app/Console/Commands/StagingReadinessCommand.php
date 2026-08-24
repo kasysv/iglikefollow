@@ -7,6 +7,7 @@ use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Integrations\LiveIntegration;
 use App\Services\Integrations\ProviderEndpoints;
@@ -140,26 +141,41 @@ class StagingReadinessCommand extends Command
             );
         }
 
-        $stagingDispatchFlag = (bool) config('fulfillment.staging.themostpanel_dispatch_enabled');
-        $dispatchDriver = (string) config('fulfillment.driver');
-        $dispatchSwitch = (bool) config('fulfillment.dispatch_enabled');
-        $dispatchOn = $stagingDispatchFlag && $dispatchSwitch && $dispatchDriver === 'themostpanel';
+        /*
+         * ⛔ R1:自動派單逐項回報,與 runtime 完全同源。
+         *
+         * 不再讀已 deprecated 的 dispatch/staging/polling env 旗標——一個
+         * 不影響行為的旗標出現在 readiness 裡,只會讓人以為它還是一道防線。
+         * 逐項分開,是因為修法完全不同:開關關著要 Owner 去開;端點不符是
+         * 部署要修;runtime 不足要升級主機的 libcurl。
+         */
+        /*
+         * ⛔ presence-based:readiness 任何路徑都不解密(encrypter-spy 測試
+         * 釘住),所以 owner_switch 用 raw presence 判斷,而不是叫 gate 解出
+         * API Key。live 的技術半邊(端點、runtime)本來就不需要解密。
+         */
+        $dispatchPresence = self::channelPresence(IntegrationProvider::TheMostPanel);
+        $dispatchOwnerSwitch = $dispatchPresence['enabled'] && $dispatchPresence['complete'];
+        $dispatchLive = $dispatchOwnerSwitch
+            && app()->environment('staging', 'production')
+            && FulfillmentDispatchGate::liveCapable();
         $checks[] = self::check(
-            'themostpanel_staging_dispatch',
-            'TheMostPanel staging 派單能力',
-            'flag='.($stagingDispatchFlag ? 'on' : 'off').';driver='.$dispatchDriver.';dispatch='.($dispatchSwitch ? 'on' : 'off'),
-            $capabilityStatus($dispatchOn),
+            'themostpanel_dispatch',
+            'TheMostPanel 自動派單',
+            'owner_switch='.($dispatchOwnerSwitch ? 'on' : 'off').';live='.($dispatchLive ? 'yes' : 'no'),
+            $capabilityStatus($dispatchLive),
         );
 
-        $endpoint = (string) config('integrations.endpoints.themostpanel.staging');
+        $endpointExact = ProviderEndpoints::theMostPanelDispatch() !== null;
         $checks[] = self::check(
-            'themostpanel_staging_endpoint',
-            'TheMostPanel staging endpoint(版本控制固定)',
-            $endpoint === 'https://themostpanel.com/api/v2' ? 'exact' : 'unexpected',
-            $endpoint === 'https://themostpanel.com/api/v2' ? 'ok' : 'blocker',
+            'themostpanel_endpoint',
+            'TheMostPanel 派單端點(版本控制固定)',
+            $endpointExact ? 'exact' : 'unexpected',
+            $endpointExact ? 'ok' : 'blocker',
         );
 
-        $capability = TheMostPanelCurlCapability::fromRuntime()->supportsOngoingTransferCap();
+        // ⛔ 經 container 解析:預設就是真實 runtime,測試可描述其他機器。
+        $capability = app(TheMostPanelCurlCapability::class)->supportsOngoingTransferCap();
         $checks[] = self::check(
             'curl_transfer_cap',
             'cURL ongoing-transfer cap(libcurl ≥ 8.4)',
@@ -167,8 +183,13 @@ class StagingReadinessCommand extends Command
             $capability ? 'ok' : ($strict ? 'blocker' : 'blocked'),
         );
 
-        $polling = (bool) config('fulfillment.status_polling_enabled');
-        $checks[] = self::check('status_polling', '履約狀態輪詢', $polling ? 'enabled' : 'not enabled', $polling ? 'ok' : 'blocked');
+        // ⛔ R1:輪詢跟隨自動派單總開關,沒有獨立旗標;presence-based,不解密。
+        $checks[] = self::check(
+            'status_polling',
+            '履約狀態輪詢(隨自動派單總開關)',
+            $dispatchLive ? 'enabled' : 'not enabled',
+            $dispatchLive ? 'ok' : 'blocked',
+        );
 
         // ---- mapping readiness(3.4;⛔ 不洩漏任何 ID) ----
         [$mappingValue, $mappingStatus] = self::mappingReadiness($strict);
@@ -217,23 +238,71 @@ class StagingReadinessCommand extends Command
      *
      * ⛔ 只回欄位名稱與布林狀態,不解密、不輸出任何值。
      *
+     * ⛔ R1:presence-based——readiness 的鐵律是「任何路徑都不解密」(有
+     * encrypter-spy 測試釘住),所以這裡以 raw query 看 payload 是否存在,
+     * 而不是叫 model cast 解出每一個欄位。代價是一個誠實記錄的角落:密文
+     * 存在但已損壞時,這裡回報 stored,而 runtime 的完整檢查會在實際使用時
+     * fail closed。readiness 的職責是「不碰密鑰地說出目前狀態」,不是替
+     * runtime 預演解密。
+     *
      * @return array{0: string, 1: string}
      */
     private static function channelReadiness(IntegrationProvider $provider, bool $strict): array
     {
         try {
-            $missing = LiveIntegration::missingFields($provider);
-            $enabledByOwner = LiveIntegration::enabledByOwner($provider);
-            $live = LiveIntegration::availableToCustomer($provider);
+            $presence = self::channelPresence($provider);
 
-            $value = 'credential='.($missing === [] ? 'complete' : 'missing:'.implode(',', $missing))
-                .';owner_switch='.($enabledByOwner ? 'on' : 'off')
+            $live = LiveIntegration::outboundAllowed()
+                && $presence['enabled']
+                && $presence['complete'];
+
+            $value = 'credential='.($presence['complete'] ? 'complete' : 'missing:'.implode(',', $presence['missing']))
+                .';owner_switch='.($presence['enabled'] ? 'on' : 'off')
                 .';live='.($live ? 'yes' : 'no');
 
             return [$value, $live ? 'ok' : ($strict ? 'blocker' : 'blocked')];
         } catch (Throwable) {
             return ['unavailable', 'blocker'];
         }
+    }
+
+    /**
+     * Presence-only look at one provider's production row. ⛔ Raw query,
+     * no Eloquent, no encrypted cast — nothing here can ever decrypt.
+     *
+     * 缺整份 payload 時,所有 secret 欄位名稱都可以列出來(不需要解密);
+     * ⛔ 「payload 存在但缺其中一個欄位」這種部分缺漏,只有解密才分得出來,
+     * 所以這裡一律視為 stored——runtime 的完整檢查會擋住真正的缺漏。
+     *
+     * @return array{enabled: bool, complete: bool, missing: list<string>}
+     */
+    private static function channelPresence(IntegrationProvider $provider): array
+    {
+        $row = DB::table('integration_settings')
+            ->where('provider', $provider->value)
+            ->where('environment', IntegrationEnvironment::Production->value)
+            ->first(['is_enabled', 'identifier', 'credentials']);
+
+        $identifierOk = $provider->identifierLabel() === null || filled($row?->identifier);
+        $payloadStored = filled($row?->credentials);
+
+        $missing = [];
+
+        if (! $identifierOk) {
+            $missing[] = $provider->identifierLabel();
+        }
+
+        if (! $payloadStored) {
+            foreach ($provider->secretKeys() as $key) {
+                $missing[] = $provider->secretLabel($key);
+            }
+        }
+
+        return [
+            'enabled' => (bool) ($row->is_enabled ?? false),
+            'complete' => $identifierOk && $payloadStored,
+            'missing' => $missing,
+        ];
     }
 
     /** @return array{0: string, 1: string} */

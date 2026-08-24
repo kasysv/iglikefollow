@@ -5,6 +5,7 @@ namespace Tests\Concerns;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
+use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\DB;
 
@@ -113,5 +114,41 @@ trait ConfiguresLiveIntegrations
         $this->enableChannel(IntegrationProvider::EcpayPayment, '3000001');
         $this->enableChannel(IntegrationProvider::LinePay, '1234567890');
         $this->enableChannel(IntegrationProvider::EcpayInvoice, '3000001');
+    }
+
+    /**
+     * R1:把自動派單放進「Owner 已開啟總開關」狀態。
+     *
+     * ⛔ 這只是 Owner 的開關＋API Key;gate 是否為 true 還要看環境路徑
+     * (staging/production 另需端點與 runtime 能力;local/testing 需測試
+     * driver)。測試要哪一種,自己再補那一項——與 runtime 的判斷一致,
+     * ⛔ 不提供第三條只有測試走得通的捷徑。
+     */
+    protected function enableDispatchSwitch(): IntegrationSetting
+    {
+        return $this->enableChannel(IntegrationProvider::TheMostPanel);
+    }
+
+    /**
+     * 描述一台具備 bounded-transfer 能力的主機(libcurl ≥ 8.4)。
+     *
+     * ⛔ 換掉的是「機器長什麼樣」的描述,不是「可不可以送」的判斷——後者
+     * 永遠由 gate／adapter 依這個描述自行決定。
+     */
+    protected function withSupportedDispatchRuntime(): void
+    {
+        $this->app->instance(
+            TheMostPanelCurlCapability::class,
+            TheMostPanelCurlCapability::supported(),
+        );
+    }
+
+    /** 描述一台不具備 bounded-transfer 能力的主機(如本機 libcurl 7.85)。 */
+    protected function withUnsupportedDispatchRuntime(): void
+    {
+        $this->app->instance(
+            TheMostPanelCurlCapability::class,
+            TheMostPanelCurlCapability::unsupported(),
+        );
     }
 }

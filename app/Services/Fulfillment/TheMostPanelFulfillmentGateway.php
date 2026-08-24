@@ -9,6 +9,7 @@ use App\Data\Fulfillment\FulfillmentSubmissionResult;
 use App\Data\Fulfillment\FulfillmentSyncResult;
 use App\Enums\FulfillmentAttentionReason;
 use App\Enums\FulfillmentStatus;
+use App\Services\Integrations\ProviderEndpoints;
 use Illuminate\Http\Client\Response;
 use JsonException;
 use stdClass;
@@ -39,8 +40,14 @@ use Throwable;
  */
 class TheMostPanelFulfillmentGateway implements FulfillmentGateway
 {
-    /** ⛔ 與版本控制中唯一合法值整串比對;不解析、不正規化。 */
-    private const ENDPOINT = 'https://themostpanel.com/api/v2';
+    /**
+     * ⛔ 與版本控制中唯一合法值整串比對;不解析、不正規化。
+     *
+     * ⛔ 定義只有一份,在 `ProviderEndpoints`:R1 之後 staging 與 production
+     * 讀同一個正式端點,兩處各寫一份字串,某天只改一處就出現「比對通過、
+     * 送去的卻是另一個網址」。
+     */
+    private const ENDPOINT = ProviderEndpoints::THEMOSTPANEL_DISPATCH;
 
     /** provider order/service ID 的 canonical 形狀:正整數 digit string,≤64。 */
     private const ID_PATTERN = '/\A[1-9][0-9]*\z/';
@@ -146,21 +153,37 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
     }
 
     /**
-     * 網路前的固定閘:production、endpoint、runtime 傳輸能力。
+     * 網路前的固定閘:環境邊界、endpoint、runtime 傳輸能力。
      *
-     * ⛔ endpoint 讀 `integrations.endpoints.themostpanel` 的當前環境值,
-     * 與唯一合法字串整串比對——production config 維持空字串,所以這裡
-     * 在正式環境永遠 fail closed,連同 container binding 的雙保險。
+     * ⛔ Owner 的總開關不在這裡重複檢查——它已內含在 credential source
+     * (row 未啟用 → apiKey() null → blocked),而且那份檢查每次 submit 都
+     * 重新查 DB,所以 Owner 關掉開關後,queue 裡已排入的 job 也會在網路前
+     * 停止。這裡負責的是不隨開關改變的技術邊界。
      */
     private function blockedBeforeNetwork(): bool
     {
-        if (app()->environment('production')) {
+        /*
+         * ⛔ R1:production 不再無條件拒絕——正式派單由 Owner 的總開關決定,
+         * 而那個開關已內含在 credential source(row 未啟用 → apiKey() null
+         * → blocked),每次 submit 都重新查 DB。剩下的環境邊界是這一條:
+         *
+         * ⛔ local 一律拒絕。舊版靠「local 沒有 env-keyed endpoint 設定」這個
+         * 巧合擋住本機;R1 端點統一讀 production allowlist 之後,巧合消失,
+         * 換成這個明確的拒絕——本機開發永遠不該對供應商下真單。
+         *
+         * `testing` 不在此列:那是 phpunit 的環境,transport 走 Laravel Http,
+         * 測試以 `Http::fake()`＋`preventStrayRequests()` 完全接管;adapter
+         * 的 e2e 測試就在這個環境跑。
+         */
+        if (app()->environment('local')) {
             return true;
         }
 
-        $endpoint = (string) config('integrations.endpoints.themostpanel.'.app()->environment(), '');
-
-        if ($endpoint !== self::ENDPOINT) {
+        /*
+         * ⛔ 端點一律讀 production allowlist,不依 APP_ENV 拼接 config key:
+         * 一個新環境名稱不該成為一個沒人 review 過的端點來源。
+         */
+        if (ProviderEndpoints::theMostPanelDispatch() !== self::ENDPOINT) {
             return true;
         }
 

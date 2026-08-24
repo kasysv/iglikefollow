@@ -24,6 +24,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -39,6 +40,7 @@ use Tests\TestCase;
  */
 class TheMostPanelDispatchAdapterTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     public const ENDPOINT = 'https://themostpanel.com/api/v2';
@@ -55,8 +57,8 @@ class TheMostPanelDispatchAdapterTest extends TestCase
 
         // testing-only wiring:driver=themostpanel 只有 testing 環境成立。
         config()->set('fulfillment.driver', 'themostpanel');
-        config()->set('fulfillment.dispatch_enabled', true);
-        config()->set('integrations.endpoints.themostpanel.testing', self::ENDPOINT);
+        $this->enableDispatchSwitch();
+        config()->set('integrations.endpoints.themostpanel.production', self::ENDPOINT);
 
         $this->app->bind(
             TheMostPanelDispatchCredentialSource::class,
@@ -218,7 +220,8 @@ class TheMostPanelDispatchAdapterTest extends TestCase
 
         // ⛔ claim 之後、送出之前開關被關掉:收斂回 configuration_pending。
         $fulfillment = $this->readyFulfillment();
-        config()->set('fulfillment.dispatch_enabled', false);
+        // ⛔ R1:關閉派單＝Owner 在後台停用總開關,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
 
         $result = $this->submit($fulfillment);
 
@@ -383,7 +386,7 @@ class TheMostPanelDispatchAdapterTest extends TestCase
 
         $fulfillment = $this->readyFulfillment();
         // claim 之後 endpoint 設定消失:adapter 網路前 blocked。
-        config()->set('integrations.endpoints.themostpanel.testing', '');
+        config()->set('integrations.endpoints.themostpanel.production', '');
 
         $result = $this->submit($fulfillment);
 
@@ -438,9 +441,9 @@ class TheMostPanelDispatchAdapterTest extends TestCase
 
         // blocked → configuration_pending(sequence 已空:再有 request 會炸,本身就是 0-request 證明)
         $row = $this->readyFulfillment();
-        config()->set('integrations.endpoints.themostpanel.testing', '');
+        config()->set('integrations.endpoints.themostpanel.production', '');
         $this->assertSame(FulfillmentStatus::ConfigurationPending, $this->submit($row)->status);
-        config()->set('integrations.endpoints.themostpanel.testing', self::ENDPOINT);
+        config()->set('integrations.endpoints.themostpanel.production', self::ENDPOINT);
         Http::assertSentCount(3);
     }
 

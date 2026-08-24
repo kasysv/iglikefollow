@@ -210,8 +210,8 @@ class PaymentSafetyTest extends TestCase
         $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_ISSUE, $endpoints['ecpay_invoice']['production']);
         $this->assertSame(ProviderEndpoints::ECPAY_INVOICE_QUERY, $endpoints['ecpay_invoice_query']['production']);
 
-        // ⛔ 自動派單仍未獲批准,production 端點必須維持空字串。
-        $this->assertSame('', $endpoints['themostpanel']['production']);
+        // R1:派單端點也固定為官方正式網址;開不開由 Owner 的總開關決定。
+        $this->assertSame(ProviderEndpoints::THEMOSTPANEL_DISPATCH, $endpoints['themostpanel']['production']);
     }
 
     // ============================================ 3. 啟動付款的授權

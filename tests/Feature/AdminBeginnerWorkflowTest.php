@@ -18,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -32,6 +33,7 @@ use Tests\TestCase;
  */
 class AdminBeginnerWorkflowTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -490,7 +492,7 @@ class AdminBeginnerWorkflowTest extends TestCase
     private function openTheDispatchGate(): void
     {
         config()->set('fulfillment.driver', 'fake');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
 
         // ⛔ 先反證前提:如果 gate 沒真的開,下面的綠勾測試就毫無意義。
         $this->assertTrue(FulfillmentDispatchGate::enabled());

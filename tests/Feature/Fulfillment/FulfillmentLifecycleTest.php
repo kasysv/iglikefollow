@@ -22,6 +22,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
@@ -37,6 +38,7 @@ use Tests\TestCase;
  */
 class FulfillmentLifecycleTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     private FakeFulfillmentGateway $gateway;
@@ -49,7 +51,7 @@ class FulfillmentLifecycleTest extends TestCase
         Http::preventStrayRequests();
 
         config()->set('fulfillment.driver', 'fake');
-        config()->set('fulfillment.dispatch_enabled', true);
+        $this->enableDispatchSwitch();
 
         $this->gateway = new FakeFulfillmentGateway;
     }
@@ -161,7 +163,8 @@ class FulfillmentLifecycleTest extends TestCase
 
     public function test_a_closed_dispatch_switch_stays_configuration_pending(): void
     {
-        config()->set('fulfillment.dispatch_enabled', false);
+        // ⛔ R1:關閉派單＝Owner 在後台停用總開關,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
 
         $variant = $this->variant();
         $order = $this->paidOrder();
@@ -381,7 +384,8 @@ class FulfillmentLifecycleTest extends TestCase
     {
         $row = $this->readyFulfillment();
 
-        config()->set('fulfillment.dispatch_enabled', false);
+        // ⛔ R1:關閉派單＝Owner 在後台停用總開關,不是改已 deprecated 的 env 旗標。
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
 
         $result = $this->submit($row);
 

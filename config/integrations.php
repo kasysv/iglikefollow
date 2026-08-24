@@ -51,51 +51,37 @@ return [
             'production' => 'https://einvoice.ecpay.com.tw/B2CInvoice/GetIssue',
         ],
         /*
-         | ⛔ 仍為空,而且是刻意的。
+         | TheMostPanel 派單 API(R1)。
          |
-         | TheMostPanel 的派單(`add`)不在 M4C 範圍;正式派單需要另一次明確
-         | 批准,而且目前沒有可用的 HTTP client。
+         | ⛔ staging 與 production runtime 都只讀 `production` 這一個鍵,
+         | 並與 App\Services\Integrations\ProviderEndpoints 的常數整串比對;
+         | 不依 APP_ENV 拼接 config key——一個新環境名稱不該成為一個沒人
+         | review 過的端點來源。⛔ 後台與 env 都不可輸入這個網址。
+         |
+         | 「要不要派單」不由這裡決定:那是 Owner 後台的自動派單總開關
+         | (production integration_settings.is_enabled)。
          |
          | 唯讀探針用的位址另放在下方 `themostpanel_read_only.endpoint`,
          | 與交易端點分開,避免有人把「可以查詢」誤讀成「可以下單」。
          */
         'themostpanel' => [
-            /*
-             | staging dispatch 的固定 exact endpoint(M4C)。⛔ 只有
-             | APP_ENV=staging 且多重 default-off gates 全部成立時,adapter
-             | 才會讀到這一個值;它固定在版本控制,後台與 env 都不可輸入。
-             | production 維持空字串:正式派單需要另一次明確批准。
-             */
-            'staging' => 'https://themostpanel.com/api/v2',
-            'production' => '',
+            'production' => 'https://themostpanel.com/api/v2',
         ],
     ],
 
     /*
-     | ⛔ DEPRECATED — 付款／發票已不再讀這一組。
+     | ⛔ R1:`enablable` 已整組移除。
      |
-     | 這裡曾是「哪些 provider／environment 可以被啟用」的批准清單。Owner 於
-     | 2026-08-24 明確改變方向:實際網站只有一套正式設定,而開關屬於 Owner 的
-     | 後台,不是 code。留著一個能否決 Owner 的清單,結果就是 Owner 在後台按了
-     | 開關卻沒有反應,然後有人回來改 code——那正是這一輪要消除的東西。
-     |
-     | ⛔ 只剩 themostpanel 仍受此清單約束:自動派單不在 M4C 範圍,它的批准
-     | 仍然必須是一次 reviewed 的 code 變更。
-     |
-     | ⛔ 綠界付款／LINE Pay／綠界發票的鍵已移除,不是設成 true。留著 true 會
-     | 讓人以為必須先在這裡開一次;移除才能證明 runtime 真的沒有再讀它。
+     | 它曾是「哪些 provider 可以被啟用」的 code 層批准清單;M4C 初版把付款與
+     | 發票交還 Owner 後,只剩自動派單仍被它鎖住。Owner 於 2026-08-24 明確
+     | 推翻:自動派單總開關也放進同一個後台。於是這份清單沒有任何消費者了,
+     | ⛔ 整組刪除而不是留一個空陣列——留著它,下一個人會以為還有東西在讀。
      */
-    'enablable' => [
-        // ⛔ 仍為 false：這控制的是「自動派單」，與下方的唯讀探針無關。
-        'themostpanel' => [
-            'production' => false,
-        ],
-    ],
 
     /*
      | TheMostPanel 唯讀探針（M4B-RO）。
      |
-     | ⛔ 與 `enablable.themostpanel` 是完全不同的兩件事，刻意分開：
+     | ⛔ 與自動派單總開關是完全不同的兩件事，刻意分開：
      | 這個開關只允許「查詢」`services`／`balance`／單筆 `status`，永遠不會
      | 讓 `add` 或自動派單變成可能。把兩者合成一個開關，就是讓「我想看看回應
      | 長什麼樣」與「開始花錢下單」共用同一個決定。

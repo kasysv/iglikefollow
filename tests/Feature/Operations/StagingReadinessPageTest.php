@@ -65,8 +65,10 @@ class StagingReadinessPageTest extends TestCase
         $response->assertSee('LINE Pay 通道');
         $response->assertSee('綠界發票通道');
         $response->assertSee('此環境可對外送出交易請求');
-        $response->assertSee('TheMostPanel staging 派單能力');
-        $response->assertSee('履約狀態輪詢');
+        // ⛔ R1:自動派單改為 Owner 總開關逐項回報;輪詢跟隨同一開關。
+        $response->assertSee('TheMostPanel 自動派單');
+        $response->assertSee('TheMostPanel 派單端點');
+        $response->assertSee('履約狀態輪詢(隨自動派單總開關)');
         $response->assertSee('credential 已填」不等於「允許連線');
         // ⛔ secret 0 出現。
         $response->assertDontSee(self::KEY_MARKER);

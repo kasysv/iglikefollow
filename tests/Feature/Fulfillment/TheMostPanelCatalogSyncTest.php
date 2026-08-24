@@ -12,6 +12,7 @@ use App\Exceptions\TheMostPanelCatalogParseException;
 use App\Models\FulfillmentMapping;
 use App\Models\IntegrationSetting;
 use App\Models\ProviderService;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -624,8 +625,9 @@ class TheMostPanelCatalogSyncTest extends TestCase
         );
         $this->assertSame(0, DB::table('fulfillment_orders')->count());
         $this->assertSame(0, DB::table('fulfillment_events')->count());
-        // ⛔ 讀 catalog 不會武裝派單。
-        $this->assertFalse(config('integrations.enablable.themostpanel.production'));
+        // ⛔ 讀 catalog 不會武裝派單:R1 之後由 Owner 的總開關決定,而
+        // 同步 catalog 這個動作沒有、也不得改動那個開關。
+        $this->assertFalse(FulfillmentDispatchGate::enabled());
     }
 
     public function test_no_mapping_is_created_from_a_synced_catalog(): void

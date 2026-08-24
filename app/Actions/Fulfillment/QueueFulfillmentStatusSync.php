@@ -21,8 +21,8 @@ use App\Services\Fulfillment\FulfillmentDispatchGate;
  * poller; configuration_pending / ready / submitting have nothing to ask
  * about. Polling must never quietly "resolve" what a person should decide.
  *
- * ⛔ Staging only, default off. Production is refused unconditionally;
- * local never polls; the flag alone is not enough outside staging.
+ * ⛔ R1:staging／production 皆可,依 Owner 的自動派單總開關啟停——同一個
+ * 開關,不再有獨立的 polling env 旗標。local／testing 永遠排入 0。
  */
 class QueueFulfillmentStatusSync
 {
@@ -57,24 +57,22 @@ class QueueFulfillmentStatusSync
 
     public static function enabled(): bool
     {
-        if (app()->environment('production')) {
-            return false;
-        }
-
-        // ⛔ 只允許 staging;local 與其他 environment 永遠 0。
-        if (! app()->environment('staging')) {
-            return false;
-        }
-
-        if (! (bool) config('fulfillment.status_polling_enabled', false)) {
-            return false;
-        }
-
         /*
-         * ⛔ R1(P0-2):gateway capability gate 也必須成立。polling flag
-         * 單獨打開時,排入的 jobs 只會走 Disabled gateway 灌一批
-         * unrecognised events——所以 dispatch gate 不成立就一列都不排。
+         * ⛔ R1:輪詢跟隨自動派單總開關,不再有獨立的 env 旗標。
+         *
+         * Owner 打開「自動派單」,輪詢就開始;關掉,下一輪排入 0。兩個開關
+         * 分開的舊設計,結果會是訂單派出去了、狀態卻永遠不更新——一個看起來
+         * 卡住的系統,和一個真的卡住的系統,對 Owner 沒有差別。
+         *
+         * ⛔ 只允許 staging／production:local／testing 沒有 live gateway,
+         * 排入的 jobs 只會灌一批 unrecognised events。gate 在 testing 的
+         * fake 路徑會回 true——那是給派單測試用的;輪詢測試應明確切到
+         * staging 再測,所以這裡另加環境判斷。
          */
+        if (! app()->environment('staging', 'production')) {
+            return false;
+        }
+
         return FulfillmentDispatchGate::enabled();
     }
 }

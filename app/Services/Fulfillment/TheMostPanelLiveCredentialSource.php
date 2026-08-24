@@ -9,7 +9,7 @@ use App\Models\IntegrationSetting;
 use Throwable;
 
 /**
- * The one production-code credential source for staging dispatch.
+ * The one production-code credential source for live dispatch.
  *
  * ⛔ Reads exactly the `themostpanel / production` setting row — the same
  * encrypted, write-only storage the Owner fills from the admin — and nothing
@@ -22,8 +22,17 @@ use Throwable;
  *
  * ⛔ null makes the adapter fail closed BEFORE any network I/O; that contract
  * lives in the gateway and is already regression-tested.
+ *
+ * ⛔ R1:改名自 `TheMostPanelStagingCredentialSource`——staging 與 production
+ * 現在共用同一列 production row、同一個 Owner 總開關,舊名稱會誤導成
+ * 「staging 另有一份 credential」。⛔ 沒有 sandbox／env fallback:這一列
+ * 讀不到就是 null,不退回任何其他來源。
+ *
+ * ⛔ 這裡的 `is_enabled` 檢查同時是 queue 的最後防線:Owner 關掉總開關後,
+ * 已在 queue 裡、尚未送出的 job 執行到這裡會拿到 null,於是在任何網路 I/O
+ * 之前停止——即使那個 job 是在開關還開著的時候排入的。
  */
-class TheMostPanelStagingCredentialSource implements TheMostPanelDispatchCredentialSource
+class TheMostPanelLiveCredentialSource implements TheMostPanelDispatchCredentialSource
 {
     public function apiKey(): ?string
     {

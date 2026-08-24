@@ -8,18 +8,21 @@ use App\Jobs\SyncFulfillmentStatus;
 use App\Models\FulfillmentOrder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
 /**
- * The status-polling picker: staging-only, default-off, eligibility closed.
+ * The status-polling picker: follows the Owner dispatch switch, eligibility closed.
  *
  * ⛔ It queues sync jobs and nothing else — never a provider call from the
  * picker itself, never anything that could resend an `add`.
  */
 class FulfillmentStatusPollingTest extends TestCase
 {
+    use ConfiguresLiveIntegrations;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -30,14 +33,17 @@ class FulfillmentStatusPollingTest extends TestCase
         Queue::fake();
     }
 
+    /**
+     * R1:staging＋Owner 總開關開啟＋runtime 支援=輪詢可跑。
+     *
+     * ⛔ 沒有任何 env 旗標參與;supported runtime 必須明確描述,不能靠跑
+     * 測試那台機器的 libcurl 碰巧通過。
+     */
     private function inStaging(callable $callback): mixed
     {
         $this->app['env'] = 'staging';
-        config()->set('fulfillment.status_polling_enabled', true);
-        // R1:polling 也要求 gateway capability gate 成立。
-        config()->set('fulfillment.driver', 'themostpanel');
-        config()->set('fulfillment.dispatch_enabled', true);
-        config()->set('fulfillment.staging.themostpanel_dispatch_enabled', true);
+        $this->enableDispatchSwitch();
+        $this->withSupportedDispatchRuntime();
 
         try {
             return $callback();
@@ -46,14 +52,17 @@ class FulfillmentStatusPollingTest extends TestCase
         }
     }
 
-    /** ⛔ R1:polling flag 單獨打開(dispatch gate 未成立)仍排入 0。 */
-    public function test_polling_without_the_dispatch_gate_queues_nothing(): void
+    /** ⛔ R1:Owner 總開關關著,staging 也排入 0——沒有獨立的輪詢開關。 */
+    public function test_polling_without_the_owner_switch_queues_nothing(): void
     {
         FulfillmentOrder::factory()->submitted('65001')->create();
 
         $this->app['env'] = 'staging';
+        $this->withSupportedDispatchRuntime();
+        // ⛔ 沒有開 Owner 總開關;已 deprecated 的舊旗標開到滿也沒有作用。
         config()->set('fulfillment.status_polling_enabled', true);
-        // driver/dispatch/staging flag 全部維持 default off。
+        config()->set('fulfillment.dispatch_enabled', true);
+        config()->set('fulfillment.staging.themostpanel_dispatch_enabled', true);
         $queued = app(QueueFulfillmentStatusSync::class)->handle();
         $this->app['env'] = 'testing';
 
@@ -61,12 +70,18 @@ class FulfillmentStatusPollingTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_flag_off_queues_nothing_even_in_staging(): void
+    /** ⛔ Owner 關掉總開關後,下一輪立即排入 0;舊輪詢旗標救不回來。 */
+    public function test_switching_the_owner_switch_off_stops_the_next_round(): void
     {
         FulfillmentOrder::factory()->submitted('61001')->create();
 
         $this->app['env'] = 'staging';
-        config()->set('fulfillment.status_polling_enabled', false);
+        $this->enableDispatchSwitch();
+        $this->withSupportedDispatchRuntime();
+
+        DB::table('integration_settings')->where('provider', 'themostpanel')->update(['is_enabled' => false]);
+        config()->set('fulfillment.status_polling_enabled', true);
+
         $queued = app(QueueFulfillmentStatusSync::class)->handle();
         $this->app['env'] = 'testing';
 
@@ -74,18 +89,36 @@ class FulfillmentStatusPollingTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_local_and_production_queue_nothing_even_with_the_flag_on(): void
+    /** ⛔ local／testing 永遠排入 0,即使 Owner 總開關開著。 */
+    public function test_local_and_testing_queue_nothing_even_with_the_switch_on(): void
     {
         FulfillmentOrder::factory()->submitted('61002')->create();
-        config()->set('fulfillment.status_polling_enabled', true);
+        $this->enableDispatchSwitch();
+        $this->withSupportedDispatchRuntime();
+        config()->set('fulfillment.driver', 'fake');
 
-        foreach (['local', 'production'] as $env) {
+        foreach (['local', 'testing'] as $env) {
             $this->app['env'] = $env;
             $this->assertSame(0, app(QueueFulfillmentStatusSync::class)->handle(), $env);
         }
 
         $this->app['env'] = 'testing';
         Queue::assertNothingPushed();
+    }
+
+    /** R1:production 依同一個 Owner 開關輪詢——不再無條件拒絕。 */
+    public function test_production_polls_under_the_same_owner_switch(): void
+    {
+        FulfillmentOrder::factory()->submitted('61003')->create();
+        $this->enableDispatchSwitch();
+        $this->withSupportedDispatchRuntime();
+
+        $this->app['env'] = 'production';
+        $queued = app(QueueFulfillmentStatusSync::class)->handle();
+        $this->app['env'] = 'testing';
+
+        $this->assertSame(1, $queued);
+        Queue::assertPushed(SyncFulfillmentStatus::class, 1);
     }
 
     /** eligibility 閉集:只有 submitted／processing 且有 provider ID。 */

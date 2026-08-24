@@ -32,7 +32,7 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
         Http::preventStrayRequests();
 
         // testing 環境的 endpoint 閘;⛔ production config 維持空字串。
-        config()->set('integrations.endpoints.themostpanel.testing', self::ENDPOINT);
+        config()->set('integrations.endpoints.themostpanel.production', self::ENDPOINT);
     }
 
     private function gateway(?string $key = self::KEY, bool $capable = true): TheMostPanelFulfillmentGateway
@@ -214,7 +214,7 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
     /** ⛔ R1:網路前的阻擋是 blocked(設定問題),不是 rejected(provider 拒絕)。 */
     public function test_a_wrong_endpoint_config_blocks_before_any_network(): void
     {
-        config()->set('integrations.endpoints.themostpanel.testing', 'https://evil.invalid/api');
+        config()->set('integrations.endpoints.themostpanel.production', 'https://evil.invalid/api');
         Http::fake();
 
         $result = $this->gateway()->submit($this->submission());

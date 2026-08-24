@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Actions\Fulfillment\SyncFulfillmentState;
 use App\Models\FulfillmentOrder;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -35,6 +36,17 @@ class SyncFulfillmentStatus implements ShouldBeUnique, ShouldQueue
 
     public function handle(SyncFulfillmentState $sync): void
     {
+        /*
+         * ⛔ R1:執行時再讀一次總開關。
+         *
+         * 這個 job 可能是在開關還開著時排入的;Owner 關掉之後,queue 裡
+         * 已排入、尚未執行的 job 必須在任何網路 I/O 之前停止。⛔ 靜默返回
+         * 而不寫 event:關一個開關不該在每列 timeline 灌一筆「讀不懂」。
+         */
+        if (! FulfillmentDispatchGate::enabled()) {
+            return;
+        }
+
         $fulfillment = FulfillmentOrder::query()->find($this->fulfillmentOrderId);
 
         if ($fulfillment === null) {

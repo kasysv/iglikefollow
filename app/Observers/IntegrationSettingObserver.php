@@ -2,7 +2,6 @@
 
 namespace App\Observers;
 
-use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
 use Illuminate\Validation\ValidationException;
 
@@ -15,9 +14,10 @@ use Illuminate\Validation\ValidationException;
  * requests with real credentials, so the rule lives on the model where every
  * write path goes through it.
  *
- * ⛔ M4C:付款與發票的「可否啟用」不再是 code 層批准,而是 Owner 的後台決定。
- * 這裡仍然把守兩件事:只有正式那一列可以被開啟,而且 credential 必須齊全。
- * 自動派單則仍受版本控制的 allowlist 約束——它不在 M4C 範圍。
+ * ⛔ M4C＋R1:付款、發票與自動派單的「可否啟用」都不再是 code 層批准,而是
+ * Owner 的後台決定。這裡仍然把守兩件事:只有正式那一列可以被開啟,而且
+ * credential 必須齊全。TheMostPanel 的端點/runtime 技術條件另由 toggle
+ * action 與 dispatch gate 把關。
  */
 class IntegrationSettingObserver
 {
@@ -46,28 +46,18 @@ class IntegrationSettingObserver
         }
 
         /*
-         * ⛔ M4C:綠界付款、LINE Pay、綠界發票不再需要 code 層批准。
+         * ⛔ R1:code 層的 `enablable` allowlist 已整組移除。
          *
-         * Owner 於 2026-08-24 明確要求:填完正式 credential 後,要能在同一個
-         * 後台自己開關通道,不必改 `.env`、部署新程式或請人改 code。留著一份
-         * 能否決 Owner 的 allowlist,就是把一個開關變成一次發版。
+         * M4C 初版把付款與發票交還 Owner;Owner 隨後明確推翻「自動派單另需
+         * code 批准」——TheMostPanel 總開關同樣屬於後台。留著一份能否決
+         * Owner 的清單,就是把一個開關變成一次發版。
          *
-         * ⛔ 自動派單仍受 allowlist 約束:它不在 M4C 範圍,而且開啟它會開始
-         * 對外花錢下單。付款是 Owner 的營運決定,派單目前還不是。
+         * ⛔ 這不代表開啟沒有條件:下面的正式列與 credential 完整度檢查對
+         * 每一條寫入路徑生效,而 TheMostPanel 的端點/runtime 技術條件另由
+         * `ToggleIntegrationChannel` 在 Owner 動作時把關、由
+         * `FulfillmentDispatchGate` 在每次送出前把關——一列被偽造寫入的
+         * enabled row,在缺技術條件時仍然一單都派不出去。
          */
-        if ($setting->provider === IntegrationProvider::TheMostPanel) {
-            $allowed = (bool) config(
-                "integrations.enablable.{$setting->provider->value}.{$setting->environment->value}",
-                false
-            );
-
-            if (! $allowed) {
-                throw ValidationException::withMessages([
-                    'is_enabled' => "{$setting->provider->label()}（{$setting->environment->label()}）"
-                        .'尚未獲得啟用批准，無法開啟。',
-                ]);
-            }
-        }
 
         /*
          * ⛔ 只有正式那一列可以被開啟。

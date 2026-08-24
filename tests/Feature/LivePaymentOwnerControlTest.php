@@ -274,31 +274,40 @@ class LivePaymentOwnerControlTest extends TestCase
      * 開啟它會開始對外花錢下單，那還不是營運決定；它的批准仍必須是一次
      * reviewed 的 code 變更。⛔ 這道檢查在後端，不只在畫面上。
      */
-    public function test_dispatch_cannot_be_toggled_from_the_admin(): void
+    /**
+     * R1 反轉了「自動派單不是 Owner 的後台開關」:Owner 明確要求總開關也放進
+     * 同一個後台。這裡只釘住兩件仍然為真的事——完整矩陣在
+     * `LiveDispatchOwnerControlTest`。
+     */
+    public function test_dispatch_is_owner_togglable_once_the_runtime_supports_it(): void
     {
-        $this->assertSame(403, $this->toggleAsUnauthorised($this->owner(), IntegrationProvider::TheMostPanel->value));
-        $this->assertFalse(LiveIntegration::enabledByOwner(IntegrationProvider::TheMostPanel));
+        $this->withSupportedDispatchRuntime();
+
+        IntegrationSetting::factory()
+            ->forProvider(IntegrationProvider::TheMostPanel)
+            ->configured()->create();
+
+        $this->assertTrue($this->toggle()->handle(IntegrationProvider::TheMostPanel, true));
+        $this->assertTrue(LiveIntegration::enabledByOwner(IntegrationProvider::TheMostPanel));
     }
 
-    /**
-     * ⛔ 就算繞過整個後台直接呼叫 action,自動派單仍然開不起來。
-     *
-     * 後台的 403 只是第一道:真正的規則在 model observer 上的版本控制
-     * allowlist,而它擋的是每一條寫入路徑。
-     */
-    public function test_dispatch_cannot_be_enabled_even_through_the_action(): void
+    /** ⛔ runtime 不支援時拒絕開啟,訊息用白話點名主機環境。 */
+    public function test_dispatch_cannot_be_enabled_on_an_unsupported_runtime(): void
     {
+        $this->withUnsupportedDispatchRuntime();
+
         $setting = IntegrationSetting::factory()
             ->forProvider(IntegrationProvider::TheMostPanel)
             ->configured()->create();
 
-        $this->expectException(ValidationException::class);
-
         try {
             $this->toggle()->handle(IntegrationProvider::TheMostPanel, true);
-        } finally {
-            $this->assertFalse((bool) $setting->fresh()->is_enabled);
+            $this->fail('runtime 不支援時不應該可以啟用自動派單');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('主機環境不支援', $e->validator->errors()->first());
         }
+
+        $this->assertFalse((bool) $setting->fresh()->is_enabled);
     }
 
     // ==================================== 3. 遮罩與密鑰不外洩

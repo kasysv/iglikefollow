@@ -6,7 +6,7 @@ use App\Console\Commands\StagingReadinessCommand;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
-use App\Services\Fulfillment\TheMostPanelStagingCredentialSource;
+use App\Services\Fulfillment\TheMostPanelLiveCredentialSource;
 use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -35,9 +35,9 @@ class StagingCredentialSourceTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    private function source(): TheMostPanelStagingCredentialSource
+    private function source(): TheMostPanelLiveCredentialSource
     {
-        return new TheMostPanelStagingCredentialSource;
+        return new TheMostPanelLiveCredentialSource;
     }
 
     private function row(bool $enabled = true): IntegrationSetting

@@ -7,7 +7,10 @@ use App\Actions\Integrations\UpdateIntegrationCredentials;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Models\IntegrationSetting;
+use App\Services\Fulfillment\FulfillmentDispatchGate;
+use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Integrations\LiveIntegration;
+use App\Services\Integrations\ProviderEndpoints;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
@@ -166,9 +169,9 @@ class ManageIntegrationSettings extends Page
      * 每個通道目前的狀態,供 view 呈現。
      *
      * ⛔ 只有狀態,沒有任何值:是否已設定、缺哪些欄位名稱、Owner 開關、
-     * 現在是否真的可用。
+     * 現在是否真的可用、以及(TheMostPanel)技術條件的白話說明。
      *
-     * @return list<array{provider: IntegrationProvider, label: string, configured: bool, missing: list<string>, enabled: bool, live: bool, togglable: bool}>
+     * @return list<array{provider: IntegrationProvider, label: string, configured: bool, missing: list<string>, enabled: bool, live: bool, togglable: bool, blockers: list<string>}>
      */
     public function channelStates(): array
     {
@@ -177,6 +180,7 @@ class ManageIntegrationSettings extends Page
         foreach (self::providers() as $provider) {
             $setting = $this->settingFor($provider);
             $missing = LiveIntegration::missingFields($provider);
+            $isDispatch = $provider === IntegrationProvider::TheMostPanel;
 
             $states[] = [
                 'provider' => $provider,
@@ -184,15 +188,46 @@ class ManageIntegrationSettings extends Page
                 'configured' => $missing === [],
                 'missing' => $missing,
                 'enabled' => (bool) ($setting?->is_enabled ?? false),
-                // ⛔ 「Owner 開了」與「現在真的可以收款」是兩件事:後者還要求
-                // 這個環境可以外呼。分開顯示,才不會在本機看到「正在收款」。
-                'live' => LiveIntegration::availableToCustomer($provider),
-                // 自動派單仍受版本控制的 allowlist 約束,不是 Owner 的開關。
-                'togglable' => $provider !== IntegrationProvider::TheMostPanel,
+                /*
+                 * ⛔ 「Owner 開了」與「現在真的會動」是兩件事,分開顯示才不會
+                 * 在本機看到「正在收款/派單」。
+                 *
+                 * ⛔ TheMostPanel 的 live 讀 FulfillmentDispatchGate——與
+                 * container binding、商品三態、queue re-check 完全同一份判斷,
+                 * 這裡不自己算一套。
+                 */
+                'live' => $isDispatch
+                    ? FulfillmentDispatchGate::enabled()
+                    : LiveIntegration::availableToCustomer($provider),
+                // ⛔ R1:自動派單總開關也交給 Owner;四個通道全部可切換。
+                'togglable' => true,
+                // ⛔ 白話的技術條件說明;不含 config 值、exception 或 ID。
+                'blockers' => $isDispatch ? $this->dispatchBlockers() : [],
             ];
         }
 
         return $states;
+    }
+
+    /**
+     * TheMostPanel 目前擋在哪些技術條件上;⛔ 一般管理者看得懂的字句。
+     *
+     * @return list<string>
+     */
+    private function dispatchBlockers(): array
+    {
+        $blockers = [];
+
+        if (ProviderEndpoints::theMostPanelDispatch() === null) {
+            $blockers[] = '派單端點設定與白名單不符';
+        }
+
+        if (! app(TheMostPanelCurlCapability::class)->supportsOngoingTransferCap()) {
+            $blockers[] = '主機環境不支援（需要 libcurl '
+                .TheMostPanelCurlCapability::MINIMUM_VERSION.' 以上）';
+        }
+
+        return $blockers;
     }
 
     /** 本機／測試環境不會對外送出請求,畫面必須說清楚。 */
@@ -221,9 +256,11 @@ class ManageIntegrationSettings extends Page
         // ⛔ fail closed：不認識的 provider 一律拒絕，不是忽略。
         abort_if($resolved === null, 404);
 
-        // ⛔ 自動派單不是 Owner 的後台開關;它的批准仍必須是一次 reviewed 的
-        // code 變更。這道檢查在後端,不只在畫面上。
-        abort_if($resolved === IntegrationProvider::TheMostPanel, 403);
+        /*
+         * ⛔ R1:TheMostPanel 的 403 已移除——Owner 明確要求自動派單總開關
+         * 也放進同一個後台。技術前提(端點、runtime 能力)由 action 在啟用前
+         * 檢查並以白話拒絕;credential 完整度由 observer 把關。
+         */
 
         try {
             $now = $toggle->handle($resolved, $enable);
