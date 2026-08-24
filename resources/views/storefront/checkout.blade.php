@@ -33,11 +33,20 @@
 
     <div class="mt-6 grid items-start gap-8 lg:mt-8 lg:grid-cols-[1fr_360px] lg:gap-12">
 
-        {{-- Sandbox 付款開啟時才送往真正的付款流程；⛔ 預設仍走 local mock。
-             這只決定表單 POST 到哪裡：兩條路徑背後的驗證與建單完全相同。 --}}
+        {{-- 表單 POST 的目的地。這只決定送去哪裡：兩條路徑背後的驗證與建單完全相同。
+
+             ⛔ mock 只存在於 local／testing，它會直接把訂單標成付款成功。
+             在 staging 指向它等於「假裝收到錢」，而那正是 staging 最不該出現
+             的東西；mock route 自己也有 environment guard，這裡不指過去是為了
+             不讓畫面先給出一個必定 404 的按鈕。
+
+             ⛔ staging 且 sandbox 未開啟時仍送往 payments.start:該路徑由既有
+             registry／SandboxGuard 安全拒絕並帶回可理解的錯誤訊息,
+             ⛔ 不建單、不呼叫任何 provider、不退回 Fake 假裝成功。 --}}
+        @php($mockAvailable = app()->environment(['local', 'testing']))
         @php($paymentsEnabled = config('integrations.payments.sandbox_enabled'))
 
-        <form action="{{ $paymentsEnabled ? route('payments.start') : route('checkout.mock') }}"
+        <form action="{{ $paymentsEnabled || ! $mockAvailable ? route('payments.start') : route('checkout.mock') }}"
               method="post" class="space-y-8">
             @csrf
 

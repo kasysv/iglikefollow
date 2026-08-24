@@ -2,12 +2,11 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\CheckoutController;
-use App\Http\Controllers\MockCheckoutController;
 use App\Models\Service;
 use App\Models\ServiceVariant;
 use App\Support\CheckoutSession;
 use Database\Seeders\CatalogSeeder;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -498,17 +497,57 @@ class CheckoutFlowTest extends TestCase
 
     // ---------------------------------------------------------- 環境限制
 
-    public function test_the_checkout_endpoints_are_local_only(): void
+    /** ⛔ mock 送完整合法資料:它型別提示 CheckoutRequest,form request 驗證會
+     * **先於** environment guard 執行,空資料只會撞到驗證而根本測不到 guard。
+     *
+     * @return array<string, mixed>
+     */
+    private function completeCheckoutPayload(): array
     {
-        $this->assertTrue(app()->environment('testing'));
+        return [
+            'target' => 'https://instagram.com/fictional_account',
+            'payment' => 'ecpay',
+            'customer_email' => 'fictional@example.invalid',
+            'invoice_kind' => 'personal',
+            'personal_invoice_mode' => 'email',
+        ];
+    }
 
-        // 三個端點都在 controller 內檢查 environment。
-        foreach ([
-            CheckoutController::class,
-            MockCheckoutController::class,
-        ] as $controller) {
-            $source = file_get_contents((new \ReflectionClass($controller))->getFileName());
-            $this->assertStringContainsString("environment(['local', 'testing'])", $source);
-        }
+    /**
+     * 兩個 checkout surface 都必須把 production 擋在外面。
+     *
+     * ⛔ M4C-STAGING-CHECKOUT-GUARD-A 起,兩者的允許清單不再相同:選購流程
+     * 多了 `staging`(staging 存在的目的就是演練真實購買流程),但 mock 仍
+     * 只限 local／testing。
+     *
+     * ⛔ 改成驗「行為」而不是 grep 原始碼字串:舊寫法會在 guard 被重構成
+     * 常數或共用方法時失敗,卻對「production 其實被放行了」這種真正危險的
+     * 改動毫無感覺——它測的是文字,不是邊界。
+     */
+    public function test_neither_checkout_surface_is_reachable_in_production(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $this->get('/checkout')->assertNotFound();
+        $this->post('/checkout/start', [
+            'variant' => $this->variant()->id,
+            'quantity' => 1000,
+        ])->assertNotFound();
+        $this->post('/checkout/return')->assertNotFound();
+        $this->post('/checkout/mock', $this->completeCheckoutPayload())->assertNotFound();
+
+        $this->assertDatabaseCount('orders', 0);
+    }
+
+    /** ⛔ mock 會直接把訂單標成付款成功,因此 staging 也不得使用。 */
+    public function test_the_mock_stays_local_only_even_on_staging(): void
+    {
+        $this->app->detectEnvironment(fn () => 'staging');
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $this->post('/checkout/mock', $this->completeCheckoutPayload())->assertNotFound();
+
+        $this->assertDatabaseCount('orders', 0);
     }
 }

@@ -15,15 +15,45 @@ use Illuminate\View\View;
  * The two-page checkout: the service page selects a product, /checkout
  * collects fulfilment, contact, invoice and payment details.
  *
- * Everything here is a local mock. No order is created, nothing is charged,
- * no invoice is issued and no external API is called.
+ * Nothing here creates an order, charges anything, issues an invoice or calls
+ * an external API — this controller only carries a *selection* as far as the
+ * form. Paying is a separate surface with its own guards.
  */
 class CheckoutController extends Controller
 {
+    /**
+     * Where the selection surfaces may run.
+     *
+     * ⛔ `staging` is included because staging exists precisely to rehearse the
+     * real purchase path; without it `POST /checkout/start` 404s and the flow
+     * cannot be exercised at all (Owner reproduced exactly that on
+     * staging.iglikefollow.com).
+     *
+     * ⛔ `production` is deliberately absent, and this list is the only thing
+     * that changed: choosing a product is still not the same as paying for one.
+     * Whether money may move is decided elsewhere — `SandboxGuard` (which
+     * refuses production outright) and the payment registry — so widening this
+     * list cannot start a real transaction.
+     */
+    private const ALLOWED_ENVIRONMENTS = ['local', 'testing', 'staging'];
+
     public function __construct(
         private readonly CatalogRepository $catalog,
         private readonly CheckoutSession $checkout,
     ) {}
+
+    /**
+     * One place that answers "may the selection flow run here".
+     *
+     * ⛔ Kept as a single method rather than three copies of the same
+     * `abort_unless`: a guard repeated three times is a guard with three
+     * chances to drift apart, and this one is the boundary that keeps
+     * production closed.
+     */
+    private function assertSelectionSurfaceAvailable(): void
+    {
+        abort_unless(app()->environment(self::ALLOWED_ENVIRONMENTS), 404);
+    }
 
     /**
      * Accept a product selection from the service page.
@@ -35,7 +65,7 @@ class CheckoutController extends Controller
      */
     public function start(Request $request): RedirectResponse
     {
-        abort_unless(app()->environment(['local', 'testing']), 404);
+        $this->assertSelectionSurfaceAvailable();
 
         $purchasable = $this->catalog->purchasableVariants();
 
@@ -71,7 +101,7 @@ class CheckoutController extends Controller
      */
     public function show(Request $request): Response|RedirectResponse
     {
-        abort_unless(app()->environment(['local', 'testing']), 404);
+        $this->assertSelectionSurfaceAvailable();
 
         $selection = $this->checkout->resolve($request);
 
@@ -100,7 +130,7 @@ class CheckoutController extends Controller
      */
     public function back(Request $request): RedirectResponse
     {
-        abort_unless(app()->environment(['local', 'testing']), 404);
+        $this->assertSelectionSurfaceAvailable();
 
         $selection = $this->checkout->resolve($request);
 
