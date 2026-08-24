@@ -153,8 +153,8 @@ class EcpayPaymentGateway implements PaymentGateway
             // ⛔ 整數台幣，取自伺服器端重算的金額，不接受任何前端數值。
             'TotalAmount' => (string) (int) $attempt->amount,
             'TradeDesc' => 'IGLIKEFOLLOW social media service',
-            // ⛔ 商品名稱用固定安全字串，不帶客人輸入的帳號或網址。
-            'ItemName' => 'Social media service',
+            // ⛔ Owner 指定的固定商品名稱;不帶客人輸入的帳號、網址、方案或個資。
+            'ItemName' => '行銷服務費',
             'ReturnURL' => route('payments.ecpay.callback'),
             'ClientBackURL' => route('payments.status', ['reference' => $order->reference]),
             'ChoosePayment' => 'Credit',

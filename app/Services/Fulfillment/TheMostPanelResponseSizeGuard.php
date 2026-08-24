@@ -109,15 +109,12 @@ class TheMostPanelResponseSizeGuard
      * controls that number too — trusting it would let a declared-small,
      * actually-huge response through the one check meant to catch exactly that.
      *
-     * ⛔ Measured limitation, not a promise. With the default cURL handler this
-     * callback is invoked around transfer boundaries rather than continuously,
-     * so against a chunked endless response it did not abort mid-stream in
-     * local testing — the request ended on the 15s timeout instead. It is
-     * therefore a backstop, not the primary defence: `assertContentLength()`
-     * covers declared sizes, the timeout bounds the rest, and the post-read
-     * `strlen` check in the probe stops anything oversized from being parsed.
-     * The result document records this as NOT VERIFIED rather than claiming a
-     * hard streaming cap that does not exist here.
+     * ⛔ Backstop only. R1(curl 7.68)之後,傳輸中的主要防線是 bounded sink
+     * 的 short write:超限的 chunk 拒收、回傳量小於收到量,libcurl 以 write
+     * error 立即中止——這已由 localhost fixture 的真實 cURL 整合測試證明,
+     * 在完整 body 下載完成前就停下,任何 libcurl 版本都支援。這個 progress
+     * callback 與新版 libcurl 的 `CURLOPT_MAXFILESIZE_LARGE` 都只是額外的
+     * 保險層,何時觸發由 handler 決定,不由我們決定。
      */
     public static function assertProgress(int $downloaded): void
     {
@@ -166,18 +163,16 @@ class TheMostPanelResponseSizeGuard
      * abort as a generic transport failure, and the two mean different things
      * to whoever reads the result.
      *
-     * ⛔ Type first, message second. `TheMostPanelResponseTooLarge` is matched
-     * by class so a reworded wrapper cannot break detection; the string check
-     * remains only for the header-stage abort, which throws before any typed
-     * exception is available.
+     * ⛔ R1(curl 7.68):sink 已改用 short write 中止,不再拋出型別化例外;
+     * 「本站主動的 size abort」的第一手事實改由 sink 的 `overflowed()` state
+     * 回答,caller 先問它。這裡只剩 header 階段(宣告長度超限)的拒絕——
+     * 那是在 `on_headers` callback 裡以固定 REASON 字串拋出的,逐層
+     * `getPrevious()` 尋找;⛔ 比對的是我們自己的固定 token,不是 provider
+     * 或 cURL 的錯誤文字。
      */
     public static function isSizeAbort(\Throwable $e): bool
     {
         for ($current = $e; $current !== null; $current = $current->getPrevious()) {
-            if ($current instanceof TheMostPanelResponseTooLarge) {
-                return true;
-            }
-
             if (str_contains($current->getMessage(), self::REASON)) {
                 return true;
             }

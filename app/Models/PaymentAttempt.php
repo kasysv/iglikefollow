@@ -6,7 +6,6 @@ use App\Enums\PaymentStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Str;
 
 class PaymentAttempt extends Model
 {
@@ -25,16 +24,27 @@ class PaymentAttempt extends Model
     }
 
     /**
-     * A fresh, unique payment reference: `PAY` + 12 顆大寫英數字,共 15 字。
+     * A fresh payment reference: `IGNF` + 15 顆隨機數字,固定 19 字。
      *
-     * ⛔ 純英數字,沒有連字號。這個值會原樣成為綠界的 `MerchantTradeNo`,
-     * 而 AioCheckOut V5 的規格是 String(20)、唯一、只准英數字——staging 實測
-     * 舊的 `PAY-XXXXXXXXXXXX` 就是被 `10200031 MerchantTradeNo Must be
-     * Number or English Letter` 拒絕的。隨機熵維持原本的 12 碼。
+     * Owner 指定的格式。⛔ 每一條規則都有理由:
+     *
+     *  - **純英數字**:這個值原樣成為綠界的 `MerchantTradeNo`,AioCheckOut V5
+     *    只准 String(20) 英數字——staging 實測連字號被 `10200031` 拒絕。
+     *  - **19 字,不做滿 20**:保留 1 字空間。
+     *  - **15 位數字固定長度、保留前導 0**:這是字串,不是會進位變長的數值;
+     *    `random_int()` 逐位產生(密碼學安全),⛔ 不用可猜的流水號、時間戳
+     *    或截斷的自增 ID——付款編號可被猜中,就是可被撞單。
+     *  - 10^15 的空間讓碰撞機率可忽略;DB 的 unique constraint 仍是最終防線。
      */
     public static function newReference(): string
     {
-        return 'PAY'.strtoupper(Str::random(12));
+        $digits = '';
+
+        for ($i = 0; $i < 15; $i++) {
+            $digits .= (string) random_int(0, 9);
+        }
+
+        return 'IGNF'.$digits;
     }
 
     public function isSuccessful(): bool

@@ -20,11 +20,14 @@ use Tests\TestCase;
  * staging 實測:舊的 `PAY-XXXXXXXXXXXX` 被綠界以
  * `10200031 MerchantTradeNo Must be Number or English Letter` 拒絕——連字號
  * 違反 AioCheckOut V5 的 String(20) 純英數規格。被拒代表該次**根本沒有建立**
- * 綠界交易,所以修法有兩半:
+ * 綠界交易。R1 依 Owner 指定收斂為:
  *
- *   1. 新 reference 改為 `PAY`+12 碼大寫英數字(共 15 字,熵維持 12 碼);
- *   2. handoff 在簽章與輸出 form 之前再驗一次格式——legacy／人工資料
- *      fail closed,走既有 `giveUp()` 收斂,⛔ 不產生任何送往綠界的 form。
+ *   1. reference = `IGNF`+15 位隨機數字,固定 19 字(⛔ 不做滿 20,保留
+ *      1 字空間);15 位固定長度、保留前導 0、逐位 `random_int()` 密碼學
+ *      安全,⛔ 不用可猜流水號/時間戳/截斷自增 ID;
+ *   2. `ItemName` 固定為 `行銷服務費`,不帶帳號/網址/方案/個資;
+ *   3. handoff 在簽章與輸出 form 之前仍驗 `\A[A-Za-z0-9]{1,20}\z`——
+ *      legacy/人工資料 fail closed,走既有 `giveUp()`,⛔ 0 綠界 form。
  *
  * ⛔ 全程 fake HTTP＋`preventStrayRequests()`;綠界的 handoff 本來就是
  * browser form POST,伺服器端 0 請求。
@@ -65,27 +68,37 @@ class EcpayMerchantTradeNoTest extends TestCase
     // ==================================== 1. 新 reference 的形狀
 
     /**
-     * 大量樣本:每一個都是 `PAY`+12 碼大寫英數字、共 15 字,
-     * 全部通過官方規格。
+     * 大量樣本:每一個都精確是 `IGNF`+15 位數字、固定 19 字。
      */
     public function test_every_new_reference_is_pure_alphanumeric_within_20_chars(): void
     {
         $seen = [];
+        $leadingZero = 0;
 
         for ($i = 0; $i < 500; $i++) {
             $reference = PaymentAttempt::newReference();
 
-            $this->assertMatchesRegularExpression('/\A PAY [A-Z0-9]{12} \z/x', $reference, $reference);
-            $this->assertSame(15, strlen($reference));
+            // ⛔ Owner 指定的精確格式;無連字號、無第 20 字。
+            $this->assertMatchesRegularExpression('/\AIGNF[0-9]{15}\z/', $reference, $reference);
+            $this->assertSame(19, strlen($reference));
             $this->assertMatchesRegularExpression(self::OFFICIAL_PATTERN, $reference);
-            // ⛔ 特別釘住 staging 實際被拒的那個字元。
             $this->assertStringNotContainsString('-', $reference);
+
+            if ($reference[4] === '0') {
+                $leadingZero++;
+            }
 
             $seen[$reference] = true;
         }
 
-        // 熵的基本檢查:500 個樣本不該有碰撞。
+        // 熵的基本檢查:500 個樣本不該有碰撞(空間 10^15)。
         $this->assertCount(500, $seen);
+
+        /*
+         * ⛔ 前導 0 必須被保留:500 個樣本中第一位數為 0 的約佔 1/10,
+         * 一個都沒有代表格式在某處被當成數值處理掉了。
+         */
+        $this->assertGreaterThan(0, $leadingZero, '前導 0 全部消失:reference 被當成數值處理了');
     }
 
     // ==================================== 2. handoff 送出的 MerchantTradeNo
@@ -100,7 +113,31 @@ class EcpayMerchantTradeNoTest extends TestCase
 
         $this->assertTrue($initiation->isFormPost());
         $this->assertSame($attempt->reference, $initiation->fields['MerchantTradeNo']);
-        $this->assertMatchesRegularExpression(self::OFFICIAL_PATTERN, $initiation->fields['MerchantTradeNo']);
+        $this->assertMatchesRegularExpression('/\AIGNF[0-9]{15}\z/', $initiation->fields['MerchantTradeNo']);
+        $this->assertSame(19, strlen($initiation->fields['MerchantTradeNo']));
+    }
+
+    /**
+     * Owner 指定的商品名稱:`ItemName` 精確為 `行銷服務費`。
+     *
+     * ⛔ ItemName 與 TradeDesc 都不含客人的帳號、網址、方案或任何個資——
+     * 這兩個欄位會出現在綠界端。
+     */
+    public function test_the_item_name_is_exactly_the_owner_specified_string(): void
+    {
+        $this->armEcpay();
+        $attempt = $this->attempt(PaymentAttempt::newReference());
+
+        $fields = app(EcpayPaymentGateway::class)->initiate($attempt)->fields;
+
+        $this->assertSame('行銷服務費', $fields['ItemName']);
+        // TradeDesc 維持既有固定安全字串,不擴張文案。
+        $this->assertSame('IGLIKEFOLLOW social media service', $fields['TradeDesc']);
+
+        foreach (['ItemName', 'TradeDesc'] as $key) {
+            $this->assertStringNotContainsString('@', $fields[$key]);
+            $this->assertStringNotContainsString('http', $fields[$key]);
+        }
     }
 
     /**
@@ -172,7 +209,7 @@ class EcpayMerchantTradeNoTest extends TestCase
     /** gateway 的驗證與官方規格同一條線:合法值全收、非法值全拒。 */
     public function test_the_validator_matches_the_official_spec_exactly(): void
     {
-        foreach (['A', 'abc123XYZ', str_repeat('A', 20), PaymentAttempt::newReference()] as $legal) {
+        foreach (['A', 'abc123XYZ', str_repeat('A', 20), 'IGNF012345678901234', PaymentAttempt::newReference()] as $legal) {
             $this->assertTrue(EcpayPaymentGateway::isValidMerchantTradeNo($legal), $legal);
         }
 

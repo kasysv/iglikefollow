@@ -75,7 +75,8 @@ class FulfillmentDispatchGate
      * 這台機器有沒有安全送出真實請求的技術條件。
      *
      * ⛔ 與 Owner 開關分開回答,因為修法完全不同:開關關著要 Owner 去開;
-     * 端點不符是部署要修的問題;runtime 能力不足(libcurl < 8.4)要升級主機
+     * 端點不符是部署要修的問題;runtime 能力不足(⛔ R1 之後只剩「缺少
+     * ext-curl」一種——short write 中止不挑 libcurl 版本)要修主機環境
      * ——後台把它顯示成「主機環境不支援」,而不是一個 Owner 按不動的按鈕。
      */
     public static function liveCapable(): bool

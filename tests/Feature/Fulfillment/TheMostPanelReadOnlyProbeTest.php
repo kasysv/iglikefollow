@@ -13,7 +13,6 @@ use App\Services\Fulfillment\TheMostPanelBoundedResponseStream;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Fulfillment\TheMostPanelReadOnlyHttpProbe;
 use App\Services\Fulfillment\TheMostPanelResponseSizeGuard;
-use App\Services\Fulfillment\TheMostPanelResponseTooLarge;
 use App\Services\Fulfillment\TheMostPanelTransferState;
 use App\Services\Integrations\ProviderEndpoints;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -620,23 +619,20 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
     }
 
     /**
-     * ⛔ 檢查發生在寫入之前。
+     * ⛔ 檢查發生在寫入之前,而且中止方式是 SHORT WRITE,不是 throw。
      *
-     * 先寫進去再發現太大，代表那些 bytes 已經被留下來了——而那正是這道上限
-     * 要防止的事。
+     * 先寫進去再發現太大,代表那些 bytes 已經被留下來了——而那正是這道上限
+     * 要防止的事。R1(curl 7.68):回 0 讓 libcurl 以 write error 中止,
+     * 任何版本都支援;overflow state 讓 caller 辨認這是本站主動的 size abort。
      */
-    public function test_the_sink_refuses_one_byte_over_the_cap(): void
+    public function test_the_sink_refuses_one_byte_over_the_cap_with_a_short_write(): void
     {
         $sink = $this->sink(1024);
 
-        try {
-            $sink->write(str_repeat('a', 1025));
-            $this->fail('超過上限必須中止');
-        } catch (TheMostPanelResponseTooLarge $e) {
-            $this->assertSame(1024, $e->limitBytes);
-            // ⛔ 超限的那一段一個 byte 都沒有被寫進去。
-            $this->assertSame(0, $sink->bytesWritten());
-        }
+        // ⛔ 超限的那個 chunk:回 0(short write)、一個 byte 都不寫。
+        $this->assertSame(0, $sink->write(str_repeat('a', 1025)));
+        $this->assertSame(0, $sink->bytesWritten());
+        $this->assertTrue($sink->overflowed());
     }
 
     public function test_the_sink_accumulates_across_chunks(): void
@@ -648,10 +644,15 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
 
         $this->assertSame(1000, $sink->bytesWritten());
 
-        // ⛔ 分多段送達一樣要累加：逐段都不超限不代表總量不超限。
-        $this->expectException(TheMostPanelResponseTooLarge::class);
+        // ⛔ 分多段送達一樣要累加:逐段都不超限不代表總量不超限。
+        // 跨過上限的那段回 short write,保存量停在 1000、不超限。
+        $this->assertSame(0, $sink->write(str_repeat('c', 25)));
+        $this->assertTrue($sink->overflowed());
+        $this->assertSame(1000, $sink->bytesWritten());
 
-        $sink->write(str_repeat('c', 25));
+        // ⛔ 溢位後鎖死:即使之後的 chunk 很小,也一律拒收,絕不恢復寫入。
+        $this->assertSame(0, $sink->write('x'));
+        $this->assertSame(1000, $sink->bytesWritten());
     }
 
     public function test_each_sink_has_its_own_counter(): void
@@ -672,42 +673,45 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         $this->assertSame(1000, $second->bytesWritten());
     }
 
-    public function test_the_sink_exception_carries_no_response_content(): void
+    public function test_the_sink_keeps_nothing_from_a_refused_chunk(): void
     {
         $sink = $this->sink(16);
 
-        try {
-            $sink->write('SECRET-RESPONSE-CONTENT-THAT-IS-TOO-LONG');
-            $this->fail('應該要中止');
-        } catch (TheMostPanelResponseTooLarge $e) {
-            // ⛔ 觸發它的那些 bytes，正是我們拒絕保留的 bytes。
-            $this->assertStringNotContainsString('SECRET-RESPONSE-CONTENT', $e->getMessage());
-        }
+        $this->assertSame(0, $sink->write('SECRET-RESPONSE-CONTENT-THAT-IS-TOO-LONG'));
+
+        // ⛔ 觸發拒收的那些 bytes,正是我們拒絕保留的 bytes:
+        // 保存串流裡一個都不能有。
+        $sink->rewind();
+        $this->assertSame('', $sink->getContents());
+        $this->assertTrue($sink->overflowed());
     }
 
     /**
-     * ⛔ 型別優先於訊息比對。
+     * ⛔ header 階段的拒絕(宣告長度超限)被層層包裹後仍可辨認。
      *
-     * Guzzle 與 Laravel 各包一層，原始例外會被埋在好幾層底下。用類別比對就
-     * 不怕外層訊息改寫；只比對字串的話，一次改寫就會讓「太大」被誤判成一般
-     * 連線失敗。
+     * R1 之後 sink 不再拋型別化例外(short write 由 overflow state 辨認);
+     * isSizeAbort 只剩 header 階段的固定 REASON token,逐層 getPrevious()
+     * 尋找——⛔ 比對的是我們自己的 token,不是 provider/cURL 的錯誤文字。
      */
-    public function test_a_wrapped_sink_exception_is_still_a_size_abort(): void
+    public function test_a_wrapped_header_stage_abort_is_still_a_size_abort(): void
     {
-        $inner = new TheMostPanelResponseTooLarge(2_097_152);
-        $middle = new \RuntimeException('An error was encountered during the write', 0, $inner);
-        $outer = new ConnectionException('cURL error 23: Failed writing body', 0, $middle);
+        $inner = new \RuntimeException(TheMostPanelResponseSizeGuard::REASON);
+        $middle = new \RuntimeException('An error was encountered during the on_headers event', 0, $inner);
+        $outer = new ConnectionException('cURL error 23: Failed writing header', 0, $middle);
 
         $this->assertTrue(TheMostPanelResponseSizeGuard::isSizeAbort($outer));
+        // 一般連線失敗不是 size abort。
+        $this->assertFalse(TheMostPanelResponseSizeGuard::isSizeAbort(new ConnectionException('cURL error 28')));
     }
 
-    public function test_a_sink_abort_is_reported_as_body_too_large(): void
+    public function test_a_header_stage_abort_is_reported_as_body_too_large(): void
     {
+        // header 階段的拒絕:on_headers 以固定 REASON 拋出,Guzzle/Laravel 層層包裹。
         Http::fake([
             self::ENDPOINT => fn () => throw new ConnectionException(
                 'cURL error 23',
                 0,
-                new TheMostPanelResponseTooLarge(2_097_152)
+                new \RuntimeException(TheMostPanelResponseSizeGuard::REASON)
             ),
         ]);
         $this->withCredential();
@@ -735,20 +739,17 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
     // ==================================== 12. R3：runtime 能力閘
 
     /**
+     * ⛔ R1(curl 7.68):「不支援」只剩一種——ext-curl 不存在。
+     *
+     * 傳輸中止由 bounded sink 的 short write 執行,不挑 libcurl 版本;舊的
+     * 版本門檻列(7.85/8.3.x)已改列到下方的 supported 正向測試。
+     *
      * @return array<string, array{0: TheMostPanelCurlCapability}>
      */
     public static function unsupportedRuntimeProvider(): array
     {
         return [
-            'no curl extension' => [TheMostPanelCurlCapability::unsupported(
-                versionString: 'unavailable', versionNumber: 0, extensionLoaded: false,
-            )],
-            'no max filesize option' => [TheMostPanelCurlCapability::unsupported(
-                versionString: '8.5.0', versionNumber: 0x080500, optionExists: false,
-            )],
-            'libcurl 7.85.0' => [TheMostPanelCurlCapability::unsupported('7.85.0', 0x075500)],
-            'libcurl 8.3.0' => [TheMostPanelCurlCapability::unsupported('8.3.0', 0x080300)],
-            'libcurl 8.3.9' => [TheMostPanelCurlCapability::unsupported('8.3.9', 0x080309)],
+            'no curl extension' => [TheMostPanelCurlCapability::unsupported()],
         ];
     }
 
@@ -803,12 +804,23 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
      * 7.85.0 也定義了 `CURLOPT_MAXFILESIZE_LARGE`，只是不會套用到進行中的
      * 傳輸——所以版本必須另外檢查，不能只看常數。
      */
-    public function test_the_constant_existing_is_not_enough(): void
+    /**
+     * ⛔ R1 反轉:short write 不挑版本,舊版 libcurl 也支援。
+     *
+     * staging 實測的 7.68.0 必須是 supported——用 8.4 門檻永久關閉正常派單,
+     * 是拿 `CURLOPT_MAXFILESIZE_LARGE` 這個額外保險層冒充必要條件。
+     * ext-curl 缺失仍 fail closed。
+     */
+    public function test_any_libcurl_version_with_the_extension_is_supported(): void
     {
-        $this->assertFalse(
-            TheMostPanelCurlCapability::unsupported('7.85.0', 0x075500, optionExists: true)
-                ->supportsOngoingTransferCap()
-        );
+        foreach (['7.68.0', '7.85.0', '8.3.0', '8.5.0'] as $version) {
+            $this->assertTrue(
+                TheMostPanelCurlCapability::supported($version)->supportsOngoingTransferCap(),
+                $version,
+            );
+        }
+
+        $this->assertFalse(TheMostPanelCurlCapability::unsupported()->supportsOngoingTransferCap());
     }
 
     public function test_this_machine_is_honestly_reported(): void
@@ -816,10 +828,10 @@ class TheMostPanelReadOnlyProbeTest extends TestCase
         $runtime = TheMostPanelCurlCapability::fromRuntime();
 
         /*
-         * ⛔ 這個測試不斷言支援與否，只確認我們讀的是真實 runtime。
+         * ⛔ 這個測試不斷言版本值,只確認我們讀的是真實 runtime。
          *
-         * 本機是 7.85.0，所以正式路徑上探針會拒絕——結果文件必須據實記錄
-         * `native ongoing cap NOT VERIFIED`，不得用注入的測試結果冒充。
+         * R1 之後 short write 不挑版本,本機(7.85)與 staging(7.68)都
+         * supported;版本字串仍如實回報,供 readiness 顯示。
          */
         $this->assertNotSame('', $runtime->versionString());
     }

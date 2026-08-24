@@ -223,8 +223,8 @@ class ManageIntegrationSettings extends Page
         }
 
         if (! app(TheMostPanelCurlCapability::class)->supportsOngoingTransferCap()) {
-            $blockers[] = '主機環境不支援（需要 libcurl '
-                .TheMostPanelCurlCapability::MINIMUM_VERSION.' 以上）';
+            // ⛔ R1(curl 7.68):唯一的 runtime 硬條件是 ext-curl 存在。
+            $blockers[] = '主機環境不支援（缺少 PHP cURL 擴充）';
         }
 
         return $blockers;

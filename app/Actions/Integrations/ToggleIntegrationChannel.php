@@ -139,10 +139,10 @@ class ToggleIntegrationChannel
         }
 
         if (! app(TheMostPanelCurlCapability::class)->supportsOngoingTransferCap()) {
+            // ⛔ R1(curl 7.68):唯一的 runtime 硬條件是 PHP cURL 擴充存在;
+            // 傳輸上限由 bounded sink 的 short write 執行,不挑 libcurl 版本。
             throw ValidationException::withMessages([
-                'is_enabled' => '主機環境不支援（需要 libcurl '
-                    .TheMostPanelCurlCapability::MINIMUM_VERSION
-                    .' 以上），無法啟用自動派單。',
+                'is_enabled' => '主機環境不支援（缺少 PHP cURL 擴充），無法啟用自動派單。',
             ]);
         }
     }

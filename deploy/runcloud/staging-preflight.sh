@@ -23,8 +23,11 @@ PHP_BIN="${PHP_BIN:-php}"
 for EXT in curl pdo_mysql mbstring openssl json; do
     "$PHP_BIN" -r "exit(extension_loaded('${EXT}') ? 0 : 1);"; check "ext-${EXT} 已載入" $?
 done
-"$PHP_BIN" -r '$v = curl_version()["version"] ?? "0"; exit(version_compare($v, "8.4.0", ">=") ? 0 : 1);'
-if [ $? -eq 0 ]; then note "  [ok] libcurl >= 8.4(ongoing transfer cap)"; else note "  [blocked] libcurl < 8.4:TheMostPanel dispatch 能力維持 fail closed(非部署 blocker)"; fi
+# ⛔ R1(curl 7.68):傳輸中止改由 bounded sink short write 執行,不挑 libcurl
+# 版本;ext-curl 存在(上面已檢查)就是完整能力。舊的 >= 8.4 檢查已移除——
+# 一個不再對應任何 runtime 行為的門檻留在 preflight 裡,只會讓人以為 staging
+# 的 7.68 不能派單,而那正是這一輪修掉的誤解。libcurl 版本僅供參考:
+"$PHP_BIN" -r '$v = curl_version()["version"] ?? "unknown"; echo "  [info] libcurl version: {$v} (short-write abort works on any version)" . PHP_EOL;'
 
 # ---- 檔案佈局 ----
 [ -f "${APP_DIR}/public/index.php" ]; check "document root 應指向 public/(public/index.php 存在)" $?

@@ -26,7 +26,7 @@ RunCloud release path。
 1. **Web root**:RunCloud Web App 的 public path 必須指向
    `<release>/public`(⛔ 不是 repo root)。
 2. **PHP**:≥ 8.2,ext-curl 必備;TheMostPanel dispatch 能力另需
-   libcurl ≥ 8.4(不足時能力自動 fail closed,非部署 blocker)。
+   libcurl 版本不限(R1:short-write 中止不挑版本;僅需 ext-curl)。
 3. **HTTPS**:Let's Encrypt 憑證生效後才設 `APP_URL=https://…`;
    readiness 把 http URL 判為 blocker。
 4. **Database**:staging 專用 DB 與帳號(placeholder 見 env 範本);

@@ -134,7 +134,7 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
             // ⛔ 連線失敗、逾時、TLS 失敗：不保存 provider 或例外原文。
             return TheMostPanelProbeObservation::failed(
                 $action,
-                $this->transportFailureCode($e, $transfer),
+                $this->transportFailureCode($e, $transfer, $sink),
                 elapsedMs: $this->elapsed($startedAt),
             );
         }
@@ -214,7 +214,7 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
             $response = $this->postExactlyOnce($payload, $sink, $transfer);
         } catch (Throwable $e) {
             return TheMostPanelCatalogFetchResult::failed(
-                $this->transportFailureCode($e, $transfer),
+                $this->transportFailureCode($e, $transfer, $sink),
                 elapsedMs: $this->elapsed($startedAt),
             );
         }
@@ -292,13 +292,26 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
      * message never. `CURLE_FILESIZE_EXCEEDED` (63) is a transport-layer fact;
      * parsing exception text is guessing.
      */
-    private function transportFailureCode(Throwable $e, TheMostPanelTransferState $transfer): string
-    {
+    private function transportFailureCode(
+        Throwable $e,
+        TheMostPanelTransferState $transfer,
+        TheMostPanelBoundedResponseStream $sink,
+    ): string {
+        /*
+         * ⛔ R1(curl 7.68):sink 的 overflow state 是「我們自己主動拒收」的
+         * 第一手事實——short write 讓 libcurl 以 write error 中止,不再靠
+         * throw,所以先問 sink,再看 errno 63(新版 libcurl 的原生上限),
+         * 最後才是 header 階段的拒絕;⛔ 永遠不讀錯誤文字。
+         */
+        if ($sink->overflowed()) {
+            return 'body_too_large';
+        }
+
         if ($transfer->exceededMaxFileSize()) {
             return 'body_too_large';
         }
 
-        // 其次才看是不是我們自己的 sink／header 中止。
+        // 其次才看是不是 header 階段的中止(宣告長度超限)。
         if (TheMostPanelResponseSizeGuard::isSizeAbort($e)) {
             return 'body_too_large';
         }
@@ -396,10 +409,11 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
         /*
          * ⛔ 這個 runtime 有沒有能力真的中止超大傳輸？
          *
-         * 沒有就停在這裡——在讀 credential、建立 request 之前。R2 已經證明
-         * 「bounded sink ＋ 15 秒 timeout」不是傳輸上限：連線期間對方要送多少
-         * 就送多少，我們只是不存下來。libcurl 8.4.0 之前
-         * `CURLOPT_MAXFILESIZE_LARGE` 不會套用到進行中的傳輸。
+         * 沒有就停在這裡——在讀 credential、建立 request 之前。
+         * R1(curl 7.68)之後,中止由 bounded sink 的 short write 執行
+         * (拒收超限 chunk → libcurl write error,任何版本都支援),所以
+         * 唯一擋住它的是 ext-curl 根本不存在;`CURLOPT_MAXFILESIZE_LARGE`
+         * 只是新版 libcurl 上的額外保險層,不再是能力門檻。
          */
         if (! $this->capability()->supportsOngoingTransferCap()) {
             return 'blocked_unsupported_transport_cap';

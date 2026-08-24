@@ -17,8 +17,10 @@ Owner 於部署後在 `/admin` 串接設定加密輸入。實際部署執行需�
   一般 Git deployment(內建 mode guard);Atomic 需依 RunCloud hooks
   另立範本。
 - RunCloud Web App public path 必須指向 `<release>/public`。
-- PHP ≥ 8.2＋ext-curl;TheMostPanel dispatch 另需 libcurl ≥ 8.4
-  (不足時該能力自動 fail closed,非部署 blocker)。
+- PHP ≥ 8.2＋ext-curl。⛔ R1(curl 7.68):TheMostPanel dispatch 的傳輸
+  上限由 bounded sink short write 執行,**不挑 libcurl 版本**;staging 實測
+  的 7.68.0 即可派單(其餘 Owner 總開關/mapping/credential 另計)。唯一的
+  runtime 硬條件是 ext-curl 存在。
 - HTTPS 憑證生效後才設 `APP_URL=https://…`。
 
 ## 2. .env(依 `staging.env.example`;只列非機密鍵)

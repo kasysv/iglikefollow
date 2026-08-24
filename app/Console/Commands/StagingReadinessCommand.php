@@ -178,7 +178,7 @@ class StagingReadinessCommand extends Command
         $capability = app(TheMostPanelCurlCapability::class)->supportsOngoingTransferCap();
         $checks[] = self::check(
             'curl_transfer_cap',
-            'cURL ongoing-transfer cap(libcurl ≥ 8.4)',
+            'cURL 傳輸中止能力(ext-curl;short-write 不挑版本)',
             $capability ? 'supported' : 'unsupported',
             $capability ? 'ok' : ($strict ? 'blocker' : 'blocked'),
         );

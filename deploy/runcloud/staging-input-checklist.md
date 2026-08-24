@@ -10,7 +10,7 @@ Owner-only `/admin` 串接設定安全輸入。本清單只需要**非機密**�
    `staging.example.tld`);DNS 是否已可指向 VPS。
 2. **RunCloud server / Web App**:是否已建立?PHP version?
    `php -r 'echo curl_version()["version"];'` 的 libcurl 版本
-   (≥ 8.4 才有 TheMostPanel dispatch 能力;不足只影響該能力)。
+   (R1:dispatch 傳輸中止不挑 libcurl 版本,僅需 ext-curl)。
 3. **Deployment 模式**:RunCloud plan 是否支援 Atomic deployment?
    選 **Git** 或 **Atomic**?(deploy script 現只支援 Git;Atomic 需
    另立 hooks 範本。)

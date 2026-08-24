@@ -130,10 +130,11 @@ trait ConfiguresLiveIntegrations
     }
 
     /**
-     * 描述一台具備 bounded-transfer 能力的主機(libcurl ≥ 8.4)。
+     * 描述一台具備 ext-curl 的主機(如 staging 的 libcurl 7.68)。
      *
-     * ⛔ 換掉的是「機器長什麼樣」的描述,不是「可不可以送」的判斷——後者
-     * 永遠由 gate／adapter 依這個描述自行決定。
+     * ⛔ R1(curl 7.68):傳輸中止由 sink short write 執行,不挑版本;
+     * 「支援」=ext-curl 存在。⛔ 換掉的是「機器長什麼樣」的描述,不是
+     * 「可不可以送」的判斷——後者永遠由 gate／adapter 依這個描述自行決定。
      */
     protected function withSupportedDispatchRuntime(): void
     {
@@ -143,7 +144,7 @@ trait ConfiguresLiveIntegrations
         );
     }
 
-    /** 描述一台不具備 bounded-transfer 能力的主機(如本機 libcurl 7.85)。 */
+    /** 描述一台**沒有 ext-curl** 的主機——R1 之後唯一的不支援情形。 */
     protected function withUnsupportedDispatchRuntime(): void
     {
         $this->app->instance(

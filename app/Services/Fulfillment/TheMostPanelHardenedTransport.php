@@ -45,11 +45,12 @@ class TheMostPanelHardenedTransport
                 'verify' => true,
                 'decode_content' => false,
                 /*
-                 * ⛔ 真正的傳輸上限：由 libcurl 本身執行。
+                 * ⛔ R1(curl 7.68):額外的保險層,不再是主要防線。
                  *
-                 * bounded sink 只能限制我們「存下」多少；連線仍會繼續，
-                 * 對方要送多少就送多少。8.4.0 起的 max-filesize 才會在
-                 * 傳輸途中直接中止——這也是 runtime 能力閘存在的理由。
+                 * 傳輸中的主要上限現在由 bounded sink 的 short write 執行
+                 * (拒收超限 chunk → libcurl write error 中止,任何版本都
+                 * 支援)。這個 max-filesize 只在 8.4.0 起套用到進行中的
+                 * 傳輸、且僅對已宣告長度可靠,留著是多一層,⛔ 不作能力閘。
                  */
                 'curl' => [
                     CURLOPT_MAXFILESIZE_LARGE => TheMostPanelResponseSizeGuard::MAX_BODY_BYTES,

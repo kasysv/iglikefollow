@@ -214,14 +214,35 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
         try {
             $response = ($this->transport ?? new TheMostPanelHardenedTransport)
                 ->postExactlyOnce(self::ENDPOINT, $payload, $sink, $transfer);
-        } catch (TheMostPanelResponseTooLarge) {
-            return FulfillmentAttentionReason::UnreadableResponse;
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            /*
+             * ⛔ R1(curl 7.68):size abort 以 sink 的 overflow state 辨認,
+             * 不讀 provider／cURL 的錯誤文字。sink short write 會讓 libcurl
+             * 以 write error 中止,浮上來的是一般的 transport 例外——但
+             * `overflowed()` 明確記著「這是我們自己拒收的」。header 階段的
+             * 拒絕(宣告長度超限/壓縮編碼)與新版 libcurl 的原生 63 也一併
+             * 歸入同類。
+             *
+             * ⛔ 對 `add` 而言這仍是「可能已成立」:對方可能已收單,只是回應
+             * 太大——收斂 submission_unknown、絕不自動重送。
+             */
+            if ($sink->overflowed()
+                || $transfer->exceededMaxFileSize()
+                || TheMostPanelResponseSizeGuard::isSizeAbort($e)
+                || TheMostPanelResponseSizeGuard::isEncodingRefusal($e)) {
+                return FulfillmentAttentionReason::UnreadableResponse;
+            }
+
             /*
              * ⛔ errno 不細分訊息:連線逾時、TLS、中斷都可能已送達。
              * 統一 Timeout 類的「可能已成立」語意。
              */
             return FulfillmentAttentionReason::Timeout;
+        }
+
+        // 防禦性:transfer 沒失敗但 sink 曾拒收——內容不完整,不可解析。
+        if ($sink->overflowed()) {
+            return FulfillmentAttentionReason::UnreadableResponse;
         }
 
         return $this->readBody($response, $key);
