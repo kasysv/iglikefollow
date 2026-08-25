@@ -8,6 +8,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Rules\AvailableProviderService;
+use App\Support\DecorativeProviderServiceName;
 use App\Support\ProviderBoundsTarget;
 use App\Support\QuantityCompatibility;
 use Closure;
@@ -82,6 +83,9 @@ class FulfillmentMappingForm
                                 ->where('is_available', true)
                                 ->orderBy('provider_service_id')
                                 ->get()
+                                // ⛔ R1:與 ConfigureSmmMappingAction 共用同一份判定,
+                                // 兩個入口不得漂移;裝飾／分類列不列入選單。
+                                ->reject(fn (ProviderService $service) => DecorativeProviderServiceName::matches($service->name))
                                 ->mapWithKeys(fn (ProviderService $service) => [
                                     $service->provider_service_id => $service->provider_service_id
                                         .'｜'.$service->name

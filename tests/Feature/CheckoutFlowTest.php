@@ -93,6 +93,23 @@ class CheckoutFlowTest extends TestCase
         $this->get('/checkout')->assertOk()->assertSee('NT$590');
     }
 
+    /**
+     * ⛔ R1-A：Owner 要求刪除這句技術用語，但後端重新驗價的行為(上面
+     * `test_start_ignores_a_client_supplied_price`)完全不變——這裡只證明
+     * 畫面上的句子真的不見了，不是同一件事被驗證兩次。
+     */
+    public function test_the_checkout_page_no_longer_shows_the_recalculation_sentence(): void
+    {
+        $this->post('/checkout/start', [
+            'variant' => $this->variant()->id,
+            'quantity' => 1000,
+        ]);
+
+        $this->get('/checkout')
+            ->assertOk()
+            ->assertDontSee('金額由伺服器依目前單價重新計算');
+    }
+
     public function test_start_rejects_an_archived_variant(): void
     {
         $variant = $this->variant();

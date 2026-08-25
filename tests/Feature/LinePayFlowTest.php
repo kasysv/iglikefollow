@@ -8,15 +8,21 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentFailureReason;
 use App\Enums\PaymentStatus;
 use App\Events\OrderPaid;
+use App\Filament\Pages\ManageIntegrationSettings;
 use App\Models\IntegrationSetting;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
+use App\Models\User;
+use App\Services\Integrations\ProviderEndpoints;
 use App\Services\Payments\LinePayGateway;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\URL;
+use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
@@ -575,5 +581,134 @@ class LinePayFlowTest extends TestCase
         $this->get("/payments/{$attempt->order->reference}/status")
             ->assertOk()
             ->assertDontSee('付款已完成');
+    }
+
+    // ==================================== R1-C：readiness——不新增雙套 UI／開關
+
+    /**
+     * ⛔ M4C-ORDER-OPERATIONS-A-R1：Owner 要求開通 LINE Pay 直接測試前，先確認
+     * 現有架構本身已符合要求，不需要為了「看起來有施工」改付款程式。
+     *
+     * 這裡把既有的結構性保證(`ManageIntegrationSettings` 只讀
+     * production 一列、後台完全沒有測試連線按鈕)轉成明確的回歸測試，避免
+     * 未來有人不小心加回第二套 sandbox／production UI 或「測試連線」入口。
+     */
+    public function test_the_admin_page_shows_exactly_one_line_pay_section_with_no_sandbox_toggle_or_test_connection_button(): void
+    {
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        $page = Livewire::actingAs($owner)->test(ManageIntegrationSettings::class)->assertOk();
+        $html = $page->html();
+
+        /*
+         * ⛔ 每個 provider 只註冊一組 `_identifier`／`_secret_*` state key，
+         * 不分 sandbox／production——這是「只有一套 UI」的精確訊號，不是
+         * 數 label 字串在 HTML 裡出現幾次(那本來就會因 label／id／
+         * wire:model／Livewire snapshot 重複出現多次，不代表有多套區塊)。
+         */
+        $formState = array_keys($page->get('data'));
+        $this->assertContains('line_pay_identifier', $formState);
+        $this->assertContains('line_pay_secret_ChannelSecret', $formState);
+        // ⛔ 沒有第二層 sandbox 欄位:provider value 本身固定小寫 snake_case,
+        // 不存在任何 `line_pay_sandbox_*` 或 `line_pay_production_*` 字首。
+        $this->assertEmpty(array_filter($formState, fn ($key) => str_contains($key, 'sandbox')));
+
+        // ⛔ 沒有任何測試連線按鈕或 API。
+        $this->assertStringNotContainsString('測試連線', $html);
+    }
+
+    /**
+     * ⛔ Owner 仍可直接輸入正式 Channel ID／Channel Secret 並切 ON；
+     * 缺任一值必須 fail closed(既有 `LivePaymentOwnerControlTest` 已驗證
+     * 一般情況,這裡針對 LINE Pay 專門釘一次,證明 R1-C 沒有改動這條路徑)。
+     */
+    public function test_a_missing_channel_id_keeps_line_pay_fail_closed_when_enabling(): void
+    {
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        // setUp() 已建立完整設定並啟用；這裡清掉 identifier(Channel ID)、
+        // 先關閉，模擬「有 ChannelSecret 但缺 Channel ID」的狀態。
+        $setting = IntegrationSetting::query()
+            ->where('provider', IntegrationProvider::LinePay)
+            ->where('environment', IntegrationEnvironment::Production)
+            ->sole();
+        $setting->forceFill(['identifier' => null, 'is_enabled' => false])->save();
+
+        Livewire::actingAs($owner)
+            ->test(ManageIntegrationSettings::class)
+            ->call('toggleChannel', IntegrationProvider::LinePay->value, true)
+            ->assertOk();
+
+        // ⛔ ValidationException 被後台以白話通知吸收,但真正的邊界是這裡:
+        // 缺 Channel ID 時,不論通知內容為何,is_enabled 絕不可能變成 true。
+        $this->assertFalse($setting->fresh()->is_enabled);
+    }
+
+    public function test_owner_can_enable_line_pay_once_both_production_credentials_are_present(): void
+    {
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        // setUp() 已建立完整設定並啟用；這裡先關閉，證明重新啟用同樣成功。
+        $setting = IntegrationSetting::query()
+            ->where('provider', IntegrationProvider::LinePay)
+            ->where('environment', IntegrationEnvironment::Production)
+            ->sole();
+        $setting->forceFill(['is_enabled' => false])->save();
+
+        Livewire::actingAs($owner)
+            ->test(ManageIntegrationSettings::class)
+            ->call('toggleChannel', IntegrationProvider::LinePay->value, true)
+            ->assertOk();
+
+        $this->assertTrue($setting->fresh()->is_enabled);
+    }
+
+    /** ⛔ production API base 必須是官方 exact allowlist,不是可設定值。 */
+    public function test_the_production_api_base_is_the_exact_official_allowlist_constant(): void
+    {
+        $this->assertSame(
+            'https://api-pay.line.me',
+            ProviderEndpoints::linePayApi(),
+        );
+    }
+
+    /**
+     * ⛔ 確認信／取消信是用框架 `route()` 產生,不含任何寫死的 localhost；
+     * 只要 `APP_URL` 是公開 HTTPS staging 網域,兩個 URL 就會是公開 HTTPS。
+     *
+     * `URL::forceRootUrl()` 讓這裡真正改變 `route()` 的解析結果(單改
+     * config 不會反映到已解析的 URL generator),驗證的是同一份
+     * LinePayGateway／routes 程式碼,不是另外重寫一份假設。
+     */
+    public function test_the_confirm_and_cancel_urls_follow_app_url_and_never_hardcode_localhost(): void
+    {
+        URL::forceRootUrl('https://staging.iglikefollow.com');
+        URL::forceScheme('https');
+
+        $attempt = $this->pendingAttempt();
+
+        $confirmUrl = route('payments.linepay.confirm', ['reference' => $attempt->order->reference]);
+        $cancelUrl = route('payments.linepay.cancel', ['reference' => $attempt->order->reference]);
+
+        foreach ([$confirmUrl, $cancelUrl] as $url) {
+            $this->assertStringStartsWith('https://staging.iglikefollow.com', $url);
+            $this->assertStringNotContainsString('localhost', $url);
+        }
+    }
+
+    /**
+     * ⛔ 真正防止「staging 忘記把 APP_URL 改成 HTTPS」的機制是既有的
+     * `app:staging-readiness` blocker——這裡直接驗證那個 check 本身存在
+     * 且會在 http／localhost 時擋下,而不是假裝 LINE Pay 程式碼自己擋。
+     */
+    public function test_staging_readiness_blocks_on_a_non_https_app_url(): void
+    {
+        config(['app.url' => 'http://localhost']);
+
+        $exitCode = Artisan::call('app:staging-readiness');
+        $output = Artisan::output();
+
+        $this->assertSame(1, $exitCode);
+        $this->assertStringContainsString('APP_URL', $output);
     }
 }

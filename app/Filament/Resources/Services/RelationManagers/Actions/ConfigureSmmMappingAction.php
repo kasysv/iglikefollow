@@ -10,6 +10,7 @@ use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Rules\AvailableProviderService;
 use App\Services\Fulfillment\FulfillmentDispatchGate;
+use App\Support\DecorativeProviderServiceName;
 use App\Support\QuantityCompatibility;
 use Closure;
 use Filament\Actions\Action;
@@ -90,6 +91,10 @@ final class ConfigureSmmMappingAction
                         ->where('is_available', true)
                         ->orderBy('name')
                         ->get()
+                        // ⛔ R1:裝飾／分類列(純橫線、頭尾長串裝飾包標題)不是真正
+                        // 可派單的服務,不列入選單——同一份判定也在 submit 時的
+                        // AvailableProviderService 再擋一次,不只靠前端隱藏。
+                        ->reject(fn (ProviderService $s) => DecorativeProviderServiceName::matches($s->name))
                         ->mapWithKeys(fn (ProviderService $s) => [
                             $s->provider_service_id => self::optionLabel($s),
                         ])

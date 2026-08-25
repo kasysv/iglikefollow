@@ -11,6 +11,7 @@ use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Models\User;
 use App\Rules\AvailableProviderService;
+use App\Support\DecorativeProviderServiceName;
 use Filament\Forms\Components\Select;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -70,6 +71,130 @@ class FulfillmentMappingUiTest extends TestCase
             // ⛔ 預設不啟用:選好 mapping 不等於允許派單。
             'is_enabled' => false,
         ]);
+    }
+
+    // ------------------------------------------------------------------
+    // R1：裝飾／分類列不列入選單，且 submit 時同樣拒絕
+    // ------------------------------------------------------------------
+
+    /**
+     * ⛔ 與 `FulfillmentMappingForm::configure()` 內 `->options()` 完全相同
+     * 的查詢管線；兩個入口(舊表單與商品頁 modal)共用同一份
+     * `DecorativeProviderServiceName::matches()`，不得各自漂移。
+     */
+    private function availableOptionIds(): array
+    {
+        return ProviderService::query()
+            ->where('provider', IntegrationProvider::TheMostPanel->value)
+            ->where('is_available', true)
+            ->orderBy('provider_service_id')
+            ->get()
+            ->reject(fn (ProviderService $service) => DecorativeProviderServiceName::matches($service->name))
+            ->pluck('provider_service_id')
+            ->all();
+    }
+
+    public function test_a_pure_dash_line_row_is_excluded_from_the_legacy_form_options(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96001',
+            'name' => '————————————',
+        ]);
+
+        $this->assertNotContains('96001', $this->availableOptionIds());
+    }
+
+    public function test_a_wrapped_category_header_row_is_excluded_from_the_legacy_form_options(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96002',
+            'name' => '—————————— 頂級系列 ——————————',
+        ]);
+
+        $this->assertNotContains('96002', $this->availableOptionIds());
+    }
+
+    public function test_a_normal_looking_name_is_not_excluded_from_the_legacy_form_options(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96003',
+            'name' => 'Instagram 台灣頂級粉絲（男性） - 30天補粉',
+        ]);
+
+        $this->assertContains('96003', $this->availableOptionIds());
+    }
+
+    /** ⛔ 選單只是提示：即使有人手動送出裝飾列的 ID，submit 仍須拒絕。 */
+    public function test_a_decorative_row_id_is_rejected_at_submit_even_if_sent_directly(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96004',
+            'name' => '—————————— 頂級系列 ——————————',
+        ]);
+        $variant = ServiceVariant::factory()->create();
+
+        Livewire::test(CreateFulfillmentMapping::class)
+            ->fillForm([
+                'service_variant_id' => $variant->id,
+                'provider_service_id' => '96004',
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['provider_service_id']);
+
+        $this->assertSame(0, FulfillmentMapping::query()->count());
+    }
+
+    /**
+     * ⛔ 既有停用歷史 mapping 指向後來被判定為裝飾列的服務時，仍可看見、
+     * 仍可保持停用——`retainableStaleId` 的既有豁免不因新增的裝飾列判定
+     * 而消失；本輪只是「不可再被選為新的／啟用的 mapping」，不是「刪除
+     * 或改寫已存在的歷史紀錄」。
+     */
+    public function test_a_historical_mapping_pointing_at_a_now_decorative_row_stays_visible_and_disabled(): void
+    {
+        // 這一列稍後被判定為裝飾列，但當時歷史 mapping 已經指向它。
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96005',
+            'name' => '—————————— 頂級系列 ——————————',
+        ]);
+
+        $mapping = FulfillmentMapping::factory()->create([
+            'provider_service_id' => '96005',
+            'is_enabled' => false,
+        ]);
+
+        Livewire::test(EditFulfillmentMapping::class, ['record' => $mapping->id])
+            ->fillForm(['is_enabled' => false])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        // ⛔ 不刪、不改：歷史紀錄原樣保留，且維持停用。
+        $this->assertSame('96005', $mapping->fresh()->provider_service_id);
+        $this->assertFalse($mapping->fresh()->is_enabled);
+        $this->assertSame(1, ProviderService::query()->where('provider_service_id', '96005')->count());
+    }
+
+    /** ⛔ 裝飾列判定不得阻擋既有歷史 mapping 換成一個正常可用的 ID。 */
+    public function test_a_historical_mapping_at_a_decorative_row_can_still_switch_to_an_available_id(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96006',
+            'name' => '—————————— 頂級系列 ——————————',
+        ]);
+        $this->availableService('96007');
+
+        $mapping = FulfillmentMapping::factory()->create([
+            'provider_service_id' => '96006',
+            'is_enabled' => false,
+        ]);
+
+        Livewire::test(EditFulfillmentMapping::class, ['record' => $mapping->id])
+            ->fillForm(['provider_service_id' => '96007', 'is_enabled' => true])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertSame('96007', $mapping->fresh()->provider_service_id);
+        $this->assertTrue($mapping->fresh()->is_enabled);
     }
 
     public function test_an_unknown_service_id_is_rejected_at_submit(): void
@@ -338,6 +463,48 @@ class FulfillmentMappingUiTest extends TestCase
 
         $this->assertNull($failedWith);
         $this->assertSame(0, $catalogQueries);
+    }
+
+    /** ⛔ 直接對 rule 本身驗證：裝飾列即使 available=true，也必須被拒絕。 */
+    public function test_the_rule_itself_rejects_a_decorative_row_directly(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96008',
+            'name' => '—————————— 頂級系列 ——————————',
+        ]);
+
+        $failedWith = null;
+
+        (new AvailableProviderService)->validate(
+            'provider_service_id',
+            '96008',
+            function (string $message) use (&$failedWith) {
+                $failedWith = $message;
+            },
+        );
+
+        $this->assertSame(AvailableProviderService::FAILED_MESSAGE, $failedWith);
+    }
+
+    /** ⛔ 對照組：一般名稱走同一條 rule 必須通過。 */
+    public function test_the_rule_itself_accepts_a_normal_row_directly(): void
+    {
+        ProviderService::factory()->available()->create([
+            'provider_service_id' => '96009',
+            'name' => 'Instagram 台灣頂級粉絲（男性） - 30天補粉',
+        ]);
+
+        $failedWith = null;
+
+        (new AvailableProviderService)->validate(
+            'provider_service_id',
+            '96009',
+            function (string $message) use (&$failedWith) {
+                $failedWith = $message;
+            },
+        );
+
+        $this->assertNull($failedWith);
     }
 
     // ==================================== UI-B:數量相容性 enable guard

@@ -4,6 +4,7 @@ namespace App\Rules;
 
 use App\Enums\IntegrationProvider;
 use App\Models\ProviderService;
+use App\Support\DecorativeProviderServiceName;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 
@@ -65,13 +66,23 @@ class AvailableProviderService implements ValidationRule
             return;
         }
 
-        $available = ProviderService::query()
+        $service = ProviderService::query()
             ->where('provider', IntegrationProvider::TheMostPanel->value)
             ->where('provider_service_id', $value)
             ->where('is_available', true)
-            ->exists();
+            ->first();
 
-        if (! $available) {
+        if ($service === null) {
+            $fail(self::FAILED_MESSAGE);
+
+            return;
+        }
+
+        /*
+         * ⛔ R1:裝飾／分類列即使被觀察為 is_available,也不是真正可派單的
+         * 服務——不能只靠前端隱藏,提交時同樣要用同一份判定拒絕。
+         */
+        if (DecorativeProviderServiceName::matches($service->name)) {
             $fail(self::FAILED_MESSAGE);
         }
     }

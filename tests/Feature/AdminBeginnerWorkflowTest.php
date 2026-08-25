@@ -13,6 +13,7 @@ use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Models\User;
 use App\Services\Fulfillment\FulfillmentDispatchGate;
+use App\Support\DecorativeProviderServiceName;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -201,6 +202,67 @@ class AdminBeginnerWorkflowTest extends TestCase
         foreach (['7005', '機密分類', 'Default', '3.21'] as $secret) {
             $this->assertStringNotContainsString($secret, $label);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 2b. R1：裝飾／分類列不列入選單
+    // ------------------------------------------------------------------
+
+    /**
+     * ⛔ 與 `ConfigureSmmMappingAction::formSchema()` 內 `->options()` 完全
+     * 相同的查詢管線(exact 同一組 where／reject 條件),不是重新發明一份
+     * 假設。這裡直接驗證管線本身的行為，而不透過 Livewire 對已渲染 HTML
+     * 做字串比對——Filament Select 選項在測試環境常以 lazy／AJAX 方式載入，
+     * 不保證出現在初始 mount 的 HTML 中，字串比對容易產生偽陰性。
+     */
+    private function availableOptionIds(): array
+    {
+        return ProviderService::query()
+            ->where('provider', IntegrationProvider::TheMostPanel->value)
+            ->where('is_available', true)
+            ->orderBy('name')
+            ->get()
+            ->reject(fn (ProviderService $s) => DecorativeProviderServiceName::matches($s->name))
+            ->pluck('provider_service_id')
+            ->all();
+    }
+
+    public function test_a_pure_dash_line_row_is_excluded_from_the_option_pipeline(): void
+    {
+        $this->availableService('8001', ['name' => '————————————']);
+
+        $this->assertNotContains('8001', $this->availableOptionIds());
+    }
+
+    public function test_a_wrapped_category_header_row_is_excluded_from_the_option_pipeline(): void
+    {
+        $this->availableService('8002', ['name' => '—————————— 頂級系列 ——————————']);
+
+        $this->assertNotContains('8002', $this->availableOptionIds());
+    }
+
+    public function test_a_normal_looking_name_is_not_excluded_from_the_option_pipeline(): void
+    {
+        $this->availableService('8003', ['name' => 'Instagram 台灣頂級粉絲（男性） - 30天補粉']);
+
+        $this->assertContains('8003', $this->availableOptionIds());
+    }
+
+    /** ⛔ 選單只是提示：即使有人手動送出裝飾列的 ID，submit 仍須拒絕。 */
+    public function test_a_decorative_row_id_is_rejected_even_if_submitted_directly(): void
+    {
+        $this->actingAs($this->owner());
+
+        $variant = $this->variant();
+        $this->availableService('8004', ['name' => '—————————— 頂級系列 ——————————']);
+
+        $this->configure($variant, [
+            'provider_service_id' => '8004',
+            'is_enabled' => false,
+            'apply_provider_bounds' => false,
+        ])->assertHasActionErrors(['provider_service_id']);
+
+        $this->assertDatabaseCount('fulfillment_mappings', 0);
     }
 
     // ------------------------------------------------------------------

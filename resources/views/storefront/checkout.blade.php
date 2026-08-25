@@ -249,7 +249,6 @@
                     <span class="text-sm font-bold">應付金額</span>
                     <span class="text-3xl font-bold tabular-nums tracking-[-0.03em]">NT${{ number_format($amount) }}</span>
                 </div>
-                <p class="mt-2 text-sm leading-6 text-black/65">金額由伺服器依目前單價重新計算。</p>
 
                 {{-- R4:顧客語氣;本機不會真實扣款由既有 flags/mock gate 保證,⛔ 不靠文案。
                      M2-D-A:結帳頁唯一的購買動作,套 accent。
