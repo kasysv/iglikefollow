@@ -43,6 +43,19 @@ class InvoicesTable
                     ->placeholder('尚未開立')
                     ->sortable(),
 
+                /*
+                 * ⭐ 失敗代碼直接列在清單上。
+                 *
+                 * ⛔ Owner 先前必須逐張點進去才看得到狀態，而且看到的還只是
+                 * `UNKNOWN`。代碼形如 `ISSUE_RTN=10000001`，由本站固定 token
+                 * 與綠界數字碼組成，⛔ 不含任何 provider 自由文字或 PII。
+                 */
+                TextColumn::make('failure_code')
+                    ->label('失敗代碼')
+                    ->placeholder('—')
+                    ->copyable()
+                    ->toggleable(),
+
                 TextColumn::make('failure_message')
                     ->label('狀態說明')
                     ->placeholder('—')

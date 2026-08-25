@@ -85,6 +85,9 @@ class IssueInvoice
             $invoice,
             $attempt,
             $result->reason ?? InvoiceFailureReason::Unknown,
+            // ⭐ 精確的階段／層級碼一路帶到落盤，Owner 才看得到失敗在哪一層。
+            $result->code(),
+            $result->message(),
         );
     }
 
@@ -141,6 +144,9 @@ class IssueInvoice
             $attempt->forceFill([
                 'status' => InvoiceAttemptStatus::Succeeded,
                 'provider_reference' => $result->providerReference,
+                // ⛔ 這一次成功了：不得留著上一輪的失敗代碼讓後台自相矛盾。
+                'failure_code' => null,
+                'failure_message' => null,
                 'completed_at' => now(),
             ])->save();
 
@@ -167,8 +173,14 @@ class IssueInvoice
      * caller is unwinding from an exception; leaving the row in `processing`
      * would make it invisible to both retry and review.
      *
-     * ⛔ `$reason` 的型別就是 allowlist：這個方法收不到 provider 傳來的任意
-     * 字串，因此 raw response、`RtnMsg` 與 ciphertext 都不可能經由這裡落盤。
+     * ⛔ `$reason` 的型別就是 allowlist；`$code` 與 `$message` 也只可能來自
+     * `InvoiceIssueResult`，而那個物件沒有任何路徑可以承載 provider 的文字
+     * ——`InvoiceFailureCode` 由本站固定 token 加通過整數驗證的數字組成，
+     * 說明文字則來自本地固定中文。因此 raw response、`RtnMsg`、`TransMsg` 與
+     * ciphertext 都不可能經由這裡落盤。
+     *
+     * ⭐ `$code`／`$message` 為 null 時退回 enum 值，⛔ 保持既有行為不變
+     * （例如 gateway 之外的例外路徑）。
      *
      * ⛔ 清掉 `reconciliation_required_at`：一筆從舊資料轉過來的紀錄若留著那個
      * 時間戳，後台看起來仍像卡在人工對帳。
@@ -177,19 +189,24 @@ class IssueInvoice
         Invoice $invoice,
         InvoiceAttempt $attempt,
         InvoiceFailureReason $reason,
+        ?string $code = null,
+        ?string $message = null,
     ): Invoice {
-        return DB::transaction(function () use ($invoice, $attempt, $reason) {
+        $code ??= $reason->value;
+        $message ??= $reason->message();
+
+        return DB::transaction(function () use ($invoice, $attempt, $code, $message) {
             $attempt->forceFill([
                 'status' => InvoiceAttemptStatus::Failed,
-                'failure_code' => $reason->value,
-                'failure_message' => $reason->message(),
+                'failure_code' => $code,
+                'failure_message' => $message,
                 'completed_at' => now(),
             ])->save();
 
             $invoice->forceFill([
                 'status' => InvoiceStatus::Failed,
-                'failure_code' => $reason->value,
-                'failure_message' => $reason->message(),
+                'failure_code' => $code,
+                'failure_message' => $message,
                 'reconciliation_required_at' => null,
             ])->save();
 

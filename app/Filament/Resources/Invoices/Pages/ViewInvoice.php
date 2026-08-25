@@ -70,8 +70,17 @@ class ViewInvoice extends ViewRecord
                             TextEntry::make('started_at')->label('開始')->dateTime('Y-m-d H:i:s'),
                             TextEntry::make('completed_at')->label('結束')->dateTime('Y-m-d H:i:s')
                                 ->placeholder('尚未結束'),
+                            /*
+                             * ⭐ 每一次嘗試各自的失敗代碼。
+                             *
+                             * ⛔ 手動重開後會有多筆 attempt，各自可能失敗在
+                             * 不同層級；只看 invoice 那一層的代碼會看不出
+                             * 「第一次是欄位錯、第二次是查詢查不到」。
+                             */
+                            TextEntry::make('failure_code')->label('代碼')
+                                ->placeholder('—')->copyable(),
                             TextEntry::make('failure_message')->label('說明')->placeholder('—'),
-                        ])->columns(4),
+                        ])->columns(5),
                 ]),
         ]);
     }

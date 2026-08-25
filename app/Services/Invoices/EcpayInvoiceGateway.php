@@ -4,6 +4,7 @@ namespace App\Services\Invoices;
 
 use App\Contracts\InvoiceGateway;
 use App\DTO\EcpayInvoiceResponse;
+use App\DTO\InvoiceFailureCode;
 use App\DTO\InvoiceIssueResult;
 use App\Enums\InvoiceFailureReason;
 use App\Models\Invoice;
@@ -52,7 +53,10 @@ class EcpayInvoiceGateway implements InvoiceGateway
              * 對方那邊什麼都沒發生，記為確定失敗是安全的。⛔ 不帶出 exception
              * 訊息：它含有買受人資料。
              */
-            return InvoiceIssueResult::failed(InvoiceFailureReason::InvalidBuyerDetails);
+            return InvoiceIssueResult::failed(
+                InvoiceFailureReason::InvalidBuyerDetails,
+                InvoiceFailureCode::local('ISSUE', 'PAYLOAD'),
+            );
         }
 
         $response = $this->client->issue($setting, $payload);
@@ -63,7 +67,10 @@ class EcpayInvoiceGateway implements InvoiceGateway
 
         if ($response->isRejected()) {
             // 確定沒有開出（設定問題），可安全重試。
-            return InvoiceIssueResult::failed(InvoiceFailureReason::MerchantRejected);
+            return InvoiceIssueResult::failed(
+                InvoiceFailureReason::MerchantRejected,
+                $response->failureCode,
+            );
         }
 
         /*
@@ -75,10 +82,24 @@ class EcpayInvoiceGateway implements InvoiceGateway
         $query = $this->client->query($setting, $relateNumber);
 
         if ($query->isIssued()) {
+            /*
+             * ⭐ 查到了：發票其實早就開出來了。
+             *
+             * ⛔ 這條路徑必須完全收斂為 issued 並清空 failure code／message
+             * ——把一張真的存在的發票留成 failed，Owner 會以為還要再開一次。
+             */
             return $this->issuedResult($query, $relateNumber);
         }
 
-        return InvoiceIssueResult::ambiguous(InvoiceFailureReason::Unknown);
+        /*
+         * ⭐ 兩段都保留：Owner 需要同時看到「開立時對方說什麼」與「事後查詢時
+         * 對方說什麼」。只留一段會讓其中一個問題永遠看不見——這正是本輪要解決
+         * 的核心問題。
+         */
+        return InvoiceIssueResult::ambiguous(
+            InvoiceFailureReason::Unknown,
+            $response->failureCode?->withQuery($query->failureCode) ?? $query->failureCode,
+        );
     }
 
     /**

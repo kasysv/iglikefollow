@@ -735,16 +735,31 @@ class EcpayInvoiceAdapterTest extends TestCase
     public static function looseSuccessCodeProvider(): array
     {
         return [
-            'string one' => ['1'],
             'bool true' => [true],
             'array' => [[1]],
             'null' => [null],
+            'sci notation' => ['1e0'],
+            'padded plus' => ['+1'],
         ];
     }
 
-    /** ⛔ 只有整數 1 算成功：字串 "1"、true、1.0 都不是。 */
+    /**
+     * ⛔ 不是數字的成功碼一律不算成功。
+     *
+     * ⭐ 2026-08-25 更正：`'1'`（純數字字串）已從本清單移除。
+     *
+     * Owner 連續兩張 LINE Pay 訂單都出現「綠界端實際已開立、本站顯示開立
+     * 失敗」，根因就是舊版的嚴格 `!== 1`：官方文件把 `RtnCode`／`TransCode`
+     * 標為 Int，但實際 live 回應常以字串 `"1"` 抵達，於是真正的成功被判成
+     * 失敗。這個 provider 清單原本把「拒絕 `'1'`」寫成了通過的預期，正是
+     * 那個 false negative 被測試固化的地方。
+     *
+     * ⛔ 其餘每一種型別仍然拒絕：`true`（PHP 的 `true == 1` 會讓寬鬆比較
+     * 誤判）、array、null、float（結構不同）、`1e0`、`+1`。放寬的**只有**
+     * int 與純數字字串的差別。
+     */
     #[DataProvider('looseSuccessCodeProvider')]
-    public function test_a_loose_inner_code_is_not_success(mixed $code): void
+    public function test_a_non_numeric_inner_code_is_not_success(mixed $code): void
     {
         Http::fake([
             self::ISSUE => Http::response($this->reply($this->successInner(['RtnCode' => $code]))),
@@ -755,7 +770,7 @@ class EcpayInvoiceAdapterTest extends TestCase
     }
 
     #[DataProvider('looseSuccessCodeProvider')]
-    public function test_a_loose_outer_trans_code_is_not_success(mixed $code): void
+    public function test_a_non_numeric_outer_trans_code_is_not_success(mixed $code): void
     {
         Http::fake([
             self::ISSUE => Http::response($this->reply($this->successInner(), transCode: $code)),
@@ -763,6 +778,34 @@ class EcpayInvoiceAdapterTest extends TestCase
         ]);
 
         $this->assertFalse($this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isIssued());
+    }
+
+    /**
+     * ⭐ 反證：字串 `"1"` 必須被當成成功。
+     *
+     * 這是本次 live 事故的核心。⛔ 在修正前這兩個測試必定失敗。
+     */
+    public function test_a_string_inner_code_is_accepted_as_success(): void
+    {
+        Http::fake([
+            self::ISSUE => Http::response($this->reply($this->successInner(['RtnCode' => '1']))),
+        ]);
+
+        $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
+
+        $this->assertTrue($result->isIssued(), '⛔ 字串 "1" 是綠界實際會回的成功碼。');
+        $this->assertSame('AB12345678', $result->invoiceNumber);
+    }
+
+    public function test_a_string_outer_trans_code_is_accepted_as_success(): void
+    {
+        Http::fake([
+            self::ISSUE => Http::response($this->reply($this->successInner(), transCode: '1')),
+        ]);
+
+        $this->assertTrue(
+            $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k')->isIssued(),
+        );
     }
 
     public static function malformedSuccessFieldProvider(): array
@@ -977,10 +1020,9 @@ class EcpayInvoiceAdapterTest extends TestCase
             'missing relate number' => [['IIS_Relate_Number' => null]],
             'not issued yet' => [['IIS_Issue_Status' => '0']],
             'loose issue status bool' => [['IIS_Issue_Status' => true]],
-            'loose issue status int' => [['IIS_Issue_Status' => 1]],
             'unknown issue status' => [['IIS_Issue_Status' => '9']],
             'voided' => [['IIS_Invalid_Status' => '1']],
-            'loose invalid status int' => [['IIS_Invalid_Status' => 0]],
+            'loose invalid status bool' => [['IIS_Invalid_Status' => false]],
             'unknown invalid status' => [['IIS_Invalid_Status' => '9']],
             'missing number' => [['IIS_Number' => null]],
             'array number' => [['IIS_Number' => ['AB1']]],
@@ -992,7 +1034,9 @@ class EcpayInvoiceAdapterTest extends TestCase
             'impossible date' => [['IIS_Create_Date' => '2026-13-45 99:99:99']],
             'array date' => [['IIS_Create_Date' => ['2026-08-17 10:30:00']]],
             'failed rtn code' => [['RtnCode' => 0]],
-            'string rtn code' => [['RtnCode' => '1']],
+            'string failed rtn code' => [['RtnCode' => '0']],
+            'bool rtn code' => [['RtnCode' => true]],
+            'array rtn code' => [['RtnCode' => [1]]],
         ];
     }
 
@@ -1073,8 +1117,18 @@ class EcpayInvoiceAdapterTest extends TestCase
 
         $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
 
-        // ⛔ 密文同樣不得保存：它是機密加上一段延遲。
-        $this->assertStringNotContainsString('=', (string) $result->code());
+        /*
+         * ⛔ 密文同樣不得保存：它是機密加上一段延遲。
+         *
+         * ⭐ code 現在含 `=`（`ISSUE_RTN=9999`），所以不能再用「不含 =」當作
+         * 判準——那個判準本來就是在近似地表達「不是 base64 密文」。改為直接
+         * 釘住封閉格式：只允許固定 token、數字、`=` 與 `|`。任何密文、Email、
+         * 統編或自由文字都無法通過這個 pattern。
+         */
+        $this->assertMatchesRegularExpression(
+            '/\A(ISSUE|QUERY)_[A-Z]+(=-?\d+)?(\|(ISSUE|QUERY)_[A-Z]+(=-?\d+)?)*\z/',
+            (string) $result->code(),
+        );
         $this->assertNotNull($result->reason);
     }
 
@@ -1145,14 +1199,21 @@ class EcpayInvoiceAdapterTest extends TestCase
             }
         }
 
-        // 存下來的理由必須是本地 allowlist 的值。
-        $this->assertContains(
-            $invoice->failure_code,
-            array_column(InvoiceFailureReason::cases(), 'value')
+        /*
+         * 存下來的代碼必須是本地封閉格式。
+         *
+         * ⭐ 不再要求它是 `InvoiceFailureReason` 的值：本輪起 code 改為
+         * `階段_層級[=數字]`，Owner 才分得出失敗在哪一層。安全性由封閉格式
+         * 保證——只有固定 token、整數、`=` 與 `|`，⛔ provider 的自由文字
+         * 無法通過。
+         */
+        $this->assertMatchesRegularExpression(
+            '/\A(ISSUE|QUERY)_[A-Z]+(=-?\d+)?(\|(ISSUE|QUERY)_[A-Z]+(=-?\d+)?)*\z/',
+            (string) $invoice->failure_code,
         );
     }
 
-    public function test_the_failure_reason_is_always_allowlisted(): void
+    public function test_the_failure_code_is_always_a_closed_format(): void
     {
         Http::fake([
             self::ISSUE => Http::response($this->reply(['RtnCode' => 9999, 'RtnMsg' => 'anything'])),
@@ -1161,10 +1222,9 @@ class EcpayInvoiceAdapterTest extends TestCase
 
         $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
 
-        $this->assertContains(
-            $result->code(),
-            array_column(InvoiceFailureReason::cases(), 'value')
-        );
+        $this->assertSame('ISSUE_RTN=9999|QUERY_TRANS=0', $result->code());
+        // ⛔ 仍在 DB 欄位長度內。
+        $this->assertLessThanOrEqual(64, strlen((string) $result->code()));
     }
 
     // ==================================== 10. 日期解析

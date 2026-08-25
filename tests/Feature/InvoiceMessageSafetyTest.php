@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Actions\Invoices\CreateInvoiceForPaidOrder;
 use App\Actions\Invoices\IssueInvoice;
 use App\Contracts\InvoiceGateway;
+use App\DTO\InvoiceFailureCode;
 use App\DTO\InvoiceIssueResult;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
@@ -129,8 +130,22 @@ class InvoiceMessageSafetyTest extends TestCase
             $params = (new ReflectionClass(InvoiceIssueResult::class))
                 ->getMethod($method)->getParameters();
 
-            $this->assertCount(1, $params, "{$method}() 應該只有一個參數");
-            $this->assertSame('reason', $params[0]->getName(), "{$method}() 的參數必須是 reason");
+            $this->assertCount(2, $params, "{$method}() 應該只有 reason 與 code 兩個參數");
+            $this->assertSame('reason', $params[0]->getName(), "{$method}() 的第一個參數必須是 reason");
+
+            /*
+             * ⭐ 第二個參數是 `InvoiceFailureCode` 這個封閉型別，⛔ 不是字串。
+             *
+             * 這比「只有一個參數」更強：型別本身就讓 provider 的自由文字**無法**
+             * 被傳進來。`InvoiceFailureCode` 只能由固定 token 與通過整數驗證的
+             * 數字組成，沒有任何建構路徑接受任意字串。
+             */
+            $this->assertSame('code', $params[1]->getName(), "{$method}() 的第二個參數必須是 code");
+            $this->assertSame(
+                InvoiceFailureCode::class,
+                (string) $params[1]->getType()?->getName(),
+                "{$method}() 的 code 參數必須是封閉型別，不得是字串"
+            );
         }
 
         // ⛔ 舊的 message 欄位已不存在，沒有地方可以放 provider 的文字。

@@ -297,6 +297,24 @@ class ViewOrder extends ViewRecord
                         ->state(fn (Order $record): string => $record->invoice === null
                             ? '尚未開立'
                             : $record->invoice->attempts()->count().' 次'),
+                    /*
+                     * ⭐ 失敗代碼與本地說明。
+                     *
+                     * ⛔ Owner 先前只看得到 `UNKNOWN`，無從分辨是憑證、傳輸、
+                     * 開立欄位還是查詢解析問題，只能靠再送一次真實 Issue 去猜
+                     * ——而每一次盲測都可能開出一張真的發票。
+                     *
+                     * 代碼形如 `ISSUE_RTN=10000001|QUERY_RTN=10000050`：
+                     * 階段＋層級＋綠界自己的數字碼。⛔ 說明文字全部來自本地
+                     * allowlist，不含 `RtnMsg`、raw response、credential 或
+                     * 買受人資料。
+                     */
+                    TextEntry::make('invoice_failure_code')->label('失敗代碼')
+                        ->state(fn (Order $record): string => $record->invoice?->failure_code ?? '—')
+                        ->copyable(),
+                    TextEntry::make('invoice_failure_message')->label('失敗說明')
+                        ->columnSpanFull()
+                        ->state(fn (Order $record): string => $record->invoice?->failure_message ?? '—'),
                     TextEntry::make('invoice_note')->label('狀態說明')
                         ->columnSpanFull()
                         ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['invoice']),

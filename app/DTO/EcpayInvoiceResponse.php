@@ -22,6 +22,14 @@ final class EcpayInvoiceResponse
         public readonly ?string $invoiceNumber = null,
         public readonly ?string $randomNumber = null,
         public readonly ?string $invoiceDate = null,
+        /**
+         * ⭐ 失敗發生在哪一層，以及對方給的數字碼（如果有）。
+         *
+         * ⛔ 這不是 provider 的訊息，是本站自己組出來的固定 token＋整數。
+         * 舊版把所有失敗折成同一個 `uncertain()`，Owner 在後台只看得到
+         * `UNKNOWN`，無從分辨憑證／傳輸／欄位／查詢解析問題。
+         */
+        public readonly ?InvoiceFailureCode $failureCode = null,
     ) {}
 
     public static function issued(string $invoiceNumber, string $randomNumber, string $invoiceDate): self
@@ -30,15 +38,15 @@ final class EcpayInvoiceResponse
     }
 
     /** 對方明確拒絕，且確定沒有開出發票。 */
-    public static function rejected(): self
+    public static function rejected(?InvoiceFailureCode $code = null): self
     {
-        return new self('rejected');
+        return new self('rejected', failureCode: $code);
     }
 
     /** ⛔ 結果不明：可能已經開出，不得重開。 */
-    public static function uncertain(): self
+    public static function uncertain(?InvoiceFailureCode $code = null): self
     {
-        return new self('uncertain');
+        return new self('uncertain', failureCode: $code);
     }
 
     public function isIssued(): bool

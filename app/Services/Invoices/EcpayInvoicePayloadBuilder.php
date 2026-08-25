@@ -69,12 +69,32 @@ class EcpayInvoicePayloadBuilder
             'vat' => '1',
 
             'Items' => [[
+                /*
+                 * ⭐ 官方 B2C Issue 規格要求商品序號 `ItemSeq`，值為 1–999 的
+                 * 整數。本站只有單一品項，固定為 1。
+                 *
+                 * ⛔ 這個欄位從初版就缺。公司既有唯讀參考模組
+                 * `cms-backend/app/Services/EcpayInvoiceService.php` 帶的正是
+                 * `ItemSeq => 1` 與空白 `ItemRemark`，而本站兩者皆無——這是
+                 * Owner 在 staging 看到「開立失敗」時確定存在的 payload 缺口。
+                 *
+                 * ⛔ 是 int 不是字串：官方型別為整數。
+                 */
+                'ItemSeq' => 1,
                 'ItemName' => self::ITEM_NAME,
                 'ItemCount' => 1,
                 'ItemWord' => self::ITEM_WORD,
                 'ItemPrice' => $amount,
                 'ItemTaxType' => self::TAX_TYPE,
                 'ItemAmount' => $amount,
+                /*
+                 * ⛔ 固定空字串，與既有模組一致。
+                 *
+                 * 這裡永遠不放客戶帳號、SKU 或任何 PII——既有模組把
+                 * `$payment->username` 拼進 `ItemName`，本站刻意不那樣做：
+                 * 發票品項名稱會印在稅務憑證上。
+                 */
+                'ItemRemark' => '',
             ]],
         ];
 
