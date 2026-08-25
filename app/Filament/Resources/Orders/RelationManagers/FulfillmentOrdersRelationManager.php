@@ -26,7 +26,11 @@ class FulfillmentOrdersRelationManager extends RelationManager
     {
         return $table
             ->columns([
-                TextColumn::make('orderItem.service_name')->label('服務'),
+                // ⛔ SMM 完整服務名稱：Owner／Editor 皆可見，服務代碼才是 Owner-only。
+                TextColumn::make('smm_service_name')
+                    ->label('SMM 服務名稱')
+                    ->state(fn ($record) => $record->displayServiceName()),
+                TextColumn::make('orderItem.service_name')->label('本站分類')->wrap(),
                 TextColumn::make('orderItem.quantity')->label('數量')->numeric(),
 
                 TextColumn::make('status')

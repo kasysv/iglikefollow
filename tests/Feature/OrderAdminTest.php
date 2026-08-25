@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Enums\FulfillmentEventCode;
 use App\Enums\FulfillmentStatus;
+use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Filament\Resources\Orders\Pages\ListOrders;
@@ -408,5 +410,94 @@ class OrderAdminTest extends TestCase
 
         $this->assertSame('b****@example.com', $order->maskedEmail());
         $this->assertSame('*******678', $order->maskedPhone());
+    }
+
+    // ------------------------------------------------------------ M4C-ORDER-OPERATIONS-A：訂單頁直接顯示履約
+
+    public function test_the_order_page_shows_smm_fulfillment_progress_directly(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        FulfillmentOrder::factory()->submitted('SMM-ORDER-998877')->create([
+            'order_item_id' => $item->id,
+            'provider_service_name_snapshot' => '完整 SMM 服務名稱',
+        ]);
+
+        $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
+
+        $this->assertStringContainsString('SMM 履約進度', $html);
+        $this->assertStringContainsString('完整 SMM 服務名稱', $html);
+        $this->assertStringContainsString('SMM-ORDER-998877', $html);
+    }
+
+    public function test_the_smm_progress_section_is_hidden_when_there_is_nothing_to_show(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order(); // 沒有建立任何 FulfillmentOrder。
+
+        $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
+
+        $this->assertStringNotContainsString('SMM 履約進度', $html);
+    }
+
+    public function test_the_order_page_shows_the_merged_activity_timeline(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $fulfillment = FulfillmentOrder::factory()->submitted('SMM-TIMELINE-1')->create([
+            'order_item_id' => $item->id,
+            'provider_service_name_snapshot' => '時間表服務名稱',
+        ]);
+        // ⛔ factory 的 submitted() 只直接設定欄位，不會寫 event；這裡手動補上
+        // 兩筆真實事件，才測得到 OrderActivityTimeline 的固定中文句子對應。
+        $fulfillment->recordEvent(
+            FulfillmentEventCode::Submitted,
+            from: FulfillmentStatus::Ready,
+            to: FulfillmentStatus::Submitted,
+        );
+        $fulfillment->recordEvent(
+            FulfillmentEventCode::StatusSynced,
+            from: FulfillmentStatus::Submitted,
+            to: FulfillmentStatus::Processing,
+        );
+
+        $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
+
+        $this->assertStringContainsString('訂單時間表', $html);
+        $this->assertStringContainsString('已在 SMM 平台下單', $html);
+        $this->assertStringContainsString('SMM 平台已進行中', $html);
+        $this->assertStringContainsString('時間表服務名稱', $html);
+    }
+
+    // ------------------------------------------------------------ M4C-ORDER-OPERATIONS-A：補開發票按鈕
+
+    public function test_the_recover_invoice_action_is_hidden_from_editor(): void
+    {
+        $this->actingAs($this->editor());
+        $order = $this->order();
+
+        Livewire::test(ViewOrder::class, ['record' => $order->reference])
+            ->assertOk()
+            ->assertActionHidden('recoverInvoice');
+    }
+
+    public function test_the_recover_invoice_action_is_visible_but_disabled_without_a_paid_order(): void
+    {
+        $owner = $this->owner();
+        $order = Order::factory()->create([
+            'order_status' => OrderStatus::PendingPayment,
+            'payment_status' => PaymentStatus::Pending,
+            'paid_at' => null,
+        ]);
+
+        Livewire::actingAs($owner)
+            ->test(ViewOrder::class, ['record' => $order->reference])
+            ->assertOk()
+            ->assertActionVisible('recoverInvoice')
+            ->assertActionDisabled('recoverInvoice');
     }
 }

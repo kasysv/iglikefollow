@@ -2,13 +2,20 @@
 
 namespace App\Filament\Resources\Orders\Pages;
 
+use App\Actions\Invoices\QueueInvoiceRecoveryForOrder;
+use App\Enums\FulfillmentStatus;
+use App\Enums\InvoiceStatus;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Models\Order;
 use App\Support\Money;
+use App\Support\OrderActivityTimeline;
 use App\Support\OrderOperationsSummary;
+use Filament\Actions\Action;
+use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -18,10 +25,86 @@ class ViewOrder extends ViewRecord
 {
     protected static string $resource = OrderResource::class;
 
-    /** ⛔ 沒有編輯、刪除或「標記為已付款」的動作。 */
+    /**
+     * ⛔ 沒有編輯、刪除或「標記為已付款」的動作。「補開發票」是唯一例外
+     * ——它不直接改寫任何付款/發票狀態機的判定結果,只在安全前提成立時
+     * 排入既有的 Queue job,由既有的 compare-and-set 決定真正的結果。
+     */
     protected function getHeaderActions(): array
     {
-        return [];
+        return [$this->recoverInvoiceAction()];
+    }
+
+    /**
+     * 「補開發票」:Owner-only,經確認視窗,只排 Queue,不在 Livewire
+     * request 內直接呼叫綠界。
+     *
+     * ⛔ 前端 `visible()` 只是提示;真正的邊界在
+     * `QueueInvoiceRecoveryForOrder` 內以 DB transaction／row lock 重新
+     * 驗證,不信任這裡算出來的可見性。
+     */
+    private function recoverInvoiceAction(): Action
+    {
+        return Action::make('recoverInvoice')
+            ->label('補開發票')
+            ->color('warning')
+            ->visible(fn (Order $record): bool => Auth::user()?->isOwner() ?? false)
+            ->disabled(fn (Order $record): bool => ! $this->invoiceLooksRecoverable($record))
+            ->requiresConfirmation()
+            ->modalHeading('補開發票？')
+            ->modalDescription('這會排入一次補開發票的背景工作，不會立即呼叫綠界；只在目前沒有任何開立嘗試時才會真的送出。')
+            ->modalSubmitActionLabel('確認補開')
+            ->action(function (Order $record): void {
+                abort_unless(Auth::user()?->isOwner() ?? false, 403);
+
+                $outcome = app(QueueInvoiceRecoveryForOrder::class)->handle(Auth::user(), $record);
+
+                if ($outcome === 'queued') {
+                    Notification::make()
+                        ->title('已排入補開發票，請稍後重新整理查看結果')
+                        ->success()
+                        ->send();
+
+                    return;
+                }
+
+                Notification::make()
+                    ->title('無法補開發票')
+                    ->body($this->recoveryFailureMessage($outcome))
+                    ->danger()
+                    ->send();
+            });
+    }
+
+    /** ⛔ 只用來決定按鈕是否 disabled;不是真正的授權邊界。 */
+    private function invoiceLooksRecoverable(Order $record): bool
+    {
+        $invoice = $record->invoice;
+
+        if ($invoice === null) {
+            return $record->isPaid();
+        }
+
+        $hasAttempt = $invoice->attempts()->exists();
+
+        return match ($invoice->status) {
+            InvoiceStatus::PendingConfiguration,
+            InvoiceStatus::Pending => ! $hasAttempt,
+            default => false,
+        };
+    }
+
+    private function recoveryFailureMessage(string $outcome): string
+    {
+        return match ($outcome) {
+            'blocked_not_owner' => '只有 Owner 可以補開發票。',
+            'blocked_unpaid' => '這筆訂單尚未付款，不能開立發票。',
+            'blocked_not_twd' => '目前只支援台幣訂單的電子發票。',
+            'blocked_gateway_not_ready' => '綠界電子發票尚未設定完整或尚未啟用。',
+            'blocked_not_eligible' => '目前的發票狀態不允許補開，請先查詢或人工對帳。',
+            'blocked_audit_unavailable' => '目前無法建立稽核紀錄，因此沒有排入補開。',
+            default => '補開發票未完成。',
+        };
     }
 
     public function infolist(Schema $schema): Schema
@@ -79,6 +162,46 @@ class ViewOrder extends ViewRecord
                         ->formatStateUsing(fn ($state) => 'NT$'.number_format((int) $state)),
                     TextEntry::make('items.target_value')->label('交付對象')->copyable(),
                 ])->columns(3),
+
+            /*
+             * ⛔ M4C-ORDER-OPERATIONS-A:直接把履約進度放在訂單主畫面,
+             * 客服不必再切到另一頁。SMM 完整服務名稱經
+             * `FulfillmentOrder::displayServiceName()` 三層 fallback
+             * (凍結快照 → 即時目錄查詢 → 本站分類名稱＋未找到標記),
+             * Owner／Editor 皆可見;不顯示 API key、request body 或
+             * provider raw message。
+             */
+            Section::make('SMM 履約進度')
+                ->description('每個商品項目一列;「尚未建立」代表這個項目還沒有履約紀錄。')
+                ->schema([
+                    /*
+                     * ⛔ 不用 RepeatableEntry 對 `fulfillmentOrders` 的自動
+                     * relationship 解析:`Order::fulfillmentOrders()` 是
+                     * `hasManyThrough`,Filament 內部對它跑 exists()／count()
+                     * 時,SQLite 對 join 後裸 `id` 會回報 ambiguous column——
+                     * order_items 與 fulfillment_orders 剛好都有 id。改用
+                     * 明確的 `->state()` 直接回傳已載入的 collection,完全
+                     * 繞開那段自動解析。
+                     */
+                    RepeatableEntry::make('fulfillment_progress')
+                        ->hiddenLabel()
+                        ->state(fn (Order $record) => $record->fulfillmentOrders()->with('orderItem')->get())
+                        ->schema([
+                            TextEntry::make('smm_service_name')->label('SMM 服務名稱')
+                                ->state(fn ($record) => $record->displayServiceName()),
+                            TextEntry::make('orderItem.quantity')->label('數量')
+                                ->formatStateUsing(fn ($state) => number_format((int) $state)),
+                            TextEntry::make('status')->label('狀態')->badge()
+                                ->formatStateUsing(fn (FulfillmentStatus $state) => $state->label())
+                                ->color(fn (FulfillmentStatus $state) => $state->color()),
+                            TextEntry::make('provider_order_id')->label('SMM 訂單編號')->placeholder('尚未送出'),
+                            TextEntry::make('submitted_at')->label('已送出時間')->dateTime('Y-m-d H:i:s')
+                                ->placeholder('—'),
+                            TextEntry::make('last_synced_at')->label('最後同步時間')->dateTime('Y-m-d H:i:s')
+                                ->placeholder('—'),
+                        ])->columns(3),
+                ])
+                ->visible(fn (Order $record): bool => $record->fulfillmentOrders()->with('orderItem')->get()->isNotEmpty()),
 
             /*
              * ⛔ Owner 與 Editor 都能看到完整聯絡與交付資料——客服需要這些
@@ -177,6 +300,24 @@ class ViewOrder extends ViewRecord
                         ->columnSpanFull()
                         ->state(fn (Order $record): string => OrderOperationsSummary::for($record)['invoice']),
                 ])->columns(3),
+
+            /*
+             * ⛔ 合併訂單事件與履約事件的唯讀時間表。`OrderActivityTimeline`
+             * 只讀 `order_events`／`fulfillment_events`,不另外寫入任何一筆
+             * DB event——這裡是呈現層,不是第三個 event 來源。
+             */
+            Section::make('訂單時間表')
+                ->description('依時間合併顯示訂單事件與履約進度。')
+                ->schema([
+                    RepeatableEntry::make('activity_timeline')
+                        ->hiddenLabel()
+                        ->state(fn (Order $record): array => OrderActivityTimeline::for($record))
+                        ->schema([
+                            TextEntry::make('created_at')->label('時間')->dateTime('Y-m-d H:i:s'),
+                            TextEntry::make('label')->label('事件'),
+                            TextEntry::make('smm_service_name')->label('SMM 服務')->placeholder('—'),
+                        ])->columns(3),
+                ]),
         ]);
     }
 }

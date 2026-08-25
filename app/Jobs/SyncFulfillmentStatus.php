@@ -12,10 +12,12 @@ use Illuminate\Foundation\Queue\Queueable;
 /**
  * Refresh one fulfilment row's status from the provider.
  *
- * ⛔ Not scheduled. M4A registers no scheduler and does not touch
- * `routes/console.php`: polling needs a proven status contract and a known rate
- * limit, and we have neither. This job exists so the read path is built and
- * tested; M4B decides when it runs.
+ * ⛔ M4C：現在有排程了。`routes/console.php` 每 10 分鐘跑
+ * `fulfillment:queue-status-sync`(`QueueFulfillmentStatusSync`),只挑
+ * `submitted`／`processing` 且有 provider order id 的列,經由
+ * `ShouldBeUnique` 排入這個 job。排程本身在非 staging／production 或
+ * Owner 總開關關閉時只排入 0——local／production 不受影響、不會外呼。
+ * 這個 job 的 `handle()` 在做任何網路 I/O 之前仍會再讀一次總開關,見下方。
  *
  * Retrying is safe — the operation is read-only and creates nothing.
  */

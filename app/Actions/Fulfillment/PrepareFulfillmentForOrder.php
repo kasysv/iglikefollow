@@ -10,6 +10,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\ProviderService;
 use App\Services\Fulfillment\FulfillmentDispatchGate;
 use Illuminate\Support\Facades\DB;
 
@@ -78,6 +79,15 @@ class PrepareFulfillmentForOrder
                 // 進入 ready 時凍結；⛔ 之後改 mapping 不得改動這一筆。
                 'provider_service_id_snapshot' => $blocked === null ? $mapping->provider_service_id : null,
                 'payload_type_snapshot' => $blocked === null ? $mapping->payload_type->value : null,
+                /*
+                 * ⛔ 同一刻凍結的顯示用名稱快照：與 id 快照同一組
+                 * (provider, provider_service_id) exact key 查詢,不得只憑
+                 * id 誤配到另一個 provider 的同號服務。查不到就是 null,
+                 * 顯示層自行 fallback,不在這裡猜或留空字串。
+                 */
+                'provider_service_name_snapshot' => $blocked === null
+                    ? $this->currentCatalogName($mapping->provider_service_id)
+                    : null,
             ]);
 
             $fulfillment->recordEvent(
@@ -101,6 +111,21 @@ class PrepareFulfillmentForOrder
 
             return $fulfillment->fresh();
         });
+    }
+
+    /**
+     * The catalog's current name for a service id, exact-key only.
+     *
+     * ⛔ Always TheMostPanel — the only provider this action ever creates
+     * rows for. Never joins on id alone: a second provider could reuse the
+     * same numeric id for a completely different service.
+     */
+    private function currentCatalogName(string $providerServiceId): ?string
+    {
+        return ProviderService::query()
+            ->where('provider', IntegrationProvider::TheMostPanel->value)
+            ->where('provider_service_id', $providerServiceId)
+            ->value('name');
     }
 
     private function mappingFor(OrderItem $item): ?FulfillmentMapping

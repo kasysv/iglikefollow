@@ -27,6 +27,11 @@ class ViewFulfillmentOrder extends ViewRecord
     {
         return $schema->components([
             Section::make('履約狀態')->schema([
+                // ⛔ 完整 SMM 服務名稱：Owner／Editor 皆可見（服務代碼另在下方 Owner-only）。
+                TextEntry::make('smm_service_name')
+                    ->label('SMM 服務名稱')
+                    ->state(fn ($record) => $record->displayServiceName()),
+
                 TextEntry::make('status')
                     ->label('狀態')
                     ->badge()

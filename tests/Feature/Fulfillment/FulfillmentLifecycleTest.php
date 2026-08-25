@@ -15,6 +15,7 @@ use App\Models\FulfillmentMapping;
 use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\ProviderService;
 use App\Models\ServiceVariant;
 use App\Services\Fulfillment\FakeFulfillmentGateway;
 use Illuminate\Database\QueryException;
@@ -212,6 +213,95 @@ class FulfillmentLifecycleTest extends TestCase
 
         // ⛔ 快照是「當時送去哪裡」的證據，不能被日後的設定改寫。
         $this->assertSame('FAKE-SERVICE-0000', $row->fresh()->provider_service_id_snapshot);
+    }
+
+    // ==================================== 3b. M4C:SMM 服務名稱快照
+
+    /** ⛔ 進 Ready 那一刻,目錄裡有名字就當場凍結成 name snapshot。 */
+    public function test_a_new_row_freezes_the_catalog_name_at_ready(): void
+    {
+        ProviderService::factory()->create([
+            'provider' => IntegrationProvider::TheMostPanel->value,
+            'provider_service_id' => '10000',
+        ]);
+
+        $variant = $this->variant();
+        $order = $this->paidOrder();
+        $this->itemFor($order, $variant);
+        FulfillmentMapping::factory()->enabled()->create([
+            'service_variant_id' => $variant->id,
+            'provider_service_id' => '10000',
+        ]);
+
+        $row = $this->prepare($order)[0];
+
+        $this->assertNotNull($row->provider_service_name_snapshot);
+        $this->assertSame($row->provider_service_name_snapshot, $row->displayServiceName());
+    }
+
+    /** ⛔ 之後目錄改名,不得覆寫已凍結的名稱快照——與 id 快照同一條規則。 */
+    public function test_a_later_catalog_rename_does_not_alter_an_existing_name_snapshot(): void
+    {
+        $service = ProviderService::factory()->create([
+            'provider' => IntegrationProvider::TheMostPanel->value,
+            'provider_service_id' => '10001',
+            'name' => '原始名稱',
+        ]);
+
+        $variant = $this->variant();
+        $order = $this->paidOrder();
+        $this->itemFor($order, $variant);
+        FulfillmentMapping::factory()->enabled()->create([
+            'service_variant_id' => $variant->id,
+            'provider_service_id' => '10001',
+        ]);
+
+        $row = $this->prepare($order)[0];
+        $service->update(['name' => '改名後']);
+
+        $this->assertSame('原始名稱', $row->fresh()->provider_service_name_snapshot);
+        $this->assertSame('原始名稱', $row->fresh()->displayServiceName());
+    }
+
+    /**
+     * ⛔ 既有列(遷移前建立、snapshot 為 null)以同一組 exact key 即時查詢
+     * 目前目錄名稱,不得只憑 provider_service_id 猜或模糊比對——用兩筆
+     * 「id 前綴相同、實際不同」的服務證明只有精確相符的那筆會被選到。
+     */
+    public function test_an_existing_row_without_a_name_snapshot_falls_back_to_a_live_exact_catalog_lookup(): void
+    {
+        ProviderService::factory()->create([
+            'provider' => IntegrationProvider::TheMostPanel->value,
+            'provider_service_id' => '100020',
+            'name' => '不精確相符的服務——不應被選到',
+        ]);
+
+        ProviderService::factory()->create([
+            'provider' => IntegrationProvider::TheMostPanel->value,
+            'provider_service_id' => '10002',
+            'name' => '精確相符的服務',
+        ]);
+
+        $row = $this->readyFulfillment();
+        $row->forceFill([
+            // 模擬遷移前既有列:清掉 name snapshot,id snapshot 換成 10002。
+            'provider_service_id_snapshot' => '10002',
+            'provider_service_name_snapshot' => null,
+        ])->saveQuietly();
+
+        $this->assertSame('精確相符的服務', $row->fresh()->displayServiceName());
+    }
+
+    /** ⛔ 查不到目錄名稱時,fallback 本站分類名稱並明確標示「未找到」,不留空白。 */
+    public function test_a_missing_catalog_entry_falls_back_to_the_site_name_with_a_marker(): void
+    {
+        $row = $this->readyFulfillment();
+        $row->forceFill(['provider_service_name_snapshot' => null])->saveQuietly();
+
+        $name = $row->fresh()->displayServiceName();
+
+        $this->assertNotSame('', $name);
+        $this->assertStringContainsString('SMM 目錄未找到', $name);
     }
 
     // ==================================== 4. 重複執行不產生第二列

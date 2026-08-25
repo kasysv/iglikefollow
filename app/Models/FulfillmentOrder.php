@@ -95,6 +95,42 @@ class FulfillmentOrder extends Model
     }
 
     /**
+     * The service name to show a human, best available source.
+     *
+     * ⛔ Three tiers, in order: the frozen snapshot taken when this row became
+     * Ready; failing that, a live catalog lookup keyed on the exact
+     * `(provider, provider_service_id_snapshot)` pair (never id alone — a
+     * second provider could reuse the same numeric id); failing that, this
+     * site's own service name with an explicit "not found" marker, never a
+     * blank string or a guess.
+     *
+     * ⛔ A row with no id snapshot at all (blocked before Ready) has nothing
+     * to look up — it falls straight to the order item's name, unmarked,
+     * since there was never a provider service to find.
+     */
+    public function displayServiceName(): string
+    {
+        if (filled($this->provider_service_name_snapshot)) {
+            return $this->provider_service_name_snapshot;
+        }
+
+        if (filled($this->provider_service_id_snapshot)) {
+            $liveName = ProviderService::query()
+                ->where('provider', $this->provider)
+                ->where('provider_service_id', $this->provider_service_id_snapshot)
+                ->value('name');
+
+            if (filled($liveName)) {
+                return $liveName;
+            }
+
+            return ($this->orderItem?->service_name ?? '未知服務').'（SMM 目錄未找到）';
+        }
+
+        return $this->orderItem?->service_name ?? '未知服務';
+    }
+
+    /**
      * ⛔ Never submit twice.
      *
      * A row that already carries a provider order id has been accepted, even if

@@ -97,6 +97,31 @@ class FulfillmentAdminTest extends TestCase
         $response->assertSee('FAKE-SERVICE-0000');
     }
 
+    /** ⛔ M4C：完整 SMM 服務名稱是 Owner／Editor 都能看到的客服資訊，不像服務代碼那麼敏感。 */
+    public function test_an_editor_does_see_the_smm_service_name(): void
+    {
+        $row = FulfillmentOrder::factory()->submitted()->create([
+            'provider_service_name_snapshot' => '編輯者應該看得到的服務名稱',
+        ]);
+
+        $response = $this->actingAs($this->editor())->get('/admin/fulfillment-orders/'.$row->id);
+
+        $response->assertOk();
+        $response->assertSee('編輯者應該看得到的服務名稱');
+    }
+
+    public function test_an_owner_also_sees_the_smm_service_name(): void
+    {
+        $row = FulfillmentOrder::factory()->submitted()->create([
+            'provider_service_name_snapshot' => 'Owner 應該看得到的服務名稱',
+        ]);
+
+        $response = $this->actingAs($this->owner())->get('/admin/fulfillment-orders/'.$row->id);
+
+        $response->assertOk();
+        $response->assertSee('Owner 應該看得到的服務名稱');
+    }
+
     public function test_no_page_offers_a_retry_or_cancel_action(): void
     {
         $row = FulfillmentOrder::factory()->submitted()->create();

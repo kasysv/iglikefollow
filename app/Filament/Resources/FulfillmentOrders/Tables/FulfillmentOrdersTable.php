@@ -18,7 +18,11 @@ class FulfillmentOrdersTable
             ->columns([
                 TextColumn::make('orderItem.order.reference')->label('訂單編號')->searchable(),
                 TextColumn::make('orderItem.platform_name')->label('平台'),
-                TextColumn::make('orderItem.service_name')->label('服務'),
+                // ⛔ 完整 SMM 服務名稱：Owner／Editor 皆可見；服務代碼在下方仍 Owner-only。
+                TextColumn::make('smm_service_name')
+                    ->label('SMM 服務名稱')
+                    ->state(fn ($record) => $record->displayServiceName()),
+                TextColumn::make('orderItem.service_name')->label('本站分類')->toggleable(),
                 TextColumn::make('orderItem.quantity')->label('數量')->numeric(),
 
                 TextColumn::make('status')
