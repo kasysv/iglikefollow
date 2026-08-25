@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Orders\RelationManagers;
 
 use App\Enums\FulfillmentAttentionReason;
-use App\Enums\FulfillmentStatus;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -33,11 +32,19 @@ class FulfillmentOrdersRelationManager extends RelationManager
                 TextColumn::make('orderItem.service_name')->label('本站分類')->wrap(),
                 TextColumn::make('orderItem.quantity')->label('數量')->numeric(),
 
-                TextColumn::make('status')
-                    ->label('狀態')
+                /*
+                 * ⭐ 顯示 provider 原文；badge 顏色仍由內部 enum 決定。
+                 * ⛔ 顏色不由原文推導——那等於用未經狀態機驗證的文字控制呈現。
+                 */
+                TextColumn::make('provider_status')
+                    ->label('SMM 狀態')
                     ->badge()
-                    ->formatStateUsing(fn (FulfillmentStatus $state) => $state->label())
-                    ->color(fn (FulfillmentStatus $state) => $state->color()),
+                    ->state(fn ($record): string => $record->displayProviderStatus())
+                    ->color(fn ($record) => $record->status->color()),
+
+                TextColumn::make('provider_remains')
+                    ->label('剩餘數量（Remains）')
+                    ->state(fn ($record): string => $record->displayRemains()),
 
                 TextColumn::make('attention_code')
                     ->label('待處理原因')

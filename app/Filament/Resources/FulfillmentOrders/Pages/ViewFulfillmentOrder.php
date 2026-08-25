@@ -32,11 +32,19 @@ class ViewFulfillmentOrder extends ViewRecord
                     ->label('SMM 服務名稱')
                     ->state(fn ($record) => $record->displayServiceName()),
 
-                TextEntry::make('status')
-                    ->label('狀態')
+                /*
+                 * ⭐ 顯示 provider 原文；badge 顏色仍由內部 enum 決定。
+                 * ⛔ 顏色不由原文推導——那等於用未經狀態機驗證的文字控制呈現。
+                 */
+                TextEntry::make('provider_status')
+                    ->label('SMM 狀態')
                     ->badge()
-                    ->formatStateUsing(fn (FulfillmentStatus $state) => $state->label())
-                    ->color(fn (FulfillmentStatus $state) => $state->color()),
+                    ->state(fn ($record): string => $record->displayProviderStatus())
+                    ->color(fn ($record) => $record->status->color()),
+
+                TextEntry::make('provider_remains')
+                    ->label('剩餘數量（Remains）')
+                    ->state(fn ($record): string => $record->displayRemains()),
 
                 TextEntry::make('attention_code')
                     ->label('待處理原因')

@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Orders\Pages;
 
 use App\Actions\Invoices\QueueInvoiceRecoveryForOrder;
-use App\Enums\FulfillmentStatus;
 use App\Enums\InvoiceStatus;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -192,9 +191,19 @@ class ViewOrder extends ViewRecord
                                 ->state(fn ($record) => $record->displayServiceName()),
                             TextEntry::make('orderItem.quantity')->label('數量')
                                 ->formatStateUsing(fn ($state) => number_format((int) $state)),
-                            TextEntry::make('status')->label('狀態')->badge()
-                                ->formatStateUsing(fn (FulfillmentStatus $state) => $state->label())
-                                ->color(fn (FulfillmentStatus $state) => $state->color()),
+                            /*
+                             * ⭐ 顯示 provider 原文，不再顯示本站翻譯。
+                             *
+                             * badge 顏色仍由**內部** enum 決定：顏色是本站對
+                             * 「這算好消息還是壞消息」的判讀，而 provider 只給
+                             * 一個字串。⛔ 顏色不改由原文推導——那等於用未經
+                             * 狀態機驗證的文字控制呈現。
+                             */
+                            TextEntry::make('provider_status')->label('SMM 狀態')->badge()
+                                ->state(fn ($record): string => $record->displayProviderStatus())
+                                ->color(fn ($record) => $record->status->color()),
+                            TextEntry::make('provider_remains')->label('剩餘數量（Remains）')
+                                ->state(fn ($record): string => $record->displayRemains()),
                             TextEntry::make('provider_order_id')->label('SMM 訂單編號')->placeholder('尚未送出'),
                             TextEntry::make('submitted_at')->label('已送出時間')->dateTime('Y-m-d H:i:s')
                                 ->placeholder('—'),

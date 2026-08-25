@@ -3,6 +3,7 @@
 namespace App\Actions\Fulfillment;
 
 use App\Contracts\FulfillmentGateway;
+use App\Data\Fulfillment\FulfillmentSyncResult;
 use App\Enums\FulfillmentEventCode;
 use App\Enums\FulfillmentStatus;
 use App\Models\FulfillmentOrder;
@@ -62,7 +63,7 @@ class SyncFulfillmentState
             return $this->recordUnrecognised($fulfillment);
         }
 
-        return $this->recordStatus($fulfillment, $result->status);
+        return $this->recordStatus($fulfillment, $result);
     }
 
     /**
@@ -73,9 +74,11 @@ class SyncFulfillmentState
      * re-check its stale answer would overwrite a terminal state that was
      * decided after it asked.
      */
-    private function recordStatus(FulfillmentOrder $fulfillment, FulfillmentStatus $status): FulfillmentOrder
+    private function recordStatus(FulfillmentOrder $fulfillment, FulfillmentSyncResult $result): FulfillmentOrder
     {
-        return DB::transaction(function () use ($fulfillment, $status) {
+        $status = $result->status;
+
+        return DB::transaction(function () use ($fulfillment, $result, $status) {
             $locked = FulfillmentOrder::query()
                 ->whereKey($fulfillment->getKey())
                 ->lockForUpdate()
@@ -93,22 +96,64 @@ class SyncFulfillmentState
                 return $this->writeUnrecognised($locked);
             }
 
+            /*
+             * ⭐ provider 原文與 remains 與 `last_synced_at` 在**同一個 lock
+             * 與 transaction** 內一起保存。
+             *
+             * ⛔ 分開寫會出現「狀態已更新但原文還是上一次」的中間狀態，而後台
+             * 正是靠這兩個值一起判讀這張單現在的樣子。
+             */
+            $changes = array_merge(
+                ['last_synced_at' => now()],
+                $this->providerFields($locked, $result),
+            );
+
             if ($from === $status) {
-                // 狀態沒變：只更新查詢時間，不灌爆時間線。
-                $locked->forceFill(['last_synced_at' => now()])->save();
+                /*
+                 * 內部狀態沒變：只更新查詢時間與 provider 欄位，⛔ 不寫事件。
+                 *
+                 * ⭐ 但原文與 remains 仍然會被更新——同一個內部狀態底下
+                 * provider token 可能改變（例如 `In progress` → `processing`），
+                 * remains 更是每次都可能不同。⛔ 這不該產生狀態事件：時間線
+                 * 記錄的是狀態轉換，不是每十分鐘一筆的數字變化。
+                 */
+                $locked->forceFill($changes)->save();
 
                 return $locked->fresh();
             }
 
-            $locked->forceFill([
-                'status' => $status,
-                'last_synced_at' => now(),
-            ])->save();
+            $locked->forceFill(array_merge($changes, ['status' => $status]))->save();
 
             $locked->recordEvent(FulfillmentEventCode::StatusSynced, from: $from, to: $status);
 
             return $locked->fresh();
         });
+    }
+
+    /**
+     * The provider-supplied columns to write, if this answer carried them.
+     *
+     * ⛔ 缺少或不合法的值**不出現在回傳陣列裡**，因此不會覆蓋既有欄位。
+     * 這是刻意的：一次沒帶 remains 的回應，不該讓後台失去上一次正確的數字。
+     *
+     * ⛔ `0` 會被保存（`!== null` 而非 truthy 判斷）——它代表全部補完，
+     * 與「還沒取得」是兩件不同的事。
+     *
+     * @return array<string, mixed>
+     */
+    private function providerFields(FulfillmentOrder $locked, FulfillmentSyncResult $result): array
+    {
+        $fields = [];
+
+        if ($result->providerStatusToken !== null) {
+            $fields['provider_status_code'] = $result->providerStatusToken;
+        }
+
+        if ($result->remains !== null) {
+            $fields['provider_remains'] = $result->remains;
+        }
+
+        return $fields;
     }
 
     /**

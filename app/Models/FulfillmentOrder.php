@@ -29,6 +29,14 @@ class FulfillmentOrder extends Model
         'attention_code' => FulfillmentAttentionReason::class,
         'payload_type_snapshot' => FulfillmentPayloadType::class,
         'attempt_count' => 'integer',
+        /*
+         * ⭐ provider 回報的剩餘數量。
+         *
+         * ⛔ cast 成 integer 而非留字串：後台要能顯示 `0`，而 `'0'` 在
+         * truthy 判斷下會被當成空值。nullable 保留「尚未取得」（null）與
+         * 「對方回報 0」（已補完）的區別。
+         */
+        'provider_remains' => 'integer',
         'submitted_at' => 'datetime',
         'last_synced_at' => 'datetime',
     ];
@@ -128,6 +136,42 @@ class FulfillmentOrder extends Model
         }
 
         return $this->orderItem?->service_name ?? '未知服務';
+    }
+
+    /**
+     * The status exactly as TheMostPanel reported it.
+     *
+     * ⭐ Owner 要求後台顯示 provider 的**原文**，不再把 `In progress` 譯成
+     * 「處理中」、`Completed` 譯成「已完成」。原因很實際：客服在對照 SMM 後台
+     * 排查時，看到的必須是同一個字串。
+     *
+     * ⛔ 只回傳 `provider_status_code`——那個欄位只可能存有 gateway allowlist
+     * 中的 exact token，因為 unrecognised 的回應根本不會寫入它。
+     *
+     * ⛔ 尚未取得時回固定的本地占位，**不拿內部 enum 的 label 冒充 provider
+     * 回傳**。內部狀態（`ready`／`submitting`／`configuration_pending`）是我們
+     * 描述自己處境的詞，任何供應商都不會這樣回報；把它顯示在「SMM 狀態」
+     * 欄位會讓人以為那是對方說的。
+     */
+    public function displayProviderStatus(): string
+    {
+        return filled($this->provider_status_code)
+            ? (string) $this->provider_status_code
+            : '尚未取得';
+    }
+
+    /**
+     * The provider's remaining count, as text for the admin.
+     *
+     * ⛔ `0` 必須顯示為 `0`，不得被 placeholder 吞掉——它代表「全部補完」，
+     * 與 `null`（還沒問到）是兩件完全不同的事。這就是為什麼這裡用
+     * `=== null` 而不是 `filled()`／truthy 判斷。
+     */
+    public function displayRemains(): string
+    {
+        return $this->provider_remains === null
+            ? '尚未取得'
+            : number_format($this->provider_remains);
     }
 
     /**

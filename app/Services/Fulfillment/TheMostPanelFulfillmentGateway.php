@@ -55,8 +55,17 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
     private const MAX_ID_LENGTH = 64;
 
     /**
-     * ⛔ 公開文件實際示範過的四個 status token,exact match(含大小寫與
-     * 空白)。文件沒有承諾完整 enum,所以其他一切都是 unrecognised。
+     * ⛔ Exact match(含大小寫與空白)的 status token allowlist。
+     *
+     * 前四個是公開文件實際示範過的;後兩個是 Owner 另行提供的。文件沒有承諾
+     * 完整 enum,所以其他一切都是 unrecognised。
+     *
+     * ⛔ `processing` 全小寫與 `In progress` 是**兩個不同的 token**,兩者都
+     * 各自明確列出,⛔ 不做大小寫或空白正規化。正規化會讓一個我們沒見過的
+     * 拼法被靜默接受,而 status 決定的是「這張單還要不要繼續輪詢」。
+     *
+     * ⛔ 不自行擴充其他拼法(`In Progress`、`COMPLETED`、`cancelled` 等)
+     * ——沒有 Owner 或官方文件依據的 token 一律維持 unrecognised。
      *
      * @var array<string, FulfillmentStatus>
      */
@@ -65,6 +74,8 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
         'Completed' => FulfillmentStatus::Completed,
         'Partial' => FulfillmentStatus::Partial,
         'Rejected' => FulfillmentStatus::Failed,
+        'processing' => FulfillmentStatus::Processing,
+        'Cancel' => FulfillmentStatus::Failed,
     ];
 
     public function __construct(
@@ -349,8 +360,83 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
         // ⛔ exact token:大小寫、空白差異都不是我們認得的狀態。
         $status = self::STATUS_MAP[$decoded->status] ?? null;
 
-        return $status === null
-            ? FulfillmentSyncResult::unrecognised()
-            : FulfillmentSyncResult::status($status);
+        if ($status === null) {
+            return FulfillmentSyncResult::unrecognised();
+        }
+
+        /*
+         * ⭐ 帶回 exact token 原文供後台顯示。
+         *
+         * ⛔ 這裡用的是 `$decoded->status`,但它已經通過 allowlist 比對——
+         * 能走到這一行就代表它**逐字元等於**某個我們登記過的 token。因此
+         * 保存的永遠是固定集合中的一個值,provider 的任意文字沒有路徑到達。
+         */
+        return FulfillmentSyncResult::status(
+            $status,
+            $decoded->status,
+            $this->readRemains($decoded),
+        );
+    }
+
+    /**
+     * The provider's `remains` figure, or null when it is not a value we accept.
+     *
+     * ⭐ Owner 要求這個數字能在後台跨頁面看到,所以它會被落盤。既然要落盤,
+     * 就必須先確定它是什麼。
+     *
+     * ⛔ 只接受非負整數,或 canonical 的非負十進位 digit string:
+     *
+     *  - ⛔ 拒絕 bool:`is_int(true)` 為 false,但寬鬆路徑常放行它。
+     *  - ⛔ 拒絕 float:`1.0` 代表對方的 JSON 結構與我們以為的不同。
+     *  - ⛔ 拒絕負數:remains 不可能是負的;負值代表我們誤解了這個欄位。
+     *  - ⛔ 拒絕前後空白、`+5`、`1e3`、`0x10`、空字串、array、object。
+     *  - ⛔ 拒絕超出 PHP 整數安全範圍的值:存進去會失真。
+     *
+     * ⛔ 回 null 代表「這次沒拿到合法的值」,呼叫端必須**保留上一次已保存的
+     * 值**,不得清空——一個畸形回應不該讓後台失去先前正確的資訊。
+     *
+     * ⛔ `0` 是完全合法的:它代表全部補完。它與 null 是兩件不同的事。
+     */
+    private function readRemains(stdClass $decoded): ?int
+    {
+        if (! property_exists($decoded, 'remains')) {
+            return null;
+        }
+
+        $value = $decoded->remains;
+
+        if (is_bool($value) || is_float($value)) {
+            return null;
+        }
+
+        if (is_int($value)) {
+            return $value >= 0 ? $value : null;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        // ⛔ canonical digit string:不 trim,不接受符號或科學記號。
+        if (preg_match('/\A(0|[1-9][0-9]*)\z/', $value) !== 1) {
+            return null;
+        }
+
+        /*
+         * ⛔ 超出安全整數範圍就不保存,而不是存一個失真的數字。
+         *
+         * ⛔ 用字串長度與字典序比較,不依賴 bcmath 擴充,也不先 cast 成 int
+         * ——那正是失真發生的地方。兩個值都是 canonical digit string,所以
+         * 「長度較長者較大;等長時字典序即數值序」成立。
+         */
+        $max = (string) PHP_INT_MAX;
+
+        if (strlen($value) > strlen($max)
+            || (strlen($value) === strlen($max) && strcmp($value, $max) > 0)
+        ) {
+            return null;
+        }
+
+        return (int) $value;
     }
 }
