@@ -70,6 +70,8 @@ class IntegrationChannelSwitchUiTest extends TestCase
          */
         $ecpaySwitch = $this->extractSwitchMarkup($html, IntegrationProvider::EcpayPayment->value);
         $this->assertDoesNotMatchRegularExpression('/[^:]\bdisabled(="disabled")?[\s>]/', $ecpaySwitch);
+        $this->assertStringContainsString('height: 1.5rem; width: 2.75rem', $ecpaySwitch);
+        $this->assertStringContainsString("toggleChannel('ecpay_payment', false)", $ecpaySwitch);
     }
 
     public function test_an_unconfigured_channel_renders_a_disabled_switch(): void
@@ -93,6 +95,24 @@ class IntegrationChannelSwitchUiTest extends TestCase
             ->assertOk();
 
         $this->assertTrue(
+            IntegrationSetting::query()
+                ->where('provider', IntegrationProvider::EcpayPayment)
+                ->where('environment', IntegrationEnvironment::Production)
+                ->value('is_enabled')
+        );
+    }
+
+    public function test_an_enabled_channel_can_be_switched_off_from_the_livewire_action(): void
+    {
+        $this->actingAs($this->owner());
+        $this->configuredSetting(true);
+
+        Livewire::test(ManageIntegrationSettings::class)
+            ->call('toggleChannel', IntegrationProvider::EcpayPayment->value, false)
+            ->assertOk()
+            ->assertSee('已關閉');
+
+        $this->assertFalse(
             IntegrationSetting::query()
                 ->where('provider', IntegrationProvider::EcpayPayment)
                 ->where('environment', IntegrationEnvironment::Production)

@@ -112,23 +112,15 @@
                         wire:loading.attr="disabled"
                         wire:target="toggleChannel('{{ $state['provider']->value }}', {{ $state['enabled'] ? 'false' : 'true' }})"
                         @disabled($switchDisabled)
+                        style="position: relative; display: inline-flex; height: 1.5rem; width: 2.75rem; flex-shrink: 0; cursor: pointer; border: 2px solid transparent; border-radius: 9999px; background-color: {{ $state['enabled'] ? '#16a34a' : '#d1d5db' }}; transition: background-color 200ms ease-in-out;"
                         @class([
-                            'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full',
-                            'border-2 border-transparent transition-colors duration-200 ease-in-out',
                             'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
                             'disabled:cursor-not-allowed disabled:opacity-50',
-                            'bg-primary-600' => $state['enabled'],
-                            'bg-gray-300 dark:bg-gray-600' => ! $state['enabled'],
                         ])
                     >
                         <span
                             aria-hidden="true"
-                            @class([
-                                'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow',
-                                'transform ring-0 transition duration-200 ease-in-out',
-                                'translate-x-5' => $state['enabled'],
-                                'translate-x-0' => ! $state['enabled'],
-                            ])
+                            style="pointer-events: none; display: block; height: 1.25rem; width: 1.25rem; border-radius: 9999px; background-color: #ffffff; box-shadow: 0 1px 3px rgb(0 0 0 / 0.2); transform: translateX({{ $state['enabled'] ? '1.25rem' : '0' }}); transition: transform 200ms ease-in-out;"
                         ></span>
                     </button>
                 </div>
