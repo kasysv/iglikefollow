@@ -406,21 +406,81 @@ class InvoiceFailureDiagnosticsTest extends TestCase
         $this->assertStringStartsWith('ISSUE_DECRYPT', (string) $result->code());
     }
 
-    /** 成功碼但缺欄位：固定 shape code。 */
-    public function test_a_success_code_with_missing_fields_records_a_shape_code(): void
+    /**
+     * ⭐ R1：成功碼但欄位異常，代碼必須指出**是哪一欄**。
+     *
+     * ⛔ 初版只有一個 `ISSUE_SHAPE` 同時涵蓋號碼、隨機碼與日期，下一次 live
+     * 若仍失敗，Owner 依然不知道是哪一欄被拒絕——等於還是要靠真實發票盲測。
+     *
+     * ⛔ 代碼只說「哪一欄不合格」，絕不含那一欄的值。
+     */
+    public static function issueFieldRejectionProvider(): array
     {
+        return [
+            // 發票號碼：官方 String(10)＝2 碼英文字軌＋8 碼數字。
+            'missing number' => [['InvoiceNo' => null], 'ISSUE_NUMBER'],
+            'numeric number' => [['InvoiceNo' => 1234], 'ISSUE_NUMBER'],
+            'numeric string number' => [['InvoiceNo' => '1234567890'], 'ISSUE_NUMBER'],
+            'short number' => [['InvoiceNo' => 'AB123456'], 'ISSUE_NUMBER'],
+            'long number' => [['InvoiceNo' => 'AB123456789'], 'ISSUE_NUMBER'],
+            'lowercase number' => [['InvoiceNo' => 'ab12345678'], 'ISSUE_NUMBER'],
+            'array number' => [['InvoiceNo' => ['AB12345678']], 'ISSUE_NUMBER'],
+            'empty number' => [['InvoiceNo' => ''], 'ISSUE_NUMBER'],
+
+            // 隨機碼：官方 String(4)，可能有前導零。
+            'missing random' => [['RandomNumber' => null], 'ISSUE_RANDOM'],
+            'int random' => [['RandomNumber' => 1234], 'ISSUE_RANDOM'],
+            'int zero random' => [['RandomNumber' => 0], 'ISSUE_RANDOM'],
+            'int short random' => [['RandomNumber' => 123], 'ISSUE_RANDOM'],
+            'int long random' => [['RandomNumber' => 10000], 'ISSUE_RANDOM'],
+            'short string random' => [['RandomNumber' => '123'], 'ISSUE_RANDOM'],
+            'long string random' => [['RandomNumber' => '12345'], 'ISSUE_RANDOM'],
+            'non numeric random' => [['RandomNumber' => 'AB12'], 'ISSUE_RANDOM'],
+            'array random' => [['RandomNumber' => ['1234']], 'ISSUE_RANDOM'],
+
+            // 日期。
+            'missing date' => [['InvoiceDate' => null], 'ISSUE_DATE'],
+            'unparseable date' => [['InvoiceDate' => 'not a date'], 'ISSUE_DATE'],
+            'impossible date' => [['InvoiceDate' => '2026-13-45 99:99:99'], 'ISSUE_DATE'],
+            'array date' => [['InvoiceDate' => ['2026-08-17 10:30:00']], 'ISSUE_DATE'],
+        ];
+    }
+
+    #[DataProvider('issueFieldRejectionProvider')]
+    public function test_a_malformed_success_field_records_its_own_code(
+        array $overrides,
+        string $expected,
+    ): void {
         Http::fake([
-            self::ISSUE => Http::response($this->reply([
+            self::ISSUE => Http::response($this->reply(array_merge([
                 'RtnCode' => 1,
                 'InvoiceNo' => 'AB12345678',
-                // ⛔ 缺 RandomNumber 與 InvoiceDate。
-            ])),
+                'RandomNumber' => '1234',
+                'InvoiceDate' => '2026-08-17 10:30:00',
+            ], $overrides))),
             self::QUERY => Http::response($this->queryNotFound()),
         ]);
 
         $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
 
-        $this->assertStringStartsWith('ISSUE_SHAPE', (string) $result->code());
+        $this->assertFalse($result->isIssued(), '⛔ 欄位不合官方 shape 就不算成功。');
+        $this->assertStringStartsWith($expected, (string) $result->code());
+    }
+
+    /** ⛔ 前導零必須原樣保存：隨機碼錯一碼就對不上發票。 */
+    public function test_a_leading_zero_random_code_is_preserved(): void
+    {
+        Http::fake([self::ISSUE => Http::response($this->reply([
+            'RtnCode' => 1,
+            'InvoiceNo' => 'AB12345678',
+            'RandomNumber' => '0123',
+            'InvoiceDate' => '2026-08-17 10:30:00',
+        ]))]);
+
+        $invoice = $this->invoiceFor($this->paidOrder());
+        app(IssueInvoice::class)->handle($invoice);
+
+        $this->assertSame('0123', $invoice->fresh()->random_code);
     }
 
     // ==================================== 4. Issue ＋ Query 兩段
@@ -505,8 +565,32 @@ class InvoiceFailureDiagnosticsTest extends TestCase
             'wrong relate number' => [['IIS_Relate_Number' => 'OTHER01'], 'QUERY_IDENTITY'],
             'not issued' => [['IIS_Issue_Status' => '0'], 'QUERY_STATUS'],
             'voided' => [['IIS_Invalid_Status' => '1'], 'QUERY_STATUS'],
-            'missing number' => [['IIS_Number' => ''], 'QUERY_SHAPE'],
-            'bad date' => [['IIS_Create_Date' => 'not-a-date'], 'QUERY_SHAPE'],
+
+            /*
+             * ⛔ status 只接受 canonical 表示。
+             *
+             * `"00"`／`"01"`／`"-0"` 數學上等於 0 或 1，但形狀與官方規格不同；
+             * 這一層決定「這張發票現在是不是活的」，不能靠寬鬆轉型猜。
+             */
+            'non canonical zero' => [['IIS_Invalid_Status' => '00'], 'QUERY_STATUS'],
+            'non canonical one' => [['IIS_Issue_Status' => '01'], 'QUERY_STATUS'],
+            'negative zero' => [['IIS_Invalid_Status' => '-0'], 'QUERY_STATUS'],
+            'padded status' => [['IIS_Issue_Status' => ' 1 '], 'QUERY_STATUS'],
+            'bool status' => [['IIS_Issue_Status' => true], 'QUERY_STATUS'],
+
+            // ⭐ R1：欄位層級各自的代碼。
+            'empty number' => [['IIS_Number' => ''], 'QUERY_NUMBER'],
+            'numeric number' => [['IIS_Number' => 1234], 'QUERY_NUMBER'],
+            'numeric string number' => [['IIS_Number' => '1234567890'], 'QUERY_NUMBER'],
+            'short number' => [['IIS_Number' => 'AB1234'], 'QUERY_NUMBER'],
+            'array number' => [['IIS_Number' => ['AB12345678']], 'QUERY_NUMBER'],
+            'int random' => [['IIS_Random_Number' => 1234], 'QUERY_RANDOM'],
+            'short random' => [['IIS_Random_Number' => '123'], 'QUERY_RANDOM'],
+            'long random' => [['IIS_Random_Number' => '12345'], 'QUERY_RANDOM'],
+            'array random' => [['IIS_Random_Number' => ['1234']], 'QUERY_RANDOM'],
+            'bad date' => [['IIS_Create_Date' => 'not-a-date'], 'QUERY_DATE'],
+            'impossible date' => [['IIS_Create_Date' => '2026-13-45 99:99:99'], 'QUERY_DATE'],
+            'array date' => [['IIS_Create_Date' => ['2026-08-17 10:30:00']], 'QUERY_DATE'],
         ];
     }
 
@@ -614,20 +698,22 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     // ==================================== 6b. 端到端落盤（本次 live 事故）
 
     /**
-     * ⭐ 事故反證 1：Issue 成功 → `issued` 真的落盤。
+     * ⭐ 端到端落盤：純數字字串成功碼也必須收斂為 `issued`。
      *
-     * ⛔ 這個測試在修正前必定失敗。綠界 live 回應把 `RtnCode`／`TransCode`
-     * 以**字串** `"1"` 送回（官方文件標為 Int），而舊版用嚴格 `!== 1` 比較，
-     * 於是一個真正開立成功的回應被判成失敗——Owner 連續兩張 LINE Pay 訂單
-     * 都出現「綠界端實際已開立、本站顯示開立失敗」。
+     * ⛔ R1 更正措辭：這是一個**相容性案例**，⛔ 不是「已觀測到的 live
+     * response」。本站並未保存 staging 那兩次真實回應，因此無法宣稱它們的
+     * `RtnCode`／`TransCode` 就是字串——精確的 live 拒絕欄位仍為 `unknown`。
+     *
+     * 能證明的是：舊版嚴格 `!== 1` 會拒絕字串 `"1"`，而封閉正規化可以避免
+     * 這一類 false negative。這是候選根因，待下一次真實嘗試由診斷代碼確認。
      *
      * ⛔ 不只驗 DTO：必須走到 `invoices` 與 `invoice_attempts` 的實際落盤，
      * 因為事故正是發生在「解析成功 → 寫回」這整條路徑上。
      */
-    public function test_a_live_shaped_string_success_persists_as_issued(): void
+    public function test_a_numeric_string_success_code_persists_as_issued(): void
     {
         Http::fake([self::ISSUE => Http::response($this->reply([
-            // ⭐ 貼近官方 live response：成功碼是字串。
+            // 相容性案例：成功碼以純數字字串表示。
             'RtnCode' => '1',
             'RtnMsg' => '開立發票成功',
             'InvoiceNo' => 'AB12345678',
@@ -671,32 +757,46 @@ class InvoiceFailureDiagnosticsTest extends TestCase
         $this->assertSame(InvoiceStatus::Issued, $invoice->fresh()->status);
     }
 
-    /** 全數字隨機碼以整數抵達時，⛔ 同樣不得因此被判成缺欄位。 */
-    public function test_a_numeric_random_number_still_persists_as_issued(): void
+    /**
+     * ⛔ R1 更正：整數隨機碼**不再**被接受。
+     *
+     * 初版以 `RandomNumber => 1234` 當正例，理由是「全數字值可能以整數抵達」
+     * ——那是沒有 live 證據的推測，而且危險：`123` 會被存成少一碼的 `"123"`，
+     * `"0123"` 一旦變成整數就永久失去前導零。隨機碼是對發票的驗證資料，
+     * 錯一碼就對不上。
+     *
+     * 沒有能無歧義還原前導零的官方或 live 證據之前，⛔ 只接受 4 位數字字串。
+     */
+    public function test_an_integer_random_number_is_rejected_with_its_own_code(): void
     {
-        Http::fake([self::ISSUE => Http::response($this->reply([
-            'RtnCode' => '1',
-            'InvoiceNo' => 'AB12345678',
-            'InvoiceDate' => '2026-08-17 10:30:00',
-            // ⭐ 官方型別是 String(4)，但全數字值可能以 int 抵達。
-            'RandomNumber' => 1234,
-        ], transCode: '1'))]);
+        Http::fake([
+            self::ISSUE => Http::response($this->reply([
+                'RtnCode' => '1',
+                'InvoiceNo' => 'AB12345678',
+                'InvoiceDate' => '2026-08-17 10:30:00',
+                'RandomNumber' => 1234,
+            ], transCode: '1')),
+            self::QUERY => Http::response($this->queryNotFound()),
+        ]);
 
         $invoice = $this->invoiceFor($this->paidOrder());
         app(IssueInvoice::class)->handle($invoice);
 
         $invoice = $invoice->fresh();
-        $this->assertSame(InvoiceStatus::Issued, $invoice->status);
-        $this->assertSame('1234', $invoice->random_code);
+
+        $this->assertSame(InvoiceStatus::Failed, $invoice->status);
+        $this->assertStringStartsWith('ISSUE_RANDOM', (string) $invoice->failure_code);
+        // ⛔ 不得寫入一個形狀可疑的隨機碼。
+        $this->assertNull($invoice->random_code);
     }
 
     /**
-     * ⭐ 事故反證 2：Issue 未收斂但 GetIssue 正面證明 → `issued` 落盤。
+     * ⭐ 端到端落盤：Issue 未收斂但 GetIssue 正面證明 → `issued`。
      *
-     * 這是 Owner 那張「綠界端已開立、手動入口仍收不回來」的發票走的路徑；
-     * GetIssue 的狀態欄位同樣可能以整數抵達。
+     * 這是 Owner 那張「綠界端已開立、手動入口仍收不回來」的發票走的路徑。
+     * ⛔ 這裡的整數狀態欄位是**相容性案例**，不是已觀測的 live response。
      */
-    public function test_a_positive_query_with_live_shaped_types_persists_as_issued(): void
+    public function test_a_positive_query_persists_as_issued(): void
     {
         $order = $this->paidOrder();
         $invoice = $this->invoiceFor($order);
@@ -710,8 +810,9 @@ class InvoiceFailureDiagnosticsTest extends TestCase
                 'IIS_Number' => 'AB12345678',
                 'IIS_Relate_Number' => $relate,
                 'IIS_Create_Date' => '2026-08-17 10:30:00',
-                'IIS_Random_Number' => 1234,
-                // ⭐ 官方型別是字串，但可能以整數抵達。
+                // ⛔ 官方型別為 String(4)：隨機碼一律用字串。
+                'IIS_Random_Number' => '1234',
+                // 整數狀態為相容性案例（官方型別是字串）。
                 'IIS_Issue_Status' => 1,
                 'IIS_Invalid_Status' => 0,
             ], transCode: '1')),
@@ -831,28 +932,78 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     }
 
     /** identifier：放寬 int，⛔ 但仍拒絕 bool／float／array。 */
-    public function test_the_identifier_normalizer_accepts_int_but_rejects_unsafe_types(): void
+    /** 發票號碼：官方 String(10) ＝ 2 碼大寫字軌 + 8 碼數字。 */
+    public function test_the_invoice_number_parser_enforces_the_official_shape(): void
     {
-        $this->assertSame('1234', EcpayScalar::identifier(1234));
-        $this->assertSame('AB12345678', EcpayScalar::identifier('AB12345678'));
-        $this->assertSame('0123', EcpayScalar::identifier('0123'), '⛔ 字串前導 0 必須保留。');
+        $this->assertSame('AB12345678', EcpayScalar::invoiceNumber('AB12345678'));
+        $this->assertSame('ZZ00000000', EcpayScalar::invoiceNumber('ZZ00000000'));
 
-        foreach ([true, false, 1.0, 1.5, ['x'], null, '', '   '] as $unsafe) {
-            $this->assertNull(EcpayScalar::identifier($unsafe));
+        foreach ([
+            // ⛔ 純數字：能被表示成整數就代表它不是合法發票號碼。
+            1234567890, '1234567890',
+            // 長度錯誤。
+            'AB123456', 'AB123456789', '',
+            // 非法字元／大小寫。
+            'ab12345678', 'A112345678', 'AB1234567X',
+            // 型別。
+            true, false, 1.0, ['AB12345678'], null, '   ',
+        ] as $invalid) {
+            $this->assertNull(
+                EcpayScalar::invoiceNumber($invalid),
+                '⛔ 不合官方 shape 的發票號碼必須拒絕：'.var_export($invalid, true),
+            );
+        }
+    }
+
+    /** 隨機碼：官方 String(4)，⛔ 前導零必須無損保存，⛔ int 一律拒絕。 */
+    public function test_the_random_code_parser_enforces_four_digit_strings(): void
+    {
+        $this->assertSame('1234', EcpayScalar::randomCode('1234'));
+        $this->assertSame('0123', EcpayScalar::randomCode('0123'), '⛔ 前導零必須保留。');
+        $this->assertSame('0000', EcpayScalar::randomCode('0000'));
+
+        foreach ([
+            // ⛔ int 一律拒絕：無法無損還原前導零。
+            0, 123, 1234, 10000,
+            // 長度錯誤。
+            '123', '12345', '',
+            // 非數字。
+            'AB12', '12a4', '12.4',
+            // 型別。
+            true, 1.0, ['1234'], null, '   ',
+        ] as $invalid) {
+            $this->assertNull(
+                EcpayScalar::randomCode($invalid),
+                '⛔ 不合官方 shape 的隨機碼必須拒絕：'.var_export($invalid, true),
+            );
         }
     }
 
     /** status：官方字串與等價整數都接受，⛔ bool／float 拒絕。 */
     public function test_the_status_normalizer_accepts_both_official_and_integer_forms(): void
     {
+        // 官方字串型別，以及整數相容表示。
         $this->assertTrue(EcpayScalar::statusEquals('1', '1'));
         $this->assertTrue(EcpayScalar::statusEquals(1, '1'));
         $this->assertTrue(EcpayScalar::statusEquals('0', '0'));
         $this->assertTrue(EcpayScalar::statusEquals(0, '0'));
 
-        $this->assertFalse(EcpayScalar::statusEquals(true, '1'));
-        $this->assertFalse(EcpayScalar::statusEquals(1.0, '1'));
-        $this->assertFalse(EcpayScalar::statusEquals('9', '1'));
-        $this->assertFalse(EcpayScalar::statusEquals(null, '0'));
+        /*
+         * ⛔ R1 收緊：只接受 canonical 表示。
+         *
+         * `"00"`／`"01"`／`"-0"`／`" 1 "` 數學上等於 0 或 1，但形狀與官方規格
+         * 不同。這一層決定「這張發票現在是不是活的」，不能靠寬鬆轉型猜。
+         */
+        foreach (['00', '01', '-0', ' 1 ', '1.0', '+1', '9', ''] as $nonCanonical) {
+            $this->assertFalse(
+                EcpayScalar::statusEquals($nonCanonical, '1') || EcpayScalar::statusEquals($nonCanonical, '0'),
+                '⛔ 非 canonical 表示必須拒絕：'.var_export($nonCanonical, true),
+            );
+        }
+
+        foreach ([true, false, 1.0, ['1'], null] as $unsafe) {
+            $this->assertFalse(EcpayScalar::statusEquals($unsafe, '1'));
+            $this->assertFalse(EcpayScalar::statusEquals($unsafe, '0'));
+        }
     }
 }

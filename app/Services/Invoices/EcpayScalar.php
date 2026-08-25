@@ -3,31 +3,35 @@
 namespace App\Services\Invoices;
 
 /**
- * Read one ECPay scalar field the way it actually arrives on the wire.
+ * Read one ECPay scalar field, accepting the official type plus a narrow,
+ * deliberately-chosen compatibility form.
  *
- * ⭐ 本輪事故的根因就在這裡。
+ * ⭐ 這是一個**相容性修正與候選根因**，⛔ 不是已證實的 live 根因。
  *
- * 綠界官方文件把 `TransCode` 與 `RtnCode` 標為 `Int`，本站於是用嚴格比較
- * `($json['TransCode'] ?? null) !== 1`。但實際 live 回應（AES 解密 →
- * `json_decode` 之後）這些欄位常常是**字串** `"1"`。嚴格比較把一個真正成功的
- * 回應判成失敗——Owner 連續兩張 LINE Pay 訂單都出現「綠界端實際已開立、本站
- * 顯示開立失敗」，就是這個 false negative。
+ * ⛔ R1 撤回聲明：初版在這裡（以及 commit message 與結果文件）寫成「staging
+ * 那兩次真實回應的 `TransCode`／`RtnCode` 就是字串 `"1"`」、「已在本機重現，
+ * 非推測」。那個說法超出證據。本站當時**並沒有保存那兩次真實 response**，
+ * 因此無法證明實際被拒絕的欄位就是型別問題。
  *
- * 公司既有、且實際在營運的 `cms-backend` 模組用的是寬鬆比較 `== 1`，這正是它
- * 沒有踩到這個坑的原因；那份程式因此是有力的反證，⛔ 但不是「全面改用寬鬆比較」
- * 的授權。
+ * 目前能證明的只有兩件事，兩件都不等於根因：
+ *
+ *  1. 舊版的嚴格 `!== 1` 會拒絕字串 `"1"`（本機 fixture 可重現）；
+ *  2. 公司既有且實際營運的 `cms-backend` 使用寬鬆 `== 1`，因此不會踩到 (1)。
+ *
+ * 精確的 live 拒絕欄位仍為 **`unknown`**，須待下一次真實嘗試由本輪新增的
+ * `phase + layer[+ 數字碼]` 診斷留下可判讀證據。⛔ 不得再用真實發票盲測。
  *
  * ⛔ 所以這裡不做全域 loose comparison，而是一個**封閉的 normalizer**：
  *
- *  - 只接受官方型別（int）與有實據的等價表示（純數字字串，允許前後空白）。
+ *  - 只接受官方型別（int）與一種等價表示（純數字字串，允許前後空白）。
  *  - ⛔ 拒絕 bool：PHP 的 `true == 1` 為真，寬鬆比較會把 `"TransCode": true`
  *    這種根本不是數字的回應當成成功。
  *  - ⛔ 拒絕 float：`1.0` 代表對方的 JSON 結構與我們以為的不同；在稅務憑證上
  *    「形狀不對但湊得出數字」不能當成「數字正確」。
  *  - ⛔ 拒絕 array／object／null／空字串／超長值／`1e0`／`0x1`／`+1` 等變體。
  *
- * 也就是說：放寬的**只有** int 與純數字字串的差別，其餘每一道型別防線都原樣
- * 保留。
+ * 也就是說：放寬的**只有**成功碼 int 與純數字字串的差別。識別欄位（發票號碼、
+ * 隨機碼）另有各自的 shape 驗證，⛔ 不共用這個寬鬆規則。
  */
 final class EcpayScalar
 {
@@ -78,51 +82,72 @@ final class EcpayScalar
     }
 
     /**
-     * A status field as its canonical string form.
+     * A status field, compared against its canonical string form.
      *
      * GetIssue 的 `IIS_Issue_Status`／`IIS_Invalid_Status` 官方型別是字串
-     * `"1"`／`"0"`，但同樣可能以整數 `1`／`0` 到達。⛔ 同樣只放寬 int 與純
-     * 數字字串，bool／float／array 仍然拒絕。
+     * `"1"`／`"0"`；整數 `1`／`0` 作為相容表示一併接受。
+     *
+     * ⛔ R1 收緊：只接受 **canonical** 表示。`"00"`、`"01"`、`"-0"`、`" 1 "`
+     * 這類值即使數學上等於 0 或 1，也一律拒絕——它們代表對方送來的形狀與官方
+     * 規格不同，而這一層決定的是「這張發票現在是不是活的」，不能靠寬鬆轉型猜。
+     *
+     * ⛔ bool／float／array 仍然拒絕。
      */
     public static function statusEquals(mixed $value, string $expected): bool
     {
-        $number = self::int($value);
+        if (is_int($value)) {
+            return (string) $value === $expected;
+        }
 
-        return $number !== null && (string) $number === $expected;
+        // ⛔ 字串必須逐字元等於官方值，不 trim、不正規化。
+        return is_string($value) && $value === $expected;
     }
 
     /**
-     * An identifier-like field (invoice number, random code) as a string.
+     * An invoice number, validated against the official `String(10)` shape.
      *
-     * ⭐ 第二個同類型的 false negative：`RandomNumber` 官方型別是 String(4)，
-     * 但 `1234` 這種全數字值在 JSON 裡可能以**整數**到達。舊版的讀取只接受
-     * string，於是一個真正開立成功的回應會因為「缺隨機碼」被判成不成功——
-     * 與 `RtnCode` 那個是同一類問題。
+     * ⛔ R1 修正：初版用一個泛用的 `identifier()` 同時處理發票號碼與隨機碼，
+     * 而它接受**任意非空字串與任意整數**。後果是 `InvoiceNo=1234` 會被當成
+     * 合法發票號碼寫進稅務紀錄——一個根本不存在於國稅局的號碼，事後無法對帳。
      *
-     * ⛔ 只放寬 int：`1234` → `"1234"`。bool／float／array／object／null／
-     * 空字串仍然拒絕。
+     * 官方格式為 2 碼大寫英文字軌 + 8 碼數字（例如 `AB12345678`），總長 10。
      *
-     * ⛔ 刻意**不**接受 float：`1234.0` 轉成字串會變 `"1234"` 看似正確，但
-     * 那代表對方的 JSON 結構與我們以為的不同；而且真正的隨機碼可能有前導 0
-     * （`"0123"`），一旦被當成數字就永久失真——所以 int 來源本身也標記為
-     * 「可用但不理想」，字串永遠優先。
+     * ⛔ 一律拒絕 int：發票號碼永遠含英文字軌，能被表示成整數就代表它不是
+     * 合法的發票號碼。
      */
-    public static function identifier(mixed $value): ?string
+    public static function invoiceNumber(mixed $value): ?string
     {
-        if (is_bool($value) || is_float($value)) {
-            return null;
-        }
-
-        if (is_int($value)) {
-            return (string) $value;
-        }
-
         if (! is_string($value)) {
             return null;
         }
 
-        $value = trim($value);
+        $text = trim($value);
 
-        return $value === '' ? null : $value;
+        return preg_match('/\A[A-Z]{2}[0-9]{8}\z/', $text) === 1 ? $text : null;
+    }
+
+    /**
+     * A random code, validated against the official `String(4)` shape.
+     *
+     * 官方格式是 4 位數字字串，且**可能有前導零**（`"0123"`）。
+     *
+     * ⛔ R1 修正：初版接受 int，理由是「全數字值可能以整數抵達」——那是**沒有
+     * live 證據的推測**，而且危險：整數 `123` 會被存成 `"123"`（少一碼），
+     * 整數 `0123` 在 JSON 裡根本不合法，而 `"0123"` 一旦變成整數 `123` 就
+     * **永久失去前導零**，無法無損還原。隨機碼是對發票的驗證資料，錯一碼就
+     * 對不上。
+     *
+     * ⛔ 因此只接受 4 位數字**字串**，原值完整保存。若日後有官方或 live 證據
+     * 顯示確實會回傳整數，需另案提出證據再放寬，⛔ 不得自行推測。
+     */
+    public static function randomCode(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $text = trim($value);
+
+        return preg_match('/\A[0-9]{4}\z/', $text) === 1 ? $text : null;
     }
 }

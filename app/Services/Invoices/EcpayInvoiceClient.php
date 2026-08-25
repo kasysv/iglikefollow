@@ -228,22 +228,30 @@ class EcpayInvoiceClient
         }
 
         /*
-         * ⭐ 同一類 false negative：`RandomNumber` 官方型別是 String(4)，但
-         * `1234` 這種全數字值可能以整數到達。舊版只接受 string，於是真正
-         * 開立成功的回應會因為「缺隨機碼」被判成不成功。
+         * ⭐ R1：欄位各自以官方 shape 驗證，並各自留下自己的代碼。
+         *
+         * ⛔ 初版共用一個泛用 `identifier()`（接受任意非空字串與任意整數），
+         * 會讓 `InvoiceNo=1234` 被當成合法發票號碼、`RandomNumber=123` 被存成
+         * 少一碼的 `"123"`。發票號碼與隨機碼是稅務憑證的驗證資料，錯一碼就
+         * 對不上。
          */
-        $number = EcpayScalar::identifier($inner['InvoiceNo'] ?? null);
-        $random = EcpayScalar::identifier($inner['RandomNumber'] ?? null);
-        $date = $this->text($inner['InvoiceDate'] ?? null);
+        $number = EcpayScalar::invoiceNumber($inner['InvoiceNo'] ?? null);
 
-        // 成功碼卻缺必要欄位：⛔ 不能當成開立成功。
-        if ($number === null || $random === null || $date === null) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('ISSUE', 'SHAPE'));
+        if ($number === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('ISSUE', 'NUMBER'));
         }
 
+        $random = EcpayScalar::randomCode($inner['RandomNumber'] ?? null);
+
+        if ($random === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('ISSUE', 'RANDOM'));
+        }
+
+        $date = $this->text($inner['InvoiceDate'] ?? null);
+
         // ⛔ 日期必須符合官方格式才算開立成功；解析不出來就不是可信的成功。
-        if (EcpayInvoiceGateway::parseInvoiceDate($date) === null) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('ISSUE', 'SHAPE'));
+        if ($date === null || EcpayInvoiceGateway::parseInvoiceDate($date) === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('ISSUE', 'DATE'));
         }
 
         return EcpayInvoiceResponse::issued($number, $random, $date);
@@ -305,17 +313,23 @@ class EcpayInvoiceClient
             return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'STATUS'));
         }
 
-        // ⭐ 與 Issue 同樣的放寬：全數字的隨機碼可能以整數到達。
-        $number = EcpayScalar::identifier($inner['IIS_Number'] ?? null);
-        $random = EcpayScalar::identifier($inner['IIS_Random_Number'] ?? null);
-        $date = $this->text($inner['IIS_Create_Date'] ?? null);
+        // ⭐ 與 Issue 完全相同的欄位規則與逐欄代碼。
+        $number = EcpayScalar::invoiceNumber($inner['IIS_Number'] ?? null);
 
-        if ($number === null || $random === null || $date === null) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'SHAPE'));
+        if ($number === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'NUMBER'));
         }
 
-        if (EcpayInvoiceGateway::parseInvoiceDate($date) === null) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'SHAPE'));
+        $random = EcpayScalar::randomCode($inner['IIS_Random_Number'] ?? null);
+
+        if ($random === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'RANDOM'));
+        }
+
+        $date = $this->text($inner['IIS_Create_Date'] ?? null);
+
+        if ($date === null || EcpayInvoiceGateway::parseInvoiceDate($date) === null) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'DATE'));
         }
 
         return EcpayInvoiceResponse::issued($number, $random, $date);

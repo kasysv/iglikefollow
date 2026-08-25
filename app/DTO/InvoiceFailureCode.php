@@ -25,8 +25,12 @@ namespace App\DTO;
  * 一個都不經過這裡——`numeric()` 只接受能通過整數驗證的值，其餘一律降級為
  * 該層的固定 local code。
  *
- * ⛔ 欄位長度：`invoices.failure_code` 與 `invoice_attempts.failure_code` 都是
- * 64 字元。兩段組合的最壞情況遠短於此，`toString()` 仍會硬性截斷作為最後防線。
+ * ⛔ 欄位長度：`invoices.failure_code` 與 `invoice_attempts.failure_code` 在
+ * migration 中明確指定為 64 字元，且 code 全為 ASCII，所以字元數即位元組數。
+ * 兩段組合的最壞情況遠短於此，`toString()` 仍會硬性截斷作為最後防線。
+ *
+ * ⛔ 這個上限只屬於 `failure_code`。`failure_message` 使用 Laravel 預設
+ * `string`（255 字元），⛔ 不受此限——初版誤把兩者混為一談並無謂截短了說明。
  */
 final class InvoiceFailureCode
 {
@@ -50,7 +54,19 @@ final class InvoiceFailureCode
         'IDENTITY',  // MerchantID 或 RelateNumber 與我們的不符
         'TRANS',     // outer TransCode 非 1（有數字時帶數字）
         'DECRYPT',   // AES 解密失敗或解出來不是 array
-        'SHAPE',     // 成功碼但缺必要欄位／日期格式不符
+        'SHAPE',     // 成功碼但整體結構不符（例如缺 Data 欄位）
+        /*
+         * ⭐ R1：把「成功碼但欄位異常」細分到欄位層級。
+         *
+         * ⛔ 初版只有一個 `SHAPE`，同時涵蓋發票號碼、隨機碼與日期。下一次 live
+         * 若仍失敗，Owner 依然不知道是哪一欄被拒絕，等於還是要靠真實發票盲測
+         * ——而那正是本輪要避免的事。
+         *
+         * ⛔ 只記「哪一欄不合格」，絕不記那一欄的值。
+         */
+        'NUMBER',    // 發票號碼不符官方 String(10) shape
+        'RANDOM',    // 隨機碼不符官方 String(4) shape
+        'DATE',      // 開立日期無法以官方格式解析
         'RTN',       // inner RtnCode 非 1（有數字時帶數字）
         'STATUS',    // 查詢結果為未開立或已作廢
         'CONFIG',    // 端點不在白名單、缺 credential、開關關閉

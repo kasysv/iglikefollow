@@ -144,13 +144,14 @@ final class InvoiceIssueResult
             $phase = $this->failureCode?->phase() === 'QUERY' ? '查詢' : '開立';
 
             /*
-             * ⛔ 硬性截斷到 60 bytes。
+             * ⛔ R1 更正：初版誤以為 `failure_message` 是 64 bytes 並用
+             * `mb_strcut(..., 60)` 截斷。實際上 migration 只對 `failure_code`
+             * 指定 64；`failure_message` 用 Laravel 預設 `string`，即 255
+             * 字元。那個截斷既不必要，也會無謂地砍掉給 Owner 看的說明。
              *
-             * `failure_message` 是 64 **bytes**，不是 64 字元——中文一個字 3
-             * bytes，所以一句 24 字的說明就會溢位。`mb_strcut()` 按 bytes 切且
-             * 不會切斷多位元組字元中間（`substr()` 會切出亂碼）。
+             * 說明本身維持短句即可，不再截斷。
              */
-            return mb_strcut($phase.'發票時'.self::layerExplanation($layer), 0, 60);
+            return $phase.'發票時'.self::layerExplanation($layer);
         }
 
         return $this->reason?->message();
@@ -159,8 +160,8 @@ final class InvoiceIssueResult
     /**
      * ⛔ 固定中文說明，一個字都不來自 provider。
      *
-     * 刻意簡短：`failure_message` 只有 64 bytes，中文一個字佔 3 bytes。
-     * 詳細的數字碼在 `failure_code` 欄位，這裡只需要說明「哪一層出問題」。
+     * 詳細的數字碼在 `failure_code` 欄位，這裡只說明「哪一層出問題」；
+     * ⛔ 說明句子不放數字，避免與 code 欄位兩邊不一致。
      *
      * 未登記的層級退回一句通用說明，⛔ 而不是把 token 原樣印出來。
      */
@@ -169,10 +170,14 @@ final class InvoiceIssueResult
         return match ($layer) {
             'HTTP' => '連線或回應異常，結果未確認。',
             'JSON' => '回應格式無法解讀。',
-            'IDENTITY' => '回應的商店或編號不符。',
+            'IDENTITY' => '回應的商店或關聯編號與本站不符。',
             'TRANS' => '對方於外層拒絕本次請求。',
-            'DECRYPT' => '回應無法解密，請確認金鑰。',
-            'SHAPE' => '回應缺少必要欄位或日期有誤。',
+            'DECRYPT' => '回應無法解密，請確認金鑰設定。',
+            'SHAPE' => '回應結構不符預期。',
+            // ⭐ R1：欄位層級各自的說明，Owner 不必再猜是哪一欄。
+            'NUMBER' => '回應的發票號碼格式不符官方規格。',
+            'RANDOM' => '回應的隨機碼格式不符官方規格。',
+            'DATE' => '回應的開立日期無法解析。',
             'RTN' => '對方回覆錯誤代碼。',
             'STATUS' => '發票未開立或已作廢。',
             'CONFIG' => '發票設定不完整或未啟用。',
