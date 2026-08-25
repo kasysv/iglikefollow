@@ -75,6 +75,38 @@ class CheckoutSession
     }
 
     /**
+     * Start a new checkout over the same selection.
+     *
+     * 客人上一張訂單的付款全部收斂為失敗／取消／逾期之後，再按一次「前往付款」
+     * 是**新的一次結帳**，必須有自己的 order、order reference、checkout token
+     * 與 payment attempt reference；舊訂單原樣留著當歷史。token 是那個分界，
+     * 因為 `StartCheckout` 就是靠它決定要沿用舊訂單還是建新的。
+     *
+     * ⛔ 只換 token，不動 variant／quantity／return_url：客人沒有重選商品，
+     * 把選購一起清掉會把他踢回商品頁重來一次。
+     *
+     * ⛔ 只在這裡換。散落各處直接寫 session 陣列，等於有好幾份各自會漂移的
+     * 輪替規則，而其中任何一份漏掉 token 都會靜默地退回沿用舊訂單。
+     *
+     * ⛔ 沒有選購資料時什麼都不做，也不回傳新 token：`token()` 的契約是
+     * 「沒有選購就沒有 token」，這裡不得憑空造出一個。
+     */
+    public function rotateToken(Request $request): ?string
+    {
+        $stored = $request->session()->get(self::KEY);
+
+        if (! is_array($stored) || ! isset($stored['variant_id'], $stored['quantity'])) {
+            return null;
+        }
+
+        $stored['token'] = (string) Str::uuid();
+
+        $request->session()->put(self::KEY, $stored);
+
+        return $stored['token'];
+    }
+
+    /**
      * The current selection, re-validated against the live catalogue.
      *
      * Returns null when the session is missing or expired, when the variant
