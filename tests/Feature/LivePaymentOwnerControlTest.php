@@ -352,11 +352,14 @@ class LivePaymentOwnerControlTest extends TestCase
     }
 
     /** 未設定時顯示「尚未設定」,⛔ 不顯示遮罩假裝已經有值。 */
-    public function test_an_unset_secret_says_so_instead_of_showing_a_mask(): void
+    public function test_an_unset_secret_stays_empty_without_the_removed_status_sentence(): void
     {
-        $html = Livewire::actingAs($this->owner())->test(ManageIntegrationSettings::class)->html();
+        $page = Livewire::actingAs($this->owner())->test(ManageIntegrationSettings::class);
+        $html = $page->html();
 
-        $this->assertStringContainsString('尚未設定', $html);
+        $this->assertSame('', $page->get('data')['ecpay_payment_secret_HashKey']);
+        $this->assertStringNotContainsString('目前狀態：', $html);
+        $this->assertStringNotContainsString('留空保留；輸入新值才覆寫', $html);
     }
 
     /**
@@ -719,8 +722,8 @@ class LivePaymentOwnerControlTest extends TestCase
             ->set('data.ecpay_payment_secret_HashIV', self::SECRET_MARKER)
             ->call('save');
 
-        // ⛔ 儲存後輸入框清空。
-        $this->assertSame('', $page->get('data')['ecpay_payment_secret_HashKey']);
+        // Owner 新規格：儲存後回到固定遮罩，不把真值留在 Livewire state。
+        $this->assertSame(ManageIntegrationSettings::MASK, $page->get('data')['ecpay_payment_secret_HashKey']);
 
         // credential 存好了,但還沒啟用。
         $this->assertFalse(LiveIntegration::availableToCustomer(IntegrationProvider::EcpayPayment));

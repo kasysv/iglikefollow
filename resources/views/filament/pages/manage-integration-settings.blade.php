@@ -143,9 +143,5 @@
             <x-filament::button type="submit">儲存</x-filament::button>
         </div>
 
-        <p class="mt-3 text-sm text-gray-600 dark:text-gray-400">
-            金鑰以加密方式保存，儲存後只顯示 {{ \App\Filament\Pages\ManageIntegrationSettings::MASK }}，
-            不會再顯示真值。欄位留空代表沿用原本的金鑰；要更換時才填入新值。
-        </p>
     </form>
 </x-filament-panels::page>

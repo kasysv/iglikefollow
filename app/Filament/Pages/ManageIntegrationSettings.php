@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Actions\Fulfillment\SyncTheMostPanelServiceCatalogFromOwner;
+use App\Actions\Integrations\RevealIntegrationSecret;
 use App\Actions\Integrations\ToggleIntegrationChannel;
 use App\Actions\Integrations\UpdateIntegrationCredentials;
 use App\Enums\IntegrationEnvironment;
@@ -35,9 +36,9 @@ use UnitEnum;
  *
  * 三條規則決定了這一頁的形狀。
  *
- * **密鑰輸入永遠不回灌。** 已存的值不會被送到瀏覽器、不進 Livewire state、
- * 不出現在 DOM。畫面只顯示固定的 `********` 或「尚未設定」——⛔ 不顯示末四碼,
- * 也不讓星號數量隨真實長度改變:兩者都在洩漏這個值有多長。
+ * **密鑰按需回顯。** 初始頁面只把固定 `********` 送到瀏覽器；active Owner
+ * 明確點擊某一欄的眼睛後，後端才逐欄 allowlist、稽核並回傳該一個真值。
+ * 再點一次、儲存或重新整理都清除真值，不提供整包 credential 的讀取入口。
  *
  * **空白代表「保留原值」。** 所以為了改 MerchantID 而重存這一頁,不會把 Owner
  * 沒有重打的 HashKey 清掉。
@@ -77,6 +78,9 @@ class ManageIntegrationSettings extends Page
 
     public ?array $data = [];
 
+    /** @var array<string, bool> Only field-state flags; values live in after explicit reveal. */
+    public array $revealedSecrets = [];
+
     /** ⛔ 只有 active Owner；isOwner() 已包含 is_active 檢查。 */
     public static function canAccess(): bool
     {
@@ -87,11 +91,18 @@ class ManageIntegrationSettings extends Page
     {
         abort_unless(static::canAccess(), 403);
 
-        // ⛔ 只填非機密欄位；secret 一律留空，不從資料庫回灌。
+        // Initial state contains only public identifiers and a fixed mask, never a secret value.
         $state = [];
 
         foreach (self::providers() as $provider) {
-            $state[$provider->value.'_identifier'] = $this->settingFor($provider)?->identifier ?? '';
+            $setting = $this->settingFor($provider);
+            $state[$provider->value.'_identifier'] = $setting?->identifier ?? '';
+
+            foreach ($provider->secretKeys() as $secretKey) {
+                $state[$this->secretFieldKey($provider, $secretKey)] = $setting?->hasSecret($secretKey)
+                    ? self::MASK
+                    : '';
+            }
         }
 
         $this->form->fill($state);
@@ -140,17 +151,27 @@ class ManageIntegrationSettings extends Page
 
         foreach ($provider->secretKeys() as $secretKey) {
             $configured = $setting?->hasSecret($secretKey) ?? false;
+            $fieldKey = $this->secretFieldKey($provider, $secretKey);
 
-            $fields[] = TextInput::make($provider->value.'_secret_'.$secretKey)
+            $fields[] = TextInput::make($fieldKey)
                 ->label($provider->secretLabel($secretKey))
-                ->password()
-                ->revealable(false)
-                // ⛔ 永遠留空：不把已存的密鑰送到瀏覽器。
-                ->default('')
+                ->password(fn (): bool => ! ($this->revealedSecrets[$fieldKey] ?? false))
+                ->suffixAction(
+                    Action::make('toggle_'.$provider->value.'_'.$secretKey)
+                        ->label(fn (): string => ($this->revealedSecrets[$fieldKey] ?? false) ? '隱藏真值' : '顯示真值')
+                        ->tooltip(fn (): string => ($this->revealedSecrets[$fieldKey] ?? false) ? '隱藏真值' : '顯示真值')
+                        ->icon(fn () => ($this->revealedSecrets[$fieldKey] ?? false)
+                            ? Heroicon::OutlinedEyeSlash
+                            : Heroicon::OutlinedEye)
+                        ->visible($configured)
+                        ->action(fn () => $this->toggleSecretReveal(
+                            $provider->value,
+                            $secretKey,
+                            app(RevealIntegrationSecret::class),
+                        )),
+                )
+                ->default($configured ? self::MASK : '')
                 ->dehydrated()
-                ->helperText($configured
-                    ? '目前狀態：'.self::MASK.'（已設定）。留空保留；輸入新值才覆寫。'
-                    : '目前狀態：尚未設定。')
                 ->maxLength(255);
         }
 
@@ -315,6 +336,43 @@ class ManageIntegrationSettings extends Page
     }
 
     /**
+     * Toggle one field between the fixed mask and an explicitly audited value.
+     *
+     * This public method is callable by a forged Livewire request, so every trust
+     * decision is repeated here and again inside RevealIntegrationSecret.
+     */
+    public function toggleSecretReveal(
+        string $provider,
+        string $secretKey,
+        RevealIntegrationSecret $reveal,
+    ): void {
+        abort_unless(static::canAccess(), 403);
+
+        $resolved = IntegrationProvider::tryFrom($provider);
+        abort_if($resolved === null, 404);
+        abort_unless(in_array($secretKey, $resolved->secretKeys(), true), 404);
+
+        $fieldKey = $this->secretFieldKey($resolved, $secretKey);
+
+        if ($this->revealedSecrets[$fieldKey] ?? false) {
+            $this->data[$fieldKey] = $this->settingFor($resolved)?->hasSecret($secretKey)
+                ? self::MASK
+                : '';
+            unset($this->revealedSecrets[$fieldKey]);
+
+            return;
+        }
+
+        $this->data[$fieldKey] = $reveal->handle($resolved, $secretKey);
+        $this->revealedSecrets[$fieldKey] = true;
+    }
+
+    private function secretFieldKey(IntegrationProvider $provider, string $secretKey): string
+    {
+        return $provider->value.'_secret_'.$secretKey;
+    }
+
+    /**
      * Owner 切換一個通道。
      *
      * ⛔ 後端再檢查一次權限:`canAccess()` 只擋畫面,擋不住偽造的 Livewire 請求。
@@ -391,9 +449,13 @@ class ManageIntegrationSettings extends Page
                 $touched[] = $provider->label();
             }
 
-            // ⛔ 儲存後立即清掉輸入框，密鑰不留在 Livewire state。
+            // After save, clear every revealed value and return to a fixed mask.
             foreach ($provider->secretKeys() as $secretKey) {
-                $this->data[$provider->value.'_secret_'.$secretKey] = '';
+                $fieldKey = $this->secretFieldKey($provider, $secretKey);
+                $this->data[$fieldKey] = $this->settingFor($provider)?->hasSecret($secretKey)
+                    ? self::MASK
+                    : '';
+                unset($this->revealedSecrets[$fieldKey]);
             }
         }
 
