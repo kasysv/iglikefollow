@@ -10,11 +10,13 @@ use App\Filament\Resources\Orders\Pages\ViewOrder;
 use App\Filament\Resources\Orders\RelationManagers\OrderEventsRelationManager;
 use App\Filament\Resources\Orders\RelationManagers\PaymentAttemptsRelationManager;
 use App\Models\FulfillmentOrder;
+use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\PaymentAttempt;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -270,20 +272,44 @@ class OrderAdminTest extends TestCase
         $this->assertStringContainsString('0912345678', $page->html());
     }
 
-    /** ⛔ 發票是稅務資料：Editor 進得了訂單頁，但看不到發票 section 的完整值。 */
-    public function test_the_editor_detail_screen_hides_invoice_sections(): void
+    /**
+     * ⛔ 發票是稅務資料：Editor 進得了訂單頁，但完整發票值一個都不得出現，
+     * 不管是在 HTML 還是 Livewire snapshot 裡——不只是 section 標題消失，
+     * 是連值本身都不能在別處意外冒出來。用一筆帶滿四種模式相關欄位、
+     * 且有實際 Invoice 的訂單建資料，逐值檢查 Editor 看不到任何一個。
+     */
+    public function test_the_editor_detail_screen_leaks_no_invoice_value_anywhere(): void
     {
+        $order = Order::factory()->create([
+            'invoice_kind' => 'business',
+            'personal_invoice_mode' => null,
+            'buyer_tax_id' => '87654321',
+            'buyer_name' => '編輯者不可見股份有限公司',
+        ]);
+
+        $invoice = Invoice::factory()->create([
+            'order_id' => $order->id,
+            'invoice_number' => 'ED99887766',
+            'random_code' => '4321',
+            'provider_reference' => 'EDITOR-SAFE-REF-11223',
+        ]);
+
         $this->actingAs($this->editor());
-        $order = $this->order();
 
         $page = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk();
+        $html = $page->html();
+        $snapshotJson = json_encode($page->snapshot, JSON_UNESCAPED_UNICODE);
 
-        $this->assertStringNotContainsString('客戶要求的發票資料', $page->html());
-        $this->assertStringNotContainsString('實際開立結果', $page->html());
-        $this->assertStringNotContainsString(
-            json_encode('客戶要求的發票資料', JSON_UNESCAPED_UNICODE),
-            json_encode($page->snapshot, JSON_UNESCAPED_UNICODE),
-        );
+        $this->assertStringNotContainsString('客戶要求的發票資料', $html);
+        $this->assertStringNotContainsString('實際開立結果', $html);
+
+        foreach ([
+            '87654321', '編輯者不可見股份有限公司',
+            $invoice->invoice_number, $invoice->random_code, $invoice->provider_reference,
+        ] as $sensitive) {
+            $this->assertStringNotContainsString($sensitive, $html, "Editor HTML 出現敏感值：{$sensitive}");
+            $this->assertStringNotContainsString($sensitive, (string) $snapshotJson, "Editor Livewire snapshot 出現敏感值：{$sensitive}");
+        }
     }
 
     /** ⛔ Owner 看得到發票 section 標題與統編相關欄位（個人 Email 模式不顯示統編）。 */
@@ -298,24 +324,79 @@ class OrderAdminTest extends TestCase
         $this->assertStringContainsString('實際開立結果', $html);
     }
 
-    /** ⛔ 公司發票模式顯示完整統編與抬頭，個人 Email 模式不堆不相關欄位。 */
-    public function test_the_owner_detail_screen_shows_company_invoice_fields(): void
+    /**
+     * ⛔ 四種發票輸入模式的顯示矩陣：每種模式只出現自己的完整值，
+     * 不出現其他模式的欄位；`invoice_kind` 標籤是明確類型文字，
+     * 不是 `invoiceSummary()` 的遮罩摘要（否則公司模式統編會重複顯示一次
+     * 「後 3 碼」版本）。
+     *
+     * @return array<string, array{0: string, 1: ?string, 2: array<string, mixed>, 3: string, 4: list<string>, 5: list<string>}>
+     */
+    public static function invoiceModeProvider(): array
     {
+        return [
+            'personal email' => [
+                'personal', 'email',
+                ['customer_email' => 'personal-email-mode@example.com'],
+                '個人電子發票（寄送至 Email）',
+                ['personal-email-mode@example.com'],
+                ['手機條碼載具', '捐贈碼', '統一編號', '公司抬頭'],
+            ],
+            'personal mobile barcode' => [
+                'personal', 'mobile_barcode',
+                ['carrier_number' => '/AB12345'],
+                '個人電子發票（手機條碼載具）',
+                ['/AB12345'],
+                ['統一編號', '公司抬頭'],
+            ],
+            'personal donation' => [
+                'personal', 'donation',
+                ['love_code' => 'X9988'],
+                '個人電子發票（捐贈）',
+                ['X9988'],
+                ['手機條碼載具', '統一編號', '公司抬頭'],
+            ],
+            'business' => [
+                'business', null,
+                ['buyer_tax_id' => '55667788', 'buyer_name' => '矩陣測試股份有限公司'],
+                '公司電子發票',
+                ['55667788', '矩陣測試股份有限公司'],
+                ['手機條碼載具', '捐贈碼', '寄送 Email'],
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     * @param  list<string>  $expectedPresent
+     * @param  list<string>  $expectedAbsentLabels
+     */
+    #[DataProvider('invoiceModeProvider')]
+    public function test_the_owner_detail_screen_shows_only_the_matching_invoice_mode_fields(
+        string $invoiceKind,
+        ?string $personalMode,
+        array $attributes,
+        string $expectedTypeLabel,
+        array $expectedPresent,
+        array $expectedAbsentLabels,
+    ): void {
         $this->actingAs($this->owner());
-        $order = Order::factory()->create([
-            'customer_email' => 'company-buyer@example.com',
-            'invoice_kind' => 'business',
-            'personal_invoice_mode' => null,
-            'buyer_tax_id' => '12345678',
-            'buyer_name' => '測試股份有限公司',
-        ]);
+        $order = Order::factory()->create(array_merge([
+            'invoice_kind' => $invoiceKind,
+            'personal_invoice_mode' => $personalMode,
+        ], $attributes));
 
         $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
 
-        $this->assertStringContainsString('12345678', $html);
-        $this->assertStringContainsString('測試股份有限公司', $html);
-        $this->assertStringNotContainsString('手機條碼載具', $html);
-        $this->assertStringNotContainsString('捐贈碼', $html);
+        $this->assertStringContainsString($expectedTypeLabel, $html);
+
+        foreach ($expectedPresent as $value) {
+            $this->assertStringContainsString($value, $html, "應顯示：{$value}");
+        }
+
+        foreach ($expectedAbsentLabels as $label) {
+            $this->assertStringNotContainsString($label, $html, "不應出現不相關欄位：{$label}");
+        }
     }
 
     public function test_masking_helpers_reveal_only_the_tail(): void

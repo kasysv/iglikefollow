@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Filament\Resources\Invoices\Pages\ViewInvoice;
+use App\Filament\Resources\Orders\Pages\ViewOrder;
 use App\Models\IntegrationSetting;
 use App\Models\Invoice;
 use App\Models\Order;
@@ -72,5 +73,48 @@ class InvoiceAdminDetailTest extends TestCase
         $this->actingAs($editor)
             ->get('/admin/invoices/'.$invoice->getKey())
             ->assertForbidden();
+    }
+
+    /** ⛔ 未開立時每一欄都顯示占位字串，不是空白或推論成功／失敗。 */
+    public function test_a_pending_invoice_shows_placeholders_not_blank_or_zero(): void
+    {
+        $this->actingAs($this->owner());
+
+        $invoice = Invoice::factory()->create([
+            'order_id' => Order::factory()->create()->id,
+            'invoice_number' => null,
+            'random_code' => null,
+            'provider_reference' => null,
+            'issued_at' => null,
+            'voided_at' => null,
+            'allowance_at' => null,
+        ]);
+
+        $html = Livewire::test(ViewInvoice::class, ['record' => $invoice->getKey()])->assertOk()->html();
+
+        $this->assertStringContainsString('尚未開立', $html);
+        $this->assertStringContainsString('未作廢', $html);
+        $this->assertStringContainsString('無折讓', $html);
+    }
+
+    /**
+     * ⛔ 同一張發票的完整號碼／隨機碼／provider 參考碼，在訂單頁的「電子發票」
+     * section 與獨立發票頁必須顯示相同值——兩個後台頁面不得互相矛盾。
+     */
+    public function test_the_order_page_and_invoice_page_agree_on_the_same_full_values(): void
+    {
+        $this->actingAs($this->owner());
+        $invoice = $this->invoice();
+        $order = $invoice->order;
+
+        $invoicePageHtml = Livewire::test(ViewInvoice::class, ['record' => $invoice->getKey()])
+            ->assertOk()->html();
+        $orderPageHtml = Livewire::test(ViewOrder::class, ['record' => $order->reference])
+            ->assertOk()->html();
+
+        foreach (['AB12345678', '9876', 'REF-TEST-998877'] as $value) {
+            $this->assertStringContainsString($value, $invoicePageHtml, "發票頁缺少：{$value}");
+            $this->assertStringContainsString($value, $orderPageHtml, "訂單頁缺少：{$value}");
+        }
     }
 }

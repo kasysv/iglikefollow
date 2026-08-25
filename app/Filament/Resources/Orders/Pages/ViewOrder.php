@@ -101,10 +101,22 @@ class ViewOrder extends ViewRecord
             Section::make('客戶要求的發票資料')
                 ->visible(fn (): bool => Auth::user()?->isOwner() ?? false)
                 ->schema([
+                    /*
+                     * ⛔ 明確的類型標籤,不沿用 invoiceSummary()——那個方法是
+                     * 給遮罩畫面用的摘要,公司模式會把統編後 3 碼再摘要一次,
+                     * 與下方完整統編欄位重複且語意是「遮罩」不是「類型」。
+                     */
                     TextEntry::make('invoice_kind')->label('發票類型')
-                        ->state(fn (Order $record): string => $record->invoiceSummary()),
+                        ->state(fn (Order $record): string => match (true) {
+                            $record->invoice_kind === 'business' => '公司電子發票',
+                            $record->personal_invoice_mode === 'mobile_barcode' => '個人電子發票（手機條碼載具）',
+                            $record->personal_invoice_mode === 'donation' => '個人電子發票（捐贈）',
+                            default => '個人電子發票（寄送至 Email）',
+                        }),
+                    // ⛔ 只在 personal_invoice_mode 明確為 email 時顯示,不是「非公司」就顯示。
                     TextEntry::make('invoice_email')->label('寄送 Email')
-                        ->visible(fn (Order $record): bool => $record->invoice_kind !== 'business')
+                        ->visible(fn (Order $record): bool => $record->invoice_kind !== 'business'
+                            && $record->personal_invoice_mode === 'email')
                         ->state(fn (Order $record): string => (string) $record->customer_email)
                         ->copyable(),
                     TextEntry::make('carrier_number')->label('手機條碼載具')
