@@ -170,7 +170,17 @@ final class InvoiceIssueResult
         return match ($layer) {
             'HTTP' => '連線或回應異常，結果未確認。',
             'JSON' => '回應格式無法解讀。',
+            // ⛔ 舊 token 的說明保留供相容；新路徑改用下面兩個分開的說明。
             'IDENTITY' => '回應的商店或關聯編號與本站不符。',
+            /*
+             * ⭐ R2：MERCHANT 與 RELATE 各有固定說明。
+             *
+             * ⛔ 不再把「商店或關聯編號」混成同一句——Owner 看到
+             * `ISSUE_MERCHANT` 與 `QUERY_RELATE` 時，需要知道那是兩件完全
+             * 不同的事：前者指向憑證／設定，後者指向查到了別張訂單的發票。
+             */
+            'MERCHANT' => '回應的商店代號與本站設定不符。',
+            'RELATE' => '查詢到的發票關聯編號與本站訂單不符。',
             'TRANS' => '對方於外層拒絕本次請求。',
             'DECRYPT' => '回應無法解密，請確認金鑰設定。',
             'SHAPE' => '回應結構不符預期。',

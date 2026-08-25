@@ -152,10 +152,20 @@ class EcpayInvoiceClient
             return InvoiceFailureCode::local($phase, 'JSON');
         }
 
-        // 回應必須來自我們自己的商店代號。
-        if (($json['MerchantID'] ?? null) !== $merchantId) {
-            // ⛔ 只記「身份不符」這件事；⛔ 不記對方回的那個 MerchantID。
-            return InvoiceFailureCode::local($phase, 'IDENTITY');
+        /*
+         * 回應必須來自我們自己的商店代號。
+         *
+         * ⭐ R2：改用欄位專用的封閉正規化。綠界的 MerchantID 是純數字，若對方
+         * 在 JSON 中以數字回傳，`json_decode` 會給 int，舊版的嚴格 `!==` 字串
+         * 比較就必然不相等——這是 2026-08-26 live 診斷回報
+         * `ISSUE_IDENTITY|QUERY_IDENTITY` 的**最強候選子原因**。
+         *
+         * ⛔ identity 驗證本身沒有被移除或放寬到「不驗」：只多接受「同一個
+         * 數字的 int 表示」，前導零不補、不 trim、負號與科學記號一律拒絕。
+         */
+        if (! EcpayScalar::merchantMatches($json['MerchantID'] ?? null, $merchantId)) {
+            // ⛔ 只記「商店代號不符」這件事；⛔ 不記任何一方的實際值。
+            return InvoiceFailureCode::local($phase, 'MERCHANT');
         }
 
         /*
@@ -290,12 +300,20 @@ class EcpayInvoiceClient
          * ⛔ 只記「身份不符」，不記對方回的 MerchantID 或 RelateNumber——
          * 前者是 credential 的一部分，後者可回推訂單編號。
          */
-        if ($this->text($inner['IIS_Mer_ID'] ?? null) !== $merchantId) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'IDENTITY'));
+        // ⭐ R2：inner 商店代號套用同一個封閉正規化，並有自己的 code。
+        if (! EcpayScalar::merchantMatches($inner['IIS_Mer_ID'] ?? null, $merchantId)) {
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'MERCHANT'));
         }
 
+        /*
+         * ⛔ RelateNumber 維持非空字串與**逐字元全等**，⛔ 不 cast、不 trim、
+         * 不轉大小寫、不移除符號。
+         *
+         * 它是「這張發票屬於哪一張訂單」的唯一鍵；任何正規化都可能讓兩張不同
+         * 訂單的號碼被視為相同，那會把別人的發票收斂到這張訂單上。
+         */
         if ($this->text($inner['IIS_Relate_Number'] ?? null) !== $relateNumber) {
-            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'IDENTITY'));
+            return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'RELATE'));
         }
 
         /*

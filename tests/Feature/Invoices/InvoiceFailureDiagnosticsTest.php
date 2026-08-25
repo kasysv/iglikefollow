@@ -372,11 +372,34 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     }
 
     /** ⛔ 商店代號不符：只記身份不符，不記對方回的 MerchantID。 */
-    public function test_a_merchant_mismatch_records_identity_without_the_value(): void
+    /**
+     * ⭐ R2：outer 商店代號不符有自己的 code，且⛔ 不記任何一方的實際值。
+     */
+    public static function outerMerchantRejectionProvider(): array
+    {
+        return [
+            'wrong digits' => ['9999999'],
+            'missing' => [null],
+            'bool' => [true],
+            // ⛔ float 不列在這裡：`json_encode(2000132.0)` 產生整數 2000132，
+            // 因此 float 不可能經由 wire 抵達。normalizer 對真正 float 的拒絕
+            // 由 test_the_merchant_normalizer_rejects_unsafe_types 直接涵蓋。
+            'array' => [['2000132']],
+            'padded' => [' 2000132 '],
+            'signed' => ['+2000132'],
+            'sci notation' => ['2.000132e6'],
+            'negative' => [-2000132],
+            'empty' => [''],
+            'overlong' => ['20001320000000'],
+        ];
+    }
+
+    #[DataProvider('outerMerchantRejectionProvider')]
+    public function test_an_outer_merchant_mismatch_records_its_own_code(mixed $merchantId): void
     {
         Http::fake([
             self::ISSUE => Http::response([
-                'MerchantID' => '9999999',
+                'MerchantID' => $merchantId,
                 'TransCode' => 1,
                 'Data' => 'x',
             ], 200),
@@ -385,8 +408,67 @@ class InvoiceFailureDiagnosticsTest extends TestCase
 
         $result = $this->gateway()->issue($this->invoiceFor($this->paidOrder()), 'k');
 
-        $this->assertStringStartsWith('ISSUE_IDENTITY', (string) $result->code());
+        $this->assertStringStartsWith('ISSUE_MERCHANT', (string) $result->code());
         $this->assertStringNotContainsString('9999999', (string) $result->code());
+        $this->assertStringNotContainsString(self::MERCHANT, (string) $result->code());
+    }
+
+    /**
+     * ⭐ R2 相容性：同一個數字以 int 回傳時必須被接受。
+     *
+     * 綠界的 MerchantID 是純數字；若對方在 JSON 中以數字回傳，`json_decode`
+     * 會給 int，舊版的嚴格字串比較就必然不相等。這是 2026-08-26 live 診斷
+     * `ISSUE_IDENTITY|QUERY_IDENTITY` 的**最強候選子原因**，⛔ 但仍不是已
+     * 證實的根因。
+     */
+    public function test_an_integer_outer_merchant_id_is_accepted(): void
+    {
+        Http::fake([self::ISSUE => Http::response([
+            'MerchantID' => (int) self::MERCHANT,
+            'RpHeader' => ['Timestamp' => 1755400000],
+            'TransCode' => 1,
+            'TransMsg' => '',
+            'Data' => $this->aes()->encrypt([
+                'RtnCode' => 1,
+                'InvoiceNo' => 'AB12345678',
+                'RandomNumber' => '1234',
+                'InvoiceDate' => '2026-08-17 10:30:00',
+            ]),
+        ], 200)]);
+
+        $invoice = $this->invoiceFor($this->paidOrder());
+        app(IssueInvoice::class)->handle($invoice);
+
+        $invoice = $invoice->fresh();
+
+        // ⛔ 端到端落盤，不是只驗 DTO。
+        $this->assertSame(InvoiceStatus::Issued, $invoice->status);
+        $this->assertSame('AB12345678', $invoice->invoice_number);
+        $this->assertNull($invoice->failure_code);
+    }
+
+    /**
+     * ⛔ 前導零不得被猜測補回。
+     *
+     * 本站設定 `0012345`、provider 回 int `12345` 時，前導零已在型別轉換中
+     * 遺失且無法無損還原——此時必須維持不相等，否則等於接受一個可能不是
+     * 我們的商店代號。
+     */
+    public function test_a_leading_zero_merchant_id_never_matches_a_bare_integer(): void
+    {
+        $this->assertFalse(EcpayScalar::merchantMatches(12345, '0012345'));
+        $this->assertFalse(EcpayScalar::merchantMatches('12345', '0012345'));
+        // 同樣形狀才相等。
+        $this->assertTrue(EcpayScalar::merchantMatches('0012345', '0012345'));
+    }
+
+    /** ⛔ 本站設定本身不合法時一律 false，不得因兩邊都怪而意外相等。 */
+    public function test_an_invalid_configured_merchant_id_never_matches(): void
+    {
+        foreach (['', 'ABC', ' 2000132 ', '20001320000000', '-1'] as $badConfig) {
+            $this->assertFalse(EcpayScalar::merchantMatches('2000132', $badConfig));
+            $this->assertFalse(EcpayScalar::merchantMatches($badConfig, $badConfig));
+        }
     }
 
     /** AES 解不開：固定 decrypt code。 */
@@ -561,8 +643,24 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     public static function queryRejectionProvider(): array
     {
         return [
-            'wrong merchant' => [['IIS_Mer_ID' => '9999999'], 'QUERY_IDENTITY'],
-            'wrong relate number' => [['IIS_Relate_Number' => 'OTHER01'], 'QUERY_IDENTITY'],
+            // ⭐ R2：商店代號與關聯編號各有自己的 code。
+            'wrong merchant' => [['IIS_Mer_ID' => '9999999'], 'QUERY_MERCHANT'],
+            'missing merchant' => [['IIS_Mer_ID' => null], 'QUERY_MERCHANT'],
+            'bool merchant' => [['IIS_Mer_ID' => true], 'QUERY_MERCHANT'],
+            // ⛔ float 經 JSON 會變成整數，不可能經由 wire 抵達；改由 normalizer
+            // 的直接單元測試涵蓋。
+            'array merchant' => [['IIS_Mer_ID' => ['2000132']], 'QUERY_MERCHANT'],
+            'padded merchant' => [['IIS_Mer_ID' => ' 2000132 '], 'QUERY_MERCHANT'],
+            'signed merchant' => [['IIS_Mer_ID' => '+2000132'], 'QUERY_MERCHANT'],
+            'sci merchant' => [['IIS_Mer_ID' => '2.000132e6'], 'QUERY_MERCHANT'],
+            'negative merchant' => [['IIS_Mer_ID' => -2000132], 'QUERY_MERCHANT'],
+            'empty merchant' => [['IIS_Mer_ID' => ''], 'QUERY_MERCHANT'],
+
+            'wrong relate number' => [['IIS_Relate_Number' => 'OTHER01'], 'QUERY_RELATE'],
+            'missing relate number' => [['IIS_Relate_Number' => null], 'QUERY_RELATE'],
+            'int relate number' => [['IIS_Relate_Number' => 12345678], 'QUERY_RELATE'],
+            'array relate number' => [['IIS_Relate_Number' => ['X']], 'QUERY_RELATE'],
+            'empty relate number' => [['IIS_Relate_Number' => ''], 'QUERY_RELATE'],
             'not issued' => [['IIS_Issue_Status' => '0'], 'QUERY_STATUS'],
             'voided' => [['IIS_Invalid_Status' => '1'], 'QUERY_STATUS'],
 
@@ -843,6 +941,97 @@ class InvoiceFailureDiagnosticsTest extends TestCase
         $this->assertSame(1, $issues);
     }
 
+    /**
+     * ⭐ R2 事故回歸：Issue 未收斂，Query 以 int 商店代號查到既有發票。
+     *
+     * 這正是 Owner 那張「綠界端已開立、本站收不回來」的發票所走的路徑：
+     * 若 provider 以數字回傳 MerchantID，舊版三個 identity 檢查會全部拒絕，
+     * 於是 `ISSUE_IDENTITY|QUERY_IDENTITY`。
+     *
+     * ⛔ 必須端到端落盤，且恰好一次 Issue——查詢不得變成第二次開立。
+     */
+    public function test_a_positive_query_with_integer_merchant_ids_persists_as_issued(): void
+    {
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order);
+        $relate = EcpayInvoiceGateway::relateNumberFor($invoice);
+
+        $queryBody = [
+            'MerchantID' => (int) self::MERCHANT,
+            'RpHeader' => ['Timestamp' => 1755400000],
+            'TransCode' => 1,
+            'TransMsg' => '',
+            'Data' => $this->aes()->encrypt([
+                'RtnCode' => 1,
+                // ⭐ inner 商店代號同樣以整數回傳。
+                'IIS_Mer_ID' => (int) self::MERCHANT,
+                'IIS_Number' => 'AB12345678',
+                'IIS_Relate_Number' => $relate,
+                'IIS_Create_Date' => '2026-08-17 10:30:00',
+                'IIS_Random_Number' => '1234',
+                'IIS_Issue_Status' => '1',
+                'IIS_Invalid_Status' => '0',
+            ]),
+        ];
+
+        Http::fake([
+            self::ISSUE => Http::response($this->reply(['RtnCode' => 10000001, 'RtnMsg' => self::POISON])),
+            self::QUERY => Http::response($queryBody, 200),
+        ]);
+
+        app(IssueInvoice::class)->handle($invoice);
+
+        $invoice = $invoice->fresh();
+
+        $this->assertSame(InvoiceStatus::Issued, $invoice->status);
+        $this->assertSame('AB12345678', $invoice->invoice_number);
+        $this->assertSame('1234', $invoice->random_code);
+        $this->assertSame('2026-08-17 10:30:00', $invoice->issued_at->format('Y-m-d H:i:s'));
+        // ⛔ 收斂成功後不得留下任何失敗痕跡。
+        $this->assertNull($invoice->failure_code);
+        $this->assertNull($invoice->failure_message);
+
+        $attempt = $invoice->attempts()->firstOrFail();
+        $this->assertSame(InvoiceAttemptStatus::Succeeded, $attempt->status);
+        $this->assertNull($attempt->failure_code);
+
+        // ⛔ 恰好一次 Issue。
+        $issues = 0;
+
+        foreach (Http::recorded() as [$request]) {
+            if (str_ends_with($request->url(), '/Issue')) {
+                $issues++;
+            }
+        }
+
+        $this->assertSame(1, $issues);
+    }
+
+    /**
+     * ⛔ 商店代號與關聯編號的說明必須是兩件不同的事。
+     *
+     * Owner 看到 `ISSUE_MERCHANT` 與 `QUERY_RELATE` 時，需要分得出前者指向
+     * 憑證／設定，後者指向查到了別張訂單的發票。
+     */
+    public function test_merchant_and_relate_have_distinct_explanations(): void
+    {
+        Http::fake([
+            self::ISSUE => Http::response([
+                'MerchantID' => '9999999', 'TransCode' => 1, 'Data' => 'x',
+            ], 200),
+            self::QUERY => Http::response($this->queryNotFound()),
+        ]);
+
+        $merchantMessage = (string) $this->gateway()
+            ->issue($this->invoiceFor($this->paidOrder()), 'k')->message();
+
+        $this->assertStringContainsString('商店代號', $merchantMessage);
+        $this->assertStringNotContainsString('關聯編號', $merchantMessage);
+        // ⛔ 說明不得含任何一方的實際值。
+        $this->assertStringNotContainsString('9999999', $merchantMessage);
+        $this->assertStringNotContainsString(self::MERCHANT, $merchantMessage);
+    }
+
     // ==================================== 7. value object 本身
 
     public function test_the_failure_code_rejects_non_numeric_values(): void
@@ -932,6 +1121,36 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     }
 
     /** identifier：放寬 int，⛔ 但仍拒絕 bool／float／array。 */
+    /** 商店代號：1–10 位純數字字串；相容接受非負 int。 */
+    public function test_the_merchant_normalizer_accepts_official_and_integer_forms(): void
+    {
+        $this->assertSame('2000132', EcpayScalar::merchantId('2000132'));
+        $this->assertSame('2000132', EcpayScalar::merchantId(2000132));
+        $this->assertSame('0', EcpayScalar::merchantId(0));
+        $this->assertSame('0012345', EcpayScalar::merchantId('0012345'), '⛔ 字串前導零必須保留。');
+        $this->assertSame('1234567890', EcpayScalar::merchantId('1234567890'));
+    }
+
+    /**
+     * ⛔ 每一種不安全表示都必須回 null。
+     *
+     * 含 float——它經由 JSON 不可達，但 normalizer 仍須拒絕，否則日後若有
+     * 非 JSON 來源就會靜默放行。
+     */
+    public function test_the_merchant_normalizer_rejects_unsafe_types(): void
+    {
+        foreach ([
+            true, false, 2000132.0, 1.5, ['2000132'], null,
+            '', '   ', ' 2000132 ', '+2000132', '-2000132', -2000132,
+            '2.000132e6', '0x1E', 'ABC', '2000132A', '12345678901',
+        ] as $unsafe) {
+            $this->assertNull(
+                EcpayScalar::merchantId($unsafe),
+                '⛔ 不安全的商店代號必須拒絕：'.var_export($unsafe, true),
+            );
+        }
+    }
+
     /** 發票號碼：官方 String(10) ＝ 2 碼大寫字軌 + 8 碼數字。 */
     public function test_the_invoice_number_parser_enforces_the_official_shape(): void
     {

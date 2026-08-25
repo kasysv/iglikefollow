@@ -104,6 +104,71 @@ final class EcpayScalar
     }
 
     /**
+     * A merchant id, normalised for comparison only.
+     *
+     * ⭐ 2026-08-26 live 證據：Owner 在含新診斷碼的 staging 按「重拿發票」，
+     * 後台得到 `ISSUE_IDENTITY|QUERY_IDENTITY`——Issue 與後續 GetIssue **都有
+     * 回應**，但兩段都在 identity 檢查被拒。
+     *
+     * 本站的 MerchantID 設定存成字串（`integration_settings.identifier`），
+     * 而綠界的 MerchantID 是純數字；若對方在 JSON 中以**數字**回傳，
+     * `json_decode` 會給出 int，舊版的嚴格 `!==` 字串比較就必然不相等。
+     * 這是目前**最強的候選子原因**，⛔ 但仍不是已證實的根因——現行 code 把
+     * outer MerchantID、inner `IIS_Mer_ID` 與 `IIS_Relate_Number` 三個拒絕點
+     * 折成同一個 `IDENTITY`，本輪拆開後才可能由下一次 live 確認。
+     *
+     * ⛔ 只做「用來比較」的正規化，規則刻意很窄：
+     *
+     *  - 接受 1–10 位純數字字串（綠界 MerchantID 的實際形狀）；
+     *  - 相容接受**非負 int**，轉為十進位字串；
+     *  - ⛔ 不 trim：`" 2000132 "` 代表對方送來的形狀有問題，不是同一個值；
+     *  - ⛔ 拒絕正負號、科學記號、float、bool、array、object、null、空字串、
+     *    超長值。
+     *
+     * ⛔ 前導零不補：若本站設定是 `"0012345"` 而 provider 回 int `12345`，
+     * 前導零已在型別轉換中遺失且**無法無損還原**，此時必須維持不相等——
+     * 猜測補零等於接受一個可能不是我們的商店代號。
+     */
+    public static function merchantId(mixed $value): ?string
+    {
+        // ⛔ bool 先擋：`is_int(true)` 為 false，但很多寬鬆路徑會放行它。
+        if (is_bool($value)) {
+            return null;
+        }
+
+        if (is_int($value)) {
+            // ⛔ 負數不是合法的商店代號。
+            return $value >= 0 && $value <= 9999999999 ? (string) $value : null;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        // ⛔ 不 trim：形狀不同就是不同。
+        return preg_match('/\A[0-9]{1,10}\z/', $value) === 1 ? $value : null;
+    }
+
+    /**
+     * Do a provider-supplied merchant id and our configured one match?
+     *
+     * ⛔ 兩邊都要通過驗證：本站設定本身若不是合法的數字字串，這裡一律回 false
+     * ——設定壞掉時不得因為「兩邊都怪」而意外相等。
+     */
+    public static function merchantMatches(mixed $provided, string $configured): bool
+    {
+        $expected = self::merchantId($configured);
+
+        if ($expected === null) {
+            return false;
+        }
+
+        $actual = self::merchantId($provided);
+
+        return $actual !== null && $actual === $expected;
+    }
+
+    /**
      * An invoice number, validated against the official `String(10)` shape.
      *
      * ⛔ R1 修正：初版用一個泛用的 `identifier()` 同時處理發票號碼與隨機碼，

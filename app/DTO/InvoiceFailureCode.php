@@ -51,7 +51,17 @@ final class InvoiceFailureCode
     private const LAYERS = [
         'HTTP',      // 連線失敗、逾時、非 2xx
         'JSON',      // body 不是 JSON 或不是 array
-        'IDENTITY',  // MerchantID 或 RelateNumber 與我們的不符
+        /*
+         * ⛔ 舊 token，保留供相容（既有資料可能已寫入）。
+         *
+         * ⭐ R2 起新路徑不再使用它：2026-08-26 的 live 診斷回報
+         * `ISSUE_IDENTITY|QUERY_IDENTITY`，但那同時涵蓋 outer MerchantID、
+         * inner `IIS_Mer_ID` 與 `IIS_Relate_Number` 三個拒絕點，Owner 仍分
+         * 不出是哪一個。改由下面兩個各自獨立的 token 記錄。
+         */
+        'IDENTITY',
+        'MERCHANT',  // 商店代號與本站設定不符
+        'RELATE',    // 查詢回應的關聯編號與本站不符
         'TRANS',     // outer TransCode 非 1（有數字時帶數字）
         'DECRYPT',   // AES 解密失敗或解出來不是 array
         'SHAPE',     // 成功碼但整體結構不符（例如缺 Data 欄位）
