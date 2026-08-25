@@ -82,26 +82,56 @@
                     @endif
                 </div>
 
-                @if ($state['enabled'])
-                    {{-- ⛔ 停用永遠可按，不因設定不完整而被鎖住：最需要能關掉的
-                         時候，通常正是出了什麼事的時候。 --}}
-                    <x-filament::button
-                        color="danger"
-                        wire:click="toggleChannel('{{ $state['provider']->value }}', false)"
-                        wire:loading.attr="disabled">
-                        停用
-                    </x-filament::button>
-                @else
-                    {{-- 設定不完整或技術條件未達時不給按，但這只是提示：真正的
-                         規則在後端，一份手寫的 Livewire payload 從來不經過畫面。 --}}
-                    <x-filament::button
-                        color="primary"
-                        :disabled="! $state['configured'] || $state['blockers'] !== []"
-                        wire:click="toggleChannel('{{ $state['provider']->value }}', true)"
-                        wire:loading.attr="disabled">
-                        啟用
-                    </x-filament::button>
-                @endif
+                @php($switchDisabled = ! $state['enabled'] && (! $state['configured'] || $state['blockers'] !== []))
+
+                {{--
+                    ⛔ D1：左右滑動 switch 取代舊的啟用／停用兩個按鈕。
+                    - 真正可鍵盤操作的 button，`role="switch"` 與 `aria-checked`
+                      跟著實際狀態走，Space／Enter 原生可觸發（button 預設語意）。
+                    - 顏色以外一定有文字「已開啟／已關閉」，不能只靠顏色判斷。
+                    - 停用永遠可按（`$switchDisabled` 只在「目前 OFF 且不可開啟」
+                      時為 true）；ON 狀態永遠能切回 OFF，最需要關掉的時候不能被鎖住。
+                    - `wire:loading.attr="disabled"` 鎖定的是「這一個」switch：
+                      用 `wire:target` 限定只有這次 toggleChannel 呼叫在跑的時候
+                      才鎖住自己，不影響畫面上其他 switch 或送出中的表單。
+                    - `wire:key` 讓 Livewire 每次 render 都能正確對應到同一個
+                      DOM 節點，避免快速切換時 diff 到別的 provider 上。
+                --}}
+                <div class="flex items-center gap-3">
+                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ $state['enabled'] ? '已開啟' : '已關閉' }}
+                    </span>
+
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked="{{ $state['enabled'] ? 'true' : 'false' }}"
+                        aria-label="{{ $state['label'] }}{{ $isDispatch ? '自動派單總開關' : '' }}"
+                        wire:key="channel-switch-{{ $state['provider']->value }}"
+                        wire:click="toggleChannel('{{ $state['provider']->value }}', {{ $state['enabled'] ? 'false' : 'true' }})"
+                        wire:loading.attr="disabled"
+                        wire:target="toggleChannel('{{ $state['provider']->value }}', {{ $state['enabled'] ? 'false' : 'true' }})"
+                        @disabled($switchDisabled)
+                        @class([
+                            'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full',
+                            'border-2 border-transparent transition-colors duration-200 ease-in-out',
+                            'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                            'disabled:cursor-not-allowed disabled:opacity-50',
+                            'bg-primary-600' => $state['enabled'],
+                            'bg-gray-300 dark:bg-gray-600' => ! $state['enabled'],
+                        ])
+                    >
+                        <span
+                            aria-hidden="true"
+                            @class([
+                                'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow',
+                                'transform ring-0 transition duration-200 ease-in-out',
+                                'translate-x-5' => $state['enabled'],
+                                'translate-x-0' => ! $state['enabled'],
+                            ])
+                        ></span>
+                    </button>
+                </div>
             </div>
         @endforeach
     </div>

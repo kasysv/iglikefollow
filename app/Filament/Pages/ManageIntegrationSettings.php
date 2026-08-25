@@ -319,6 +319,10 @@ class ManageIntegrationSettings extends Page
      *
      * ⛔ 後端再檢查一次權限:`canAccess()` 只擋畫面,擋不住偽造的 Livewire 請求。
      * 實際規則在 action 與 observer 上,這裡只負責把結果告訴 Owner。
+     *
+     * ⛔ D1:前端 switch 只是操作介面,這裡仍是唯一真正決定開關狀態的地方;
+     * `$togglingChannel` 只在這一次呼叫期間鎖定該 switch,避免 double-click
+     * 造成兩次相反的切換疊加成看似沒變化。
      */
     public function toggleChannel(string $provider, bool $enable, ToggleIntegrationChannel $toggle): void
     {

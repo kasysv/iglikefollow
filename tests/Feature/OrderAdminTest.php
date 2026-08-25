@@ -245,15 +245,77 @@ class OrderAdminTest extends TestCase
         $this->assertStringContainsString('@example.com', $html);
     }
 
-    public function test_the_detail_screen_masks_contact_details(): void
+    /** ⛔ M4C:Owner 詳情頁改為完整顯示聯絡資料，客服才能真的聯絡客人。 */
+    public function test_the_owner_detail_screen_shows_full_contact_details(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order();
+
+        $page = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk();
+
+        $this->assertStringContainsString('private@example.com', $page->html());
+        $this->assertStringContainsString('0912345678', $page->html());
+        $this->assertStringContainsString('example_account', $page->html());
+    }
+
+    /** ⛔ Editor 沿用 OrderPolicy，客服工作需要完整聯絡與交付資料。 */
+    public function test_the_editor_detail_screen_also_shows_full_contact_details(): void
+    {
+        $this->actingAs($this->editor());
+        $order = $this->order();
+
+        $page = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk();
+
+        $this->assertStringContainsString('private@example.com', $page->html());
+        $this->assertStringContainsString('0912345678', $page->html());
+    }
+
+    /** ⛔ 發票是稅務資料：Editor 進得了訂單頁，但看不到發票 section 的完整值。 */
+    public function test_the_editor_detail_screen_hides_invoice_sections(): void
+    {
+        $this->actingAs($this->editor());
+        $order = $this->order();
+
+        $page = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk();
+
+        $this->assertStringNotContainsString('客戶要求的發票資料', $page->html());
+        $this->assertStringNotContainsString('實際開立結果', $page->html());
+        $this->assertStringNotContainsString(
+            json_encode('客戶要求的發票資料', JSON_UNESCAPED_UNICODE),
+            json_encode($page->snapshot, JSON_UNESCAPED_UNICODE),
+        );
+    }
+
+    /** ⛔ Owner 看得到發票 section 標題與統編相關欄位（個人 Email 模式不顯示統編）。 */
+    public function test_the_owner_detail_screen_shows_invoice_sections(): void
     {
         $this->actingAs($this->owner());
         $order = $this->order();
 
         $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
 
-        $this->assertStringNotContainsString('private@example.com', $html);
-        $this->assertStringNotContainsString('0912345678', $html);
+        $this->assertStringContainsString('客戶要求的發票資料', $html);
+        $this->assertStringContainsString('實際開立結果', $html);
+    }
+
+    /** ⛔ 公司發票模式顯示完整統編與抬頭，個人 Email 模式不堆不相關欄位。 */
+    public function test_the_owner_detail_screen_shows_company_invoice_fields(): void
+    {
+        $this->actingAs($this->owner());
+        $order = Order::factory()->create([
+            'customer_email' => 'company-buyer@example.com',
+            'invoice_kind' => 'business',
+            'personal_invoice_mode' => null,
+            'buyer_tax_id' => '12345678',
+            'buyer_name' => '測試股份有限公司',
+        ]);
+
+        $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
+
+        $this->assertStringContainsString('12345678', $html);
+        $this->assertStringContainsString('測試股份有限公司', $html);
+        $this->assertStringNotContainsString('手機條碼載具', $html);
+        $this->assertStringNotContainsString('捐贈碼', $html);
     }
 
     public function test_masking_helpers_reveal_only_the_tail(): void

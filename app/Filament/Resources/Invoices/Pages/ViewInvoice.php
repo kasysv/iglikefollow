@@ -4,7 +4,6 @@ namespace App\Filament\Resources\Invoices\Pages;
 
 use App\Enums\InvoiceStatus;
 use App\Filament\Resources\Invoices\InvoiceResource;
-use App\Models\Invoice;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Pages\ViewRecord;
@@ -32,13 +31,23 @@ class ViewInvoice extends ViewRecord
                         ->color(fn (InvoiceStatus $state) => $state->color()),
                     TextEntry::make('amount')->label('金額（整數台幣）')
                         ->formatStateUsing(fn ($state) => 'NT$'.number_format((int) $state)),
-                    // ⛔ 遮罩顯示，不完整回顯。
+                    /*
+                     * ⛔ InvoiceResource／InvoicePolicy 本身已是 Owner-only,
+                     * 進得了這一頁就可以看到完整值——與訂單頁「電子發票」
+                     * section 使用同一語意,兩個後台頁面不互相矛盾。
+                     */
                     TextEntry::make('invoice_number')->label('發票號碼')
-                        ->formatStateUsing(fn ($state, Invoice $record) => $record->maskedInvoiceNumber() ?? '—'),
-                    TextEntry::make('provider_reference')->label('provider 參考碼')
-                        ->formatStateUsing(fn ($state, Invoice $record) => $record->maskedProviderReference() ?? '—'),
+                        ->placeholder('尚未開立')->copyable(),
+                    TextEntry::make('random_code')->label('隨機碼')
+                        ->placeholder('尚未開立')->copyable(),
+                    TextEntry::make('provider_reference')->label('供應商參考碼')
+                        ->placeholder('尚未開立')->copyable(),
                     TextEntry::make('issued_at')->label('開立時間')->dateTime('Y-m-d H:i:s')
                         ->placeholder('尚未開立'),
+                    TextEntry::make('voided_at')->label('作廢時間')->dateTime('Y-m-d H:i:s')
+                        ->placeholder('未作廢'),
+                    TextEntry::make('allowance_at')->label('折讓時間')->dateTime('Y-m-d H:i:s')
+                        ->placeholder('無折讓'),
                 ])->columns(3),
 
             Section::make('狀態說明')
