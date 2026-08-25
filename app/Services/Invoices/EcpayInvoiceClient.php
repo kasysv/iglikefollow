@@ -306,13 +306,23 @@ class EcpayInvoiceClient
         }
 
         /*
-         * ⛔ RelateNumber 維持非空字串與**逐字元全等**，⛔ 不 cast、不 trim、
-         * 不轉大小寫、不移除符號。
+         * ⛔ RelateNumber 必須是非空字串且與預期值**逐字元全等**——不 trim、
+         * 不 cast、不轉大小寫、不做 Unicode 正規化、不移除任何符號。
          *
-         * 它是「這張發票屬於哪一張訂單」的唯一鍵；任何正規化都可能讓兩張不同
-         * 訂單的號碼被視為相同，那會把別人的發票收斂到這張訂單上。
+         * 它是「這張發票屬於哪一張訂單」的唯一鍵；任何正規化都讓「看起來一樣」
+         * 的兩個值被視為同一個，那正是把**別張訂單的發票**收斂到這張訂單上的
+         * 路徑。
+         *
+         * ⛔ R3 修正：R2 的註解已經這樣寫，但實作卻呼叫了會先 `trim()` 的
+         * `text()`——於是 `" <正確值>"` 與 `"<正確值> "` 都被錯誤接受。註解與
+         * 程式不一致，而測試沒有覆蓋「正確值只多空白」這一格，所以綠燈掩蓋了
+         * 它。這裡改為專用的 exact-string 判斷，⛔ 刻意不重用 `text()`。
+         *
+         * ⛔ `text()` 仍供日期等其他欄位使用，其既有行為未改動。
          */
-        if ($this->text($inner['IIS_Relate_Number'] ?? null) !== $relateNumber) {
+        $relate = $inner['IIS_Relate_Number'] ?? null;
+
+        if (! is_string($relate) || $relate === '' || $relate !== $relateNumber) {
             return EcpayInvoiceResponse::uncertain(InvoiceFailureCode::local('QUERY', 'RELATE'));
         }
 

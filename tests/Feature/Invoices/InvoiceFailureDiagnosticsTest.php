@@ -1008,6 +1008,177 @@ class InvoiceFailureDiagnosticsTest extends TestCase
     }
 
     /**
+     * ⭐ R3 反證：只多前／後空白的 RelateNumber 必須被拒絕。
+     *
+     * ⛔ R2 的註解與結果文件都聲稱「逐字元全等、不 trim」，但實作仍呼叫會先
+     * `trim()` 的 `text()`。provider 回 `" <正確值>"` 或 `"<正確值> "` 時會被
+     * **錯誤接受**——本機實測四種空白變體全部誤判為相符。
+     *
+     * 為什麼這在稅務憑證上是實質風險：`RelateNumber` 是「這張發票屬於哪一張
+     * 訂單」的唯一鍵。任何正規化都讓「看起來一樣」的兩個值被視為同一個，
+     * 而那正是把**別張訂單的發票**收斂到這張訂單上的路徑。空白看似無害，
+     * 但它與大小寫、全形半形一樣，都是「我沒有逐字元確認就採信」的同一類錯誤。
+     *
+     * ⛔ 舊 data provider 只有 wrong／missing／int／array／empty，沒有「正確值
+     * 只多空白」這一格，所以綠燈完全沒有覆蓋這個漏洞。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function whitespacePaddedRelateNumberProvider(): array
+    {
+        return [
+            'leading space' => [' '],
+            'trailing space' => ['  '],
+            'tab' => ["\t"],
+            'newline' => ["\n"],
+        ];
+    }
+
+    #[DataProvider('whitespacePaddedRelateNumberProvider')]
+    public function test_a_relate_number_differing_only_by_whitespace_is_rejected(string $pad): void
+    {
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order);
+
+        // ⭐ 用**當次真正推導出來的**正確值，只在前後加空白。
+        $relate = EcpayInvoiceGateway::relateNumberFor($invoice);
+
+        foreach ([$pad.$relate, $relate.$pad, $pad.$relate.$pad] as $padded) {
+            // 前置條件：這確實只是空白差異，trim 之後會相等。
+            $this->assertSame($relate, trim($padded));
+            $this->assertNotSame($relate, $padded);
+
+            Http::fake([
+                self::ISSUE => Http::response($this->reply([
+                    'RtnCode' => 10000001,
+                    'RtnMsg' => self::POISON,
+                ])),
+                self::QUERY => Http::response($this->reply([
+                    'RtnCode' => 1,
+                    'IIS_Mer_ID' => self::MERCHANT,
+                    'IIS_Number' => 'AB12345678',
+                    'IIS_Relate_Number' => $padded,
+                    'IIS_Create_Date' => '2026-08-17 10:30:00',
+                    'IIS_Random_Number' => '1234',
+                    'IIS_Issue_Status' => '1',
+                    'IIS_Invalid_Status' => '0',
+                ])),
+            ]);
+
+            $result = $this->gateway()->issue($invoice, 'k');
+
+            $this->assertFalse(
+                $result->isIssued(),
+                '⛔ 只差空白的關聯編號不得被採信：'.json_encode($padded),
+            );
+            $this->assertStringContainsString('QUERY_RELATE', (string) $result->code());
+        }
+    }
+
+    /**
+     * ⛔ 非字串型別的關聯編號一律拒絕。
+     *
+     * 現行實作先做 `is_string()` 與非空檢查，才做逐字元比較。這一格釘住那道
+     * 型別閘門本身。
+     */
+    public function test_a_non_string_relate_number_is_rejected(): void
+    {
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order);
+
+        foreach ([12345678, 0, true, false, null, ['x'], 1.5] as $nonString) {
+            Http::fake([
+                self::ISSUE => Http::response($this->reply(['RtnCode' => 10000001, 'RtnMsg' => self::POISON])),
+                self::QUERY => Http::response($this->reply([
+                    'RtnCode' => 1,
+                    'IIS_Mer_ID' => self::MERCHANT,
+                    'IIS_Number' => 'AB12345678',
+                    'IIS_Relate_Number' => $nonString,
+                    'IIS_Create_Date' => '2026-08-17 10:30:00',
+                    'IIS_Random_Number' => '1234',
+                    'IIS_Issue_Status' => '1',
+                    'IIS_Invalid_Status' => '0',
+                ])),
+            ]);
+
+            $result = $this->gateway()->issue($invoice, 'k');
+
+            $this->assertFalse(
+                $result->isIssued(),
+                '⛔ 非字串的關聯編號不得被採信：'.var_export($nonString, true),
+            );
+            $this->assertStringContainsString('QUERY_RELATE', (string) $result->code());
+        }
+    }
+
+    /**
+     * ⛔ 比較必須是 `!==` 而非 `!=`：型別與內容都要相同。
+     *
+     * ⭐ 這一格是 mutation 測試逼出來的，值得說明它為什麼用「直接斷言運算子
+     * 行為」而不是又一個 HTTP fixture。
+     *
+     * 把實作改成寬鬆 `!=` 時，所有 HTTP 層測試仍然全過——因為本站 reference
+     * 以 `IGL` 開頭，PHP 對「非數字字串」的寬鬆與嚴格比較結果一致，經由 wire
+     * 能抵達的型別（bool／int／null／array／float）也都會被更前面的
+     * `is_string()` 或更後面的欄位檢查擋掉。也就是說，在**目前的編號格式下**
+     * 兩種運算子行為等價，HTTP 層無論怎麼寫 fixture 都分不出來。
+     *
+     * ⛔ 但這個安全性不該依賴「我們的編號剛好不是純數字」。若 reference 格式
+     * 日後改為全數字，寬鬆比較會把 int `12345678` 與 `" 12345678"` 都視為相符
+     * ——本機實測 `12345678 == "12345678"` 為 true，`" 12345678" == "12345678"`
+     * 亦為 true。那正是「別張訂單的發票被收斂過來」的路徑。
+     *
+     * 所以這裡直接鎖住運算子必須提供的保證本身：對這些值，嚴格比較必須為不相等，
+     * 而寬鬆比較會相等。⛔ 若日後有人把實作改回 `!=`，這段說明與 §RELATE 的
+     * 硬邊界就成為 code review 的依據。
+     */
+    public function test_strict_comparison_is_required_for_all_digit_references(): void
+    {
+        // 假設性的全數字 reference：格式若改變，寬鬆比較就會出現漏洞。
+        $allDigits = '12345678';
+
+        foreach ([12345678, ' 12345678', '12345678 ', '+12345678'] as $lookalike) {
+            // 寬鬆比較會誤判為相符……
+            $this->assertTrue(
+                $lookalike == $allDigits,
+                '前置條件：這些值在寬鬆比較下等於全數字 reference。',
+            );
+
+            // ⛔ ……嚴格比較必須不相符。這就是實作必須用 `!==` 的理由。
+            $this->assertFalse(
+                $lookalike === $allDigits,
+                '⛔ 嚴格比較必須拒絕：'.var_export($lookalike, true),
+            );
+        }
+    }
+
+    /** ⛔ 逐字元全等仍必須讓真正正確的值通過——收緊不得反過來擋掉正常路徑。 */
+    public function test_an_exactly_matching_relate_number_still_converges(): void
+    {
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order);
+        $relate = EcpayInvoiceGateway::relateNumberFor($invoice);
+
+        Http::fake([
+            self::ISSUE => Http::response($this->reply(['RtnCode' => 10000001, 'RtnMsg' => self::POISON])),
+            self::QUERY => Http::response($this->reply([
+                'RtnCode' => 1,
+                'IIS_Mer_ID' => self::MERCHANT,
+                'IIS_Number' => 'AB12345678',
+                'IIS_Relate_Number' => $relate,
+                'IIS_Create_Date' => '2026-08-17 10:30:00',
+                'IIS_Random_Number' => '1234',
+                'IIS_Issue_Status' => '1',
+                'IIS_Invalid_Status' => '0',
+            ])),
+        ]);
+
+        app(IssueInvoice::class)->handle($invoice);
+
+        $this->assertSame(InvoiceStatus::Issued, $invoice->fresh()->status);
+    }
+
+    /**
      * ⛔ 商店代號與關聯編號的說明必須是兩件不同的事。
      *
      * Owner 看到 `ISSUE_MERCHANT` 與 `QUERY_RELATE` 時，需要分得出前者指向
