@@ -304,15 +304,78 @@ class PaymentSignatureTest extends TestCase
         $this->assertCount(50, array_unique($nonces));
     }
 
+    /**
+     * ⭐ 官方規定 nonce 必須是 UUID v1／v4 或 timestamp。
+     *
+     * ⛔ 舊版是 `bin2hex(random_bytes(16))`——32 個十六進位字元、沒有連字號、
+     * 沒有 version／variant 位元，不是任何一種官方接受的格式。隨機性沒問題，
+     * 問題在格式：對方按規格驗 header，格式不符整個請求就被拒。
+     */
+    public function test_the_nonce_is_a_real_uuid_v4(): void
+    {
+        for ($i = 0; $i < 20; $i++) {
+            $this->assertMatchesRegularExpression(
+                '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',
+                LinePaySignature::nonce(),
+                '⛔ nonce 必須是 RFC 4122 v4 格式（含連字號、version 4、variant 10）。'
+            );
+        }
+    }
+
     public function test_the_headers_carry_the_channel_id_and_nonce(): void
     {
         $headers = LinePaySignature::headers(
-            'channel-0001', 'secret-0001', '/v4/payments/request', ['amount' => 590], 'nonce-1'
+            'channel-0001', 'secret-0001', '/v4/payments/request', '{"amount":590}', 'nonce-1'
         );
 
         $this->assertSame('channel-0001', $headers['X-LINE-ChannelId']);
         $this->assertSame('nonce-1', $headers['X-LINE-Authorization-Nonce']);
         // ⛔ secret 本身永遠不出現在 header 裡。
         $this->assertStringNotContainsString('secret-0001', json_encode($headers));
+    }
+
+    /**
+     * ⭐ `headers()` 收的是 raw JSON 字串，不是 array。
+     *
+     * ⛔ 型別本身就是保證：拿不到 array，就無法在簽章這一層重新編碼一次，
+     * 也就不可能再出現「簽章 bytes ≠ wire bytes」。
+     */
+    public function test_the_headers_sign_the_exact_bytes_given(): void
+    {
+        $raw = '{"returnUrl":"https://example.test/x","name":"行銷服務費"}';
+
+        $headers = LinePaySignature::headers(
+            'channel-0001', 'secret-0001', '/v4/payments/request', $raw, 'nonce-1'
+        );
+
+        $this->assertSame(
+            LinePaySignature::sign('secret-0001', '/v4/payments/request', $raw, 'nonce-1'),
+            $headers['X-LINE-Authorization'],
+        );
+    }
+
+    /** 編碼失敗回 null，⛔ 呼叫端才能 fail closed，而不是送出空 body。 */
+    public function test_encode_body_returns_null_on_invalid_utf8(): void
+    {
+        // ⛔ 無效 UTF-8 位元組序列：json_encode 會失敗。
+        $this->assertNull(LinePaySignature::encodeBody(['x' => "\xB1\x31"]));
+    }
+
+    public function test_encode_body_keeps_slashes_and_unicode_readable(): void
+    {
+        $json = LinePaySignature::encodeBody([
+            'returnUrl' => 'https://example.test/x',
+            'name' => '行銷服務費',
+        ]);
+
+        $this->assertNotNull($json);
+        // 旗標本身不是重點，「只編碼這一次」才是；這裡固定住目前的形式。
+        $this->assertStringContainsString('https://example.test/x', (string) $json);
+        $this->assertStringContainsString('行銷服務費', (string) $json);
+        // ⛔ 解得回原本的 array，不是雙重編碼的字串。
+        $this->assertSame(
+            ['returnUrl' => 'https://example.test/x', 'name' => '行銷服務費'],
+            json_decode((string) $json, true),
+        );
     }
 }
