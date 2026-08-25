@@ -175,14 +175,39 @@ class LinePayClient
      * 網址或任何客戶資料。這些一個都不經過這個方法。
      *
      * ⛔ 寫 structured log，不寫 DB、不新增欄位、不顯示給客人。
+     *
+     * ⭐ R1：整個寫入是 best-effort，logger 的任何 `Throwable` 都在這個邊界內
+     * 被隔離。
+     *
+     * ⛔ 初版直接呼叫 `Log::warning()` 而沒有任何保護。log 目錄不可寫時 Monolog
+     * 會丟 `UnexpectedValueException`，那個例外會一路衝出 `LinePayClient`——
+     * 後果遠不只「少了一行 log」：`LinePayGateway` 依賴 client **回傳一個結果**
+     * 來收斂 payment attempt，例外冒泡上去之後，request 階段原本應該收斂為
+     * `failed` 的 attempt 可能留在 open／pending，而 `ResolvePaymentAttempt`
+     * 會正確地擋下任何 pending——那張訂單於是再也付不了款。
+     *
+     * ⛔ 一個寫不進 log 的磁碟，不該讓客人的訂單卡死。診斷是附加觀測，
+     * 不是付款狀態機的一部分。
      */
     private function diagnose(string $uri, mixed $returnCode, string $reason): void
     {
-        Log::warning('linepay.call_failed', [
-            'phase' => str_contains($uri, '/confirm') ? 'confirm' : 'request',
-            'return_code' => $this->safeReturnCode($returnCode),
-            'reason' => $reason,
-        ]);
+        try {
+            Log::warning('linepay.call_failed', [
+                'phase' => str_contains($uri, '/confirm') ? 'confirm' : 'request',
+                'return_code' => $this->safeReturnCode($returnCode),
+                'reason' => $reason,
+            ]);
+        } catch (Throwable) {
+            /*
+             * ⛔ 刻意完全吞掉，而且什麼都不做。
+             *
+             * 不再 log 一次：logger 正是壞掉的那個東西，再叫它一次只會再丟一次
+             * 例外，或在某些 handler 下無限遞迴。
+             *
+             * 不寫 DB、不回顯 exception、不輸出任何輸入內容：這裡唯一該發生的
+             * 事就是「付款流程繼續往下走」。診斷本來就是可以失去的東西。
+             */
+        }
     }
 
     /** ⛔ 四位數字才記；其餘一律 `unrecognized`，不回顯原值。 */

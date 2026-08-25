@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
+use App\Enums\PaymentFailureReason;
 use App\Models\IntegrationSetting;
 use App\Services\Payments\LinePayClient;
 use App\Services\Payments\LinePaySignature;
@@ -12,6 +13,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
 
@@ -446,6 +448,156 @@ class LinePayWireSignatureTest extends TestCase
         $this->assertSame('2024010112345678901', $result->transactionId);
         $this->assertSame(19, strlen((string) $result->transactionId));
         $this->assertStringStartsWith('https://', (string) $result->paymentUrl);
+    }
+
+    // ==================================== 7. 診斷失敗不得中斷付款（R1）
+
+    /**
+     * 讓 logger 在每一次寫入時拋出，模擬 log 目錄不可寫。
+     *
+     * ⛔ 這正是 GPT 在複審時實際重現的情境：storage 不可寫時 Monolog 會丟
+     * `UnexpectedValueException`。初版的 `diagnose()` 直接呼叫 `Log::warning()`
+     * 而沒有任何隔離，於是那個例外會一路往上冒泡、衝出 `LinePayClient`。
+     */
+    private function makeLoggerThrow(): void
+    {
+        Log::swap(new class
+        {
+            public function __call(string $method, array $arguments): mixed
+            {
+                throw new RuntimeException('log path is not writable');
+            }
+        });
+    }
+
+    /**
+     * ⭐ R1 的核心反證：診斷是附加觀測，⛔ 不得成為付款狀態機的單點故障。
+     *
+     * ⛔ 初版在這裡會直接把 `RuntimeException` 丟給呼叫端。後果不只是「少了一
+     * 行 log」：`LinePayGateway` 依賴 client 回傳一個結果來收斂 attempt，例外
+     * 一旦冒泡上去，request 階段原本應該收斂為 `failed` 的 attempt 可能留在
+     * open／pending——而 `ResolvePaymentAttempt` 會正確地擋下任何 pending，
+     * 於是那張訂單再也付不了款。
+     *
+     * 一個寫不進 log 的磁碟，不該讓客人的訂單卡死。
+     */
+    public function test_a_throwing_logger_does_not_break_a_rejected_request(): void
+    {
+        Http::fake([
+            self::BASE.'/*' => Http::response([
+                'returnCode' => '1106',
+                'returnMessage' => 'request header error',
+            ], 200),
+        ]);
+
+        $this->makeLoggerThrow();
+
+        // ⛔ 不得拋出：走到斷言就代表例外已被隔離在診斷邊界內。
+        $result = app(LinePayClient::class)->requestPayment($this->realisticBody());
+
+        $this->assertFalse($result->isSuccess());
+        // ⛔ 仍是原本的 provider reason，不因為 log 失敗而改變。
+        $this->assertSame(PaymentFailureReason::VerificationFailed, $result->reason());
+        $this->assertSame('1106', $result->returnCode);
+        // 診斷失敗不影響「這次確實送出去了」這個事實。
+        $this->assertFalse($result->neverSent());
+    }
+
+    /** HTTP 非 200 且 logger 拋錯：仍回原本的 unreadable 語意。 */
+    public function test_a_throwing_logger_does_not_break_a_non_200_response(): void
+    {
+        Http::fake([self::BASE.'/*' => Http::response('gateway down', 500)]);
+
+        $this->makeLoggerThrow();
+
+        $result = app(LinePayClient::class)->requestPayment($this->realisticBody());
+
+        $this->assertFalse($result->isSuccess());
+        $this->assertSame(PaymentFailureReason::UnreadableResponse, $result->reason());
+        // ⛔ 結果不明必須維持不明：錢可能已經動了。
+        $this->assertTrue($result->isUncertain());
+    }
+
+    /** body 無法解析且 logger 拋錯：仍回原本的 unreadable 語意。 */
+    public function test_a_throwing_logger_does_not_break_a_malformed_body(): void
+    {
+        Http::fake([self::BASE.'/*' => Http::response('not json at all', 200)]);
+
+        $this->makeLoggerThrow();
+
+        $result = app(LinePayClient::class)->requestPayment($this->realisticBody());
+
+        $this->assertFalse($result->isSuccess());
+        $this->assertSame(PaymentFailureReason::UnreadableResponse, $result->reason());
+        $this->assertTrue($result->isUncertain());
+    }
+
+    /** confirm 階段的 provider rejection 且 logger 拋錯：仍回原 reason。 */
+    public function test_a_throwing_logger_does_not_break_a_rejected_confirm(): void
+    {
+        Http::fake([
+            self::BASE.'/*' => Http::response(['returnCode' => '1124', 'returnMessage' => 'x'], 200),
+        ]);
+
+        $this->makeLoggerThrow();
+
+        $result = app(LinePayClient::class)->confirmPayment('2024010112345678901', [
+            'amount' => 590,
+            'currency' => 'TWD',
+        ]);
+
+        $this->assertFalse($result->isSuccess());
+        $this->assertSame(PaymentFailureReason::VerificationFailed, $result->reason());
+        $this->assertSame('1124', $result->returnCode);
+    }
+
+    /**
+     * 診斷失敗時不得產生任何額外 HTTP，也不得回顯敏感內容。
+     *
+     * ⛔ catch 內不得「改用另一個管道再記一次」：那只是把同一個單點故障換個
+     * 地方,而且很可能連帶把原本被擋在外面的內容一起帶出去。
+     */
+    public function test_a_throwing_logger_causes_no_extra_http_and_no_fallback_output(): void
+    {
+        Http::fake([
+            self::BASE.'/*' => Http::response([
+                'returnCode' => '1106',
+                'returnMessage' => 'secret='.self::SECRET.' buyer@example.test',
+            ], 200),
+        ]);
+
+        $this->makeLoggerThrow();
+
+        $result = app(LinePayClient::class)->requestPayment($this->realisticBody());
+
+        // ⛔ 恰好一次 HTTP：診斷失敗不得觸發重試或第二條通報路徑。
+        Http::assertSentCount(1);
+
+        // ⛔ 回傳物件不得夾帶 provider 原文。
+        $serialised = json_encode([
+            'returnCode' => $result->returnCode,
+            'transactionId' => $result->transactionId,
+            'orderId' => $result->orderId,
+            'paymentUrl' => $result->paymentUrl,
+            'reason' => $result->reason()->value,
+        ]);
+
+        foreach ([self::SECRET, 'buyer@example.test', 'secret='] as $forbidden) {
+            $this->assertStringNotContainsString($forbidden, (string) $serialised);
+        }
+    }
+
+    /** 成功路徑即使 logger 壞了也照常成功——本來就不寫 log。 */
+    public function test_a_throwing_logger_does_not_affect_a_successful_call(): void
+    {
+        $this->fakeSuccess();
+
+        $this->makeLoggerThrow();
+
+        $result = app(LinePayClient::class)->requestPayment($this->realisticBody());
+
+        $this->assertTrue($result->isSuccess());
+        $this->assertSame('2024010112345678901', $result->transactionId);
     }
 
     /** 簽章工具本身：同一份 raw bytes 兩次算出相同結果。 */
