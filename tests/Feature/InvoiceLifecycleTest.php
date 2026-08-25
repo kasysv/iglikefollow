@@ -294,18 +294,31 @@ class InvoiceLifecycleTest extends TestCase
         $this->assertNull($invoice->invoice_number);
     }
 
-    public function test_an_ambiguous_result_waits_for_a_human(): void
+    /**
+     * ⭐ D-179：結果不明收斂為 `failed`，由 Owner 手動再送同號。
+     *
+     * ⛔ 「對方可能已經開出一張真的發票」這個顧慮沒有消失，只是換成由**同一個
+     * RelateNumber** 承擔：gateway 在非成功時已經以同號 GetIssue 查過一次，
+     * 之後 Owner 手動重送用的仍是同一個號。因此重送的最壞情況是把既有發票
+     * 查回來，不是開出第二張。
+     *
+     * ⛔ 舊行為停在 `reconciliation_required` 而全站沒有任何出口，Owner 即使
+     * 知道綠界已經開好也無法讓本站收斂。
+     */
+    public function test_an_ambiguous_result_converges_to_failed(): void
     {
         $this->configureInvoiceGateway();
         $this->gateway->alwaysBeAmbiguous();
 
         $invoice = $this->issue()->handle($this->create()->handle($this->paidOrder()));
 
-        // ⛔ 結果不明不是失敗：對方可能已經開出一張真的發票。
-        $this->assertSame(InvoiceStatus::ReconciliationRequired, $invoice->status);
-        $this->assertTrue($invoice->status->needsHuman());
-        $this->assertNotNull($invoice->reconciliation_required_at);
-        $this->assertSame(InvoiceAttemptStatus::Ambiguous, $invoice->attempts()->first()->status);
+        $this->assertSame(InvoiceStatus::Failed, $invoice->status);
+        // ⛔ 不得留下對帳時間戳：那會讓後台顯示一個已經不成立的狀態。
+        $this->assertNull($invoice->reconciliation_required_at);
+        $this->assertSame(InvoiceAttemptStatus::Failed, $invoice->attempts()->first()->status);
+        // ⛔ 仍然不得寫入任何發票資料：本輪沒有取得成功證據。
+        $this->assertNull($invoice->invoice_number);
+        $this->assertNull($invoice->random_code);
     }
 
     public function test_an_ambiguous_result_is_never_resent_automatically(): void

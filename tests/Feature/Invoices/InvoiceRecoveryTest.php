@@ -203,18 +203,27 @@ class InvoiceRecoveryTest extends TestCase
 
     // ==================================== 4. 不合格狀態:一律拒絕
 
+    /**
+     * ⛔ 三個永遠不合格的狀態。
+     *
+     * `processing`：已經有一次嘗試正在進行。
+     * `issued`：已經開出發票，再送就是稅務問題。
+     * `voided`：已作廢，不得由這個入口復活。
+     *
+     * ⭐ D-179 之後 `reconciliation_required` 不再列在這裡——它改為合格，
+     * 見 `test_a_reconciliation_required_invoice_can_be_issued_again`。
+     */
     public static function ineligibleStatusProvider(): array
     {
         return [
             'processing' => [InvoiceStatus::Processing],
             'issued' => [InvoiceStatus::Issued],
             'voided' => [InvoiceStatus::Voided],
-            'reconciliation_required' => [InvoiceStatus::ReconciliationRequired],
         ];
     }
 
     #[DataProvider('ineligibleStatusProvider')]
-    public function test_processing_issued_voided_and_reconciliation_required_are_never_recoverable(
+    public function test_processing_issued_and_voided_are_never_recoverable(
         InvoiceStatus $status,
     ): void {
         Queue::fake();
@@ -234,8 +243,64 @@ class InvoiceRecoveryTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    /** ⛔ 有 attempt 的 failed 一律拒絕——結果不明時必須先查詢，不能盲目重送。 */
-    public function test_a_failed_invoice_with_an_attempt_is_refused(): void
+    /**
+     * ⭐ D-179：staging 既有的 `reconciliation_required` 由同一個手動入口處理。
+     *
+     * ⛔ 這是 Owner 實際遇到的那筆資料的出路：綠界那邊已經開立，本站卻停在
+     * 「需人工對帳」。重送用的是同一個 `RelateNumber`，所以綠界會以重複號
+     * 拒絕，gateway 隨即以同號 GetIssue 把既有發票查回來並收斂為 issued。
+     *
+     * ⛔ 不直接改 staging 的 SQL：狀態要由程式走一次真正的查詢後才收斂。
+     */
+    public function test_a_reconciliation_required_invoice_can_be_issued_again(): void
+    {
+        Queue::fake();
+        $this->invoiceGatewayReady();
+        $order = $this->paidOrder();
+        $invoice = Invoice::create([
+            'order_id' => $order->id,
+            'provider' => IntegrationProvider::EcpayInvoice->value,
+            'status' => InvoiceStatus::ReconciliationRequired,
+            'amount' => 590,
+            'currency' => 'TWD',
+            'failure_code' => InvoiceFailureReason::Unknown->value,
+            'failure_message' => InvoiceFailureReason::Unknown->message(),
+            'reconciliation_required_at' => now(),
+        ]);
+        InvoiceAttempt::create([
+            'invoice_id' => $invoice->id,
+            'idempotency_key' => $invoice->initialIdempotencyKey(),
+            'status' => InvoiceAttemptStatus::Ambiguous,
+            'started_at' => now(),
+            'completed_at' => now(),
+        ]);
+
+        $outcome = app(QueueInvoiceRecoveryForOrder::class)->handle($this->owner(), $order);
+
+        $this->assertSame('queued', $outcome);
+        Queue::assertPushed(IssueInvoiceForOrder::class, 1);
+
+        $invoice = $invoice->fresh();
+        $this->assertSame(InvoiceStatus::Pending, $invoice->status);
+        // ⛔ 對帳時間戳必須清掉，否則後台仍顯示卡在人工對帳。
+        $this->assertNull($invoice->reconciliation_required_at);
+        $this->assertNull($invoice->failure_code);
+
+        // ⛔ 舊 attempt 是歷史，逐筆保留。
+        $this->assertSame(1, $invoice->attempts()->count());
+        $this->assertSame(InvoiceAttemptStatus::Ambiguous, $invoice->attempts()->first()->status);
+    }
+
+    /**
+     * ⭐ D-179：有 attempt 的 `failed` 現在**可以**手動重送。
+     *
+     * ⛔ 舊行為拒絕它，理由是「結果不明時必須先查詢，不能盲目重送」。但全站
+     * 沒有任何查詢入口，於是這種訂單永遠出不去。安全性現在由固定的
+     * `RelateNumber` 承擔：所有嘗試送的都是同一個號，若先前其實已經開出，
+     * 綠界會以重複號拒絕，gateway 隨即以同號 GetIssue 把那張發票查回來。
+     * ⛔ 重送的最壞情況是收斂回既有發票，不是開出第二張。
+     */
+    public function test_a_failed_invoice_with_an_attempt_can_be_issued_again(): void
     {
         Queue::fake();
         $this->invoiceGatewayReady();
@@ -247,6 +312,7 @@ class InvoiceRecoveryTest extends TestCase
             'amount' => 590,
             'currency' => 'TWD',
             'failure_code' => InvoiceFailureReason::Unknown->value,
+            'failure_message' => InvoiceFailureReason::Unknown->message(),
         ]);
         InvoiceAttempt::create([
             'invoice_id' => $invoice->id,
@@ -258,8 +324,18 @@ class InvoiceRecoveryTest extends TestCase
 
         $outcome = app(QueueInvoiceRecoveryForOrder::class)->handle($this->owner(), $order);
 
-        $this->assertSame('blocked_not_eligible', $outcome);
-        Queue::assertNothingPushed();
+        $this->assertSame('queued', $outcome);
+        Queue::assertPushed(IssueInvoiceForOrder::class, 1);
+
+        // 原子轉回 pending，並清掉上一輪已經不成立的失敗顯示。
+        $invoice = $invoice->fresh();
+        $this->assertSame(InvoiceStatus::Pending, $invoice->status);
+        $this->assertNull($invoice->failure_code);
+        $this->assertNull($invoice->failure_message);
+
+        // ⛔ 歷史 attempt 保留，不得被清掉或改寫。
+        $this->assertSame(1, $invoice->attempts()->count());
+        $this->assertSame(InvoiceAttemptStatus::Failed, $invoice->attempts()->first()->status);
     }
 
     /** ⛔ pending 但已有 attempt(理論上不該發生，仍必須 fail closed)。 */

@@ -206,7 +206,8 @@ class InvoiceMessageSafetyTest extends TestCase
         ], JSON_UNESCAPED_UNICODE);
 
         $this->assertNoMarkersIn($raw, '資料庫');
-        $this->assertSame(InvoiceStatus::ReconciliationRequired, $invoice->fresh()->status);
+        // ⭐ D-179：不明結果收斂為 failed；毒性字串仍然一個字都不得落盤。
+        $this->assertSame(InvoiceStatus::Failed, $invoice->fresh()->status);
     }
 
     public function test_a_stored_failure_code_is_always_allowlisted(): void

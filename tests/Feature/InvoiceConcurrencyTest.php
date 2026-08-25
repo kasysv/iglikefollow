@@ -187,9 +187,17 @@ class InvoiceConcurrencyTest extends TestCase
         $this->assertCount(1, $this->gateway->calls);
     }
 
-    // ==================================== B. 例外一律轉人工對帳
+    // ==================================== B. 例外一律收斂為失敗（D-179）
 
-    public function test_a_gateway_exception_becomes_reconciliation_required(): void
+    /**
+     * ⭐ D-179：例外收斂為 `failed`，不再停在 `reconciliation_required`。
+     *
+     * ⛔ 舊行為讓 Owner 卡在「需人工對帳」而沒有任何出口：全站沒有後續查詢
+     * 路徑，手動入口又明確拒絕該狀態。收斂為 failed 讓同一個手動入口可以再走
+     * 一次**同號**流程；若對方其實已經開出，同號 GetIssue 會查回那張發票，
+     * ⛔ 不會產生第二張。
+     */
+    public function test_a_gateway_exception_becomes_failed(): void
     {
         $invoice = $this->pendingInvoice();
 
@@ -204,9 +212,10 @@ class InvoiceConcurrencyTest extends TestCase
         $result = (new IssueInvoice($throwing))->handle($invoice);
 
         // ⛔ 不得停在 processing／started：那樣既不會重試也沒人看得到。
-        $this->assertSame(InvoiceStatus::ReconciliationRequired, $result->status);
-        $this->assertSame(InvoiceAttemptStatus::Ambiguous, InvoiceAttempt::firstOrFail()->status);
-        $this->assertNotNull($result->reconciliation_required_at);
+        $this->assertSame(InvoiceStatus::Failed, $result->status);
+        $this->assertSame(InvoiceAttemptStatus::Failed, InvoiceAttempt::firstOrFail()->status);
+        // ⛔ 不得留下對帳時間戳：後台會看起來仍卡在人工對帳。
+        $this->assertNull($result->reconciliation_required_at);
     }
 
     public function test_a_gateway_exception_does_not_leak_its_message(): void

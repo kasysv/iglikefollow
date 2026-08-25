@@ -1105,8 +1105,8 @@ class EcpayInvoiceAdapterTest extends TestCase
 
         $invoice = $invoice->fresh();
 
-        // 這條路徑真的走完了：不明結果已收斂成待對帳。
-        $this->assertSame(InvoiceStatus::ReconciliationRequired, $invoice->status);
+        // 這條路徑真的走完了：⭐ D-179 之後不明結果收斂成 failed（不再是待對帳）。
+        $this->assertSame(InvoiceStatus::Failed, $invoice->status);
 
         $surfaces = [
             'invoice row' => json_encode(DB::table('invoices')->get(), JSON_UNESCAPED_UNICODE),

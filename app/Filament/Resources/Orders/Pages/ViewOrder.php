@@ -46,14 +46,14 @@ class ViewOrder extends ViewRecord
     private function recoverInvoiceAction(): Action
     {
         return Action::make('recoverInvoice')
-            ->label('補開發票')
+            ->label('手動開立發票')
             ->color('warning')
             ->visible(fn (Order $record): bool => Auth::user()?->isOwner() ?? false)
             ->disabled(fn (Order $record): bool => ! $this->invoiceLooksRecoverable($record))
             ->requiresConfirmation()
-            ->modalHeading('補開發票？')
-            ->modalDescription('這會排入一次補開發票的背景工作，不會立即呼叫綠界；只在目前沒有任何開立嘗試時才會真的送出。')
-            ->modalSubmitActionLabel('確認補開')
+            ->modalHeading('手動開立發票？')
+            ->modalDescription('這會排入一次開立發票的背景工作，不會立即呼叫綠界。這張訂單的每一次嘗試都使用同一個發票關聯編號，所以若先前其實已經開立成功，系統會查回那張發票，不會重複開立。')
+            ->modalSubmitActionLabel('確認開立')
             ->action(function (Order $record): void {
                 abort_unless(Auth::user()?->isOwner() ?? false, 403);
 
@@ -61,7 +61,7 @@ class ViewOrder extends ViewRecord
 
                 if ($outcome === 'queued') {
                     Notification::make()
-                        ->title('已排入補開發票，請稍後重新整理查看結果')
+                        ->title('已排入開立發票，請稍後重新整理查看結果')
                         ->success()
                         ->send();
 
@@ -69,7 +69,7 @@ class ViewOrder extends ViewRecord
                 }
 
                 Notification::make()
-                    ->title('無法補開發票')
+                    ->title('無法開立發票')
                     ->body($this->recoveryFailureMessage($outcome))
                     ->danger()
                     ->send();
@@ -85,11 +85,12 @@ class ViewOrder extends ViewRecord
             return $record->isPaid();
         }
 
-        $hasAttempt = $invoice->attempts()->exists();
-
+        // ⛔ 與 QueueInvoiceRecoveryForOrder::isRecoverable() 對齊；那裡才是邊界。
         return match ($invoice->status) {
             InvoiceStatus::PendingConfiguration,
-            InvoiceStatus::Pending => ! $hasAttempt,
+            InvoiceStatus::Pending => ! $invoice->attempts()->exists(),
+            InvoiceStatus::Failed,
+            InvoiceStatus::ReconciliationRequired => true,
             default => false,
         };
     }
@@ -97,13 +98,13 @@ class ViewOrder extends ViewRecord
     private function recoveryFailureMessage(string $outcome): string
     {
         return match ($outcome) {
-            'blocked_not_owner' => '只有 Owner 可以補開發票。',
+            'blocked_not_owner' => '只有 Owner 可以開立發票。',
             'blocked_unpaid' => '這筆訂單尚未付款，不能開立發票。',
             'blocked_not_twd' => '目前只支援台幣訂單的電子發票。',
             'blocked_gateway_not_ready' => '綠界電子發票尚未設定完整或尚未啟用。',
-            'blocked_not_eligible' => '目前的發票狀態不允許補開，請先查詢或人工對帳。',
-            'blocked_audit_unavailable' => '目前無法建立稽核紀錄，因此沒有排入補開。',
-            default => '補開發票未完成。',
+            'blocked_not_eligible' => '目前的發票狀態不允許再次開立（已開立、已作廢或正在處理中）。',
+            'blocked_audit_unavailable' => '目前無法建立稽核紀錄，因此沒有排入開立。',
+            default => '開立發票未完成。',
         };
     }
 

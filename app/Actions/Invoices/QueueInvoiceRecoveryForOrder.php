@@ -14,20 +14,28 @@ use Illuminate\Support\Facades\Request;
 use Throwable;
 
 /**
- * The one Owner-only path back from "no invoice yet" to a queued issue
- * attempt — for the narrow set of states where nothing has actually reached
- * ECPay yet.
+ * The one Owner-only path from "not issued yet" to a queued issue attempt.
  *
- * ⛔ Eligible only when there is no proof anything was sent: no invoice row,
- * a `pending_configuration` row with zero attempts, or a `pending` row with
- * zero attempts (a lost queue job). Everything else — `processing`, `issued`,
- * `voided`, any `failed` that already has an attempt, and
- * `reconciliation_required` — is refused here on purpose. `IssueInvoice`'s
- * own compare-and-set only ever claims a `pending` row, so this action's job
- * is solely to get an eligible row into that state and then hand off to the
- * existing, unmodified queue path — never to call ECPay itself.
+ * ⭐ D-179：Owner 的「手動開立發票」。合格狀態為：
  *
- * ⛔ Re-verified inside a DB transaction with the order row locked, never
+ *  - 尚無 invoice row（付款成功但 job 沒跑）；
+ *  - `pending_configuration`／`pending` 且尚無 attempt（設定當時未就緒或 job 遺失）；
+ *  - `failed`（已有失敗 attempt，可再送一次）；
+ *  - `reconciliation_required`（相容 staging 既有資料）。
+ *
+ * ⛔ `processing`、`issued`、`voided` 仍然拒絕：處理中會撞上進行中的嘗試，
+ * 已開立與已作廢再送就是稅務問題。
+ *
+ * ⭐ 為什麼 `failed` 現在可以重送，而這不會開出第二張發票：所有嘗試送往綠界的
+ * `RelateNumber` 完全相同（由 order reference 推導）。若第一次其實已經開出，
+ * 綠界會以重複號拒絕，`EcpayInvoiceGateway` 隨即以**同一個號** GetIssue 查詢，
+ * 查到就把本地收斂為 `issued`。⛔ 因此重送的最壞情況是把既有發票查回來，
+ * 不是產生新的一張。
+ *
+ * ⛔ 本 action 自己永遠不呼叫綠界：它只把合格的 row 原子地轉成 `pending`，
+ * 再交給既有的 queue 路徑，由 `IssueInvoice` 的 compare-and-set 決定結果。
+ *
+ * ⛔ Re-verified inside a DB transaction with the invoice row locked, never
  * trusting whatever the Livewire request claims was visible. Two Owners
  * clicking at once, or one Owner double-clicking, must still result in at
  * most one `IssueInvoiceForOrder` dispatch — the lock plus the eligibility
@@ -35,7 +43,7 @@ use Throwable;
  */
 class QueueInvoiceRecoveryForOrder
 {
-    public const AUDIT_ACTION = 'invoice_recovery_queued';
+    public const AUDIT_ACTION = 'invoice_manual_issue_queued';
 
     /**
      * @return string one of: queued|blocked_not_owner|blocked_unpaid|
@@ -82,14 +90,37 @@ class QueueInvoiceRecoveryForOrder
             }
 
             /*
-             * ⛔ pending_configuration 且此刻 gateway 已就緒：原子轉成 pending，
-             * 讓 IssueInvoice 的 compare-and-set 認得這一列。不改寫 attempts、
-             * 不動任何已有的 issued/failure 欄位——這一分支的 row 從未有過
-             * 任何嘗試。
+             * ⛔ 原子轉成 `pending`：`IssueInvoice` 的 compare-and-set 只認得
+             * 這個狀態。這一步在 invoice row lock 內完成，所以第二次點擊進來時
+             * 會看到狀態已不是合格值而安全地變成 no-op——雙擊最多排一個 job。
+             *
+             * 同時清掉上一輪的失敗顯示與 `reconciliation_required_at`：那些是
+             * 上一次嘗試的結果，留著會讓後台顯示一個已經不成立的錯誤。
+             *
+             * ⛔ 不動 `attempts`：每一次嘗試都是歷史，必須逐筆保留。
+             * ⛔ 不動 `invoice_number`／`random_code`／`provider_reference`：
+             * 合格狀態都還沒有真正開出發票，這些欄位本來就是空的；即使不是，
+             * 覆蓋既有發票資料也絕不是這個 action 該做的事。
+             *
+             * ⭐ `reconciliation_required` 先經 `failed` 再到 `pending`。
+             *
+             * ⛔ 這不是繞過檢查，而是**照著** `InvoiceIntegrityObserver` 的狀態
+             * 機走：它允許 `reconciliation_required → failed` 與 `failed →
+             * pending`，但沒有直接的 `reconciliation_required → pending`。兩步
+             * 都在同一個 transaction 與同一個 row lock 內，外界看到的仍是一次
+             * 原子轉換。⛔ 不改 observer 去開一條新捷徑——那個狀態機是發票這種
+             * 稅務文件的核心保護，本輪也不在允許修改的檔案範圍內。
              */
-            if ($invoice->status === InvoiceStatus::PendingConfiguration) {
-                $invoice->forceFill(['status' => InvoiceStatus::Pending])->save();
+            if ($invoice->status === InvoiceStatus::ReconciliationRequired) {
+                $invoice->forceFill(['status' => InvoiceStatus::Failed])->save();
             }
+
+            $invoice->forceFill([
+                'status' => InvoiceStatus::Pending,
+                'failure_code' => null,
+                'failure_message' => null,
+                'reconciliation_required_at' => null,
+            ])->save();
 
             return 'queued';
         });
@@ -116,16 +147,24 @@ class QueueInvoiceRecoveryForOrder
     }
 
     /**
-     * ⛔ 只有「尚無任何嘗試」的三種安全狀態可補開；`processing`、`issued`、
-     * `voided`、已有 attempt 的 `failed`，以及 `reconciliation_required`
-     * 一律不合格——結果不明時必須先查詢／人工對帳，不能盲目重送。
+     * ⭐ D-179 合格狀態。
+     *
+     * `pending_configuration`／`pending` 仍要求尚無 attempt：有 attempt 代表
+     * 已經有一次嘗試在進行或剛結束，此時重排只會撞上 compare-and-set。
+     *
+     * `failed` 與 `reconciliation_required` 不限制 attempt 筆數——它們本來就是
+     * 「已經試過而沒成功」的狀態，重送正是這個入口存在的理由。安全性來自固定
+     * 的 `RelateNumber`，不是來自禁止重送。
+     *
+     * ⛔ `processing`（進行中）、`issued`（已開立）、`voided`（已作廢）永遠不合格。
      */
     private function isRecoverable(Invoice $invoice): bool
     {
-        $hasAttempt = $invoice->attempts()->exists();
-
         return match ($invoice->status) {
-            InvoiceStatus::PendingConfiguration, InvoiceStatus::Pending => ! $hasAttempt,
+            InvoiceStatus::PendingConfiguration,
+            InvoiceStatus::Pending => ! $invoice->attempts()->exists(),
+            InvoiceStatus::Failed,
+            InvoiceStatus::ReconciliationRequired => true,
             default => false,
         };
     }

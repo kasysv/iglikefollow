@@ -53,13 +53,39 @@ class Invoice extends Model
      * a *different* key, so the unique index would happily accept both and two
      * workers could each call the provider — the exact thing the key exists to
      * prevent. A random or time-based key fails the same way.
-     *
-     * Manual re-issue and voiding are not in this milestone; when they arrive
-     * they need their own explicit, human-triggered key, not a counter.
      */
     public function initialIdempotencyKey(): string
     {
         return sprintf('inv-%d-%d-initial', $this->id, $this->amount);
+    }
+
+    /**
+     * The key for the attempt about to be created.
+     *
+     * ⭐ D-179 手動重開：第一筆仍是 initial key，之後每一次 Owner 手動重送各自
+     * 取得 `manual-2`、`manual-3`……序號來自**這張發票已落盤的 attempt 筆數**。
+     *
+     * ⛔ 只能在持有 invoice row lock 時呼叫（`IssueInvoice::claim()` 內）。
+     * 沒有 lock 時兩個 worker 會讀到相同筆數、算出相同的鍵，其中一個會撞上
+     * unique index——那是安全的失敗方向（不會重複呼叫綠界），但正確的作法是
+     * 在 lock 內讀，讓序號本身就不會相同。
+     *
+     * ⛔ 不用時間或隨機值：那會讓同一次重送的兩個 worker 各拿到一個不同的鍵，
+     * unique index 兩個都收，於是兩者都真的呼叫綠界——正是這個鍵要防的事。
+     *
+     * ⛔ 這個鍵只決定「本地允不允許再建立一筆嘗試」。送往綠界的 RelateNumber
+     * 永遠由 order reference 推導、每次都相同，那才是防止同一張訂單開出第二張
+     * 發票的最終防線。
+     */
+    public function idempotencyKeyForNextAttempt(): string
+    {
+        $existing = $this->attempts()->count();
+
+        if ($existing === 0) {
+            return $this->initialIdempotencyKey();
+        }
+
+        return sprintf('inv-%d-%d-manual-%d', $this->id, $this->amount, $existing + 1);
     }
 
     /** 發票號碼遮罩：後台對帳看得出是哪一張，⛔ 但不完整回顯。 */
