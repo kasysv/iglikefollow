@@ -7,6 +7,7 @@ use App\Actions\Invoices\QueueInvoiceRecoveryForOrder;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Enums\InvoiceAttemptStatus;
+use App\Enums\InvoiceFailureReason;
 use App\Enums\InvoiceStatus;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -540,6 +541,136 @@ class ManualInvoiceIssueTest extends TestCase
             app(QueueInvoiceRecoveryForOrder::class)->handle($owner, $order)
         );
         Queue::assertNothingPushed();
+    }
+
+    /**
+     * ⭐ R1 反證：稽核失敗必須把**發票狀態**也一起回滾。
+     *
+     * ⛔ 初版 `34513a6` 在這裡卡死：狀態轉換先 commit，之後才寫 audit。audit
+     * 失敗時 action 回傳 blocked 且 0 dispatch，看起來像安全地擋下了——但發票
+     * 已經是 `pending` 而且**已經有 attempt**，於是 `isRecoverable()` 的
+     * 「pending 必須 0 attempt」永遠不成立，Owner 再也按不動那個按鈕。
+     *
+     * 結果是最糟的一種組合：沒有稽核、沒有 job、沒有 provider call，發票卻
+     * 永久卡住。⛔ 舊測試只驗 `Queue::assertNothingPushed()`，那個綠燈完全
+     * 證明不了 fail closed。
+     *
+     * fail closed 的正確定義是「什麼都沒發生」，不只是「沒有排 job」。
+     */
+    public function test_an_audit_failure_leaves_a_failed_invoice_completely_unchanged(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order, InvoiceStatus::Failed);
+        $invoice->forceFill([
+            'failure_code' => InvoiceFailureReason::Unknown->value,
+            'failure_message' => InvoiceFailureReason::Unknown->message(),
+        ])->save();
+
+        InvoiceAttempt::create([
+            'invoice_id' => $invoice->id,
+            'idempotency_key' => $invoice->initialIdempotencyKey(),
+            'status' => InvoiceAttemptStatus::Failed,
+            'started_at' => now(),
+            'completed_at' => now(),
+        ]);
+
+        $owner = $this->owner();
+
+        // 呼叫前的完整快照。
+        $before = $invoice->fresh()->toArray();
+        $attemptsBefore = $invoice->attempts()->get()->toArray();
+        $auditsBefore = AdminAuditLog::count();
+
+        AdminAuditLog::creating(function (): void {
+            throw new RuntimeException('audit unavailable');
+        });
+
+        $outcome = app(QueueInvoiceRecoveryForOrder::class)->handle($owner, $order);
+
+        $this->assertSame('blocked_audit_unavailable', $outcome);
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+
+        // ⛔ 逐欄位原樣：狀態、failure 欄位、時間戳全部不得被改動。
+        $this->assertSame($before, $invoice->fresh()->toArray(), '⛔ 稽核失敗時發票不得被改動。');
+        $this->assertSame($attemptsBefore, $invoice->attempts()->get()->toArray());
+        $this->assertSame($auditsBefore, AdminAuditLog::count(), '⛔ 不得留下半筆稽核。');
+
+        /*
+         * ⭐ 最關鍵的一條：Owner 仍然按得動。
+         *
+         * 這正是初版失敗的地方——發票被留在「pending＋已有 attempt」，資格判定
+         * 永久拒絕，Owner 永遠再也按不動。回滾之後它仍是 `failed`，所以仍然
+         * 合格；⛔ 這裡必須實際再呼叫一次證明，不能只斷言狀態看起來還對。
+         *
+         * 移除會丟例外的 listener，模擬「稽核系統恢復之後」。
+         */
+        AdminAuditLog::flushEventListeners();
+
+        $this->assertSame(
+            'queued',
+            app(QueueInvoiceRecoveryForOrder::class)->handle($owner, $order),
+            '⛔ 稽核失敗之後 Owner 必須仍能再次操作，不得被永久鎖死。'
+        );
+    }
+
+    /**
+     * ⭐ R1 反證：`reconciliation_required` 同樣必須完整回滾。
+     *
+     * ⛔ 這個狀態的回滾比 `failed` 更容易做錯：初版是「先轉 failed 再轉
+     * pending」兩步，所以一個只回滾了一半的實作可能把發票留在 `failed`，
+     * 並且已經清掉 `reconciliation_required_at`。那會靜默地改寫 staging 上
+     * 那筆真實資料的狀態，而 Owner 什麼都沒做成。
+     */
+    public function test_an_audit_failure_leaves_a_reconciliation_required_invoice_completely_unchanged(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $order = $this->paidOrder();
+        $invoice = $this->invoiceFor($order, InvoiceStatus::ReconciliationRequired);
+        $invoice->forceFill([
+            'failure_code' => InvoiceFailureReason::Unknown->value,
+            'failure_message' => InvoiceFailureReason::Unknown->message(),
+            'reconciliation_required_at' => now(),
+        ])->save();
+
+        InvoiceAttempt::create([
+            'invoice_id' => $invoice->id,
+            'idempotency_key' => $invoice->initialIdempotencyKey(),
+            'status' => InvoiceAttemptStatus::Ambiguous,
+            'started_at' => now(),
+            'completed_at' => now(),
+        ]);
+
+        $owner = $this->owner();
+
+        $before = $invoice->fresh()->toArray();
+        $attemptsBefore = $invoice->attempts()->get()->toArray();
+        $auditsBefore = AdminAuditLog::count();
+
+        AdminAuditLog::creating(function (): void {
+            throw new RuntimeException('audit unavailable');
+        });
+
+        $outcome = app(QueueInvoiceRecoveryForOrder::class)->handle($owner, $order);
+
+        $this->assertSame('blocked_audit_unavailable', $outcome);
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+
+        $after = $invoice->fresh();
+
+        // ⛔ 不得被留在中途的 `failed`，也不得已經是 `pending`。
+        $this->assertSame(InvoiceStatus::ReconciliationRequired, $after->status);
+        // ⛔ 時間戳不得被清掉：那是這筆資料為何需要人工處理的唯一線索。
+        $this->assertNotNull($after->reconciliation_required_at);
+        $this->assertSame($before, $after->toArray(), '⛔ 稽核失敗時發票不得被改動。');
+        $this->assertSame($attemptsBefore, $invoice->attempts()->get()->toArray());
+        $this->assertSame($auditsBefore, AdminAuditLog::count());
     }
 
     // ==================================== 6. 安全：不落盤 provider 原文

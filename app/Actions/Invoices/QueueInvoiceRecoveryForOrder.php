@@ -40,6 +40,13 @@ use Throwable;
  * clicking at once, or one Owner double-clicking, must still result in at
  * most one `IssueInvoiceForOrder` dispatch — the lock plus the eligibility
  * re-check make the second click a safe no-op.
+ *
+ * ⭐ 稽核與狀態轉換在同一個 transaction 內，且稽核先寫。
+ *
+ * ⛔ 初版把狀態轉換先 commit、之後才寫 audit：audit 失敗時 0 dispatch，看起來
+ * 像安全地擋下了，但發票已經是 `pending` 且已有 attempt，資格判定從此永遠拒絕
+ * ——沒有稽核、沒有 job、沒有 provider call，發票卻永久卡死，Owner 再也按不動。
+ * fail closed 的定義是「什麼都沒發生」，不只是「沒有排 job」。
  */
 class QueueInvoiceRecoveryForOrder
 {
@@ -71,7 +78,7 @@ class QueueInvoiceRecoveryForOrder
             return 'blocked_gateway_not_ready';
         }
 
-        $outcome = DB::transaction(function () use ($order): string {
+        $outcome = DB::transaction(function () use ($user, $order): string {
             $locked = Order::query()->whereKey($order->getKey())->lockForUpdate()->first();
 
             if ($locked === null || ! $locked->isPaid()) {
@@ -80,13 +87,31 @@ class QueueInvoiceRecoveryForOrder
 
             $invoice = Invoice::query()->where('order_id', $locked->id)->lockForUpdate()->first();
 
+            if ($invoice !== null && ! $this->isRecoverable($invoice)) {
+                return 'blocked_not_eligible';
+            }
+
+            /*
+             * ⭐ R1：稽核與狀態轉換在**同一個 transaction** 內，稽核先寫。
+             *
+             * ⛔ 初版把狀態轉換先 commit、之後才寫 audit。audit 失敗時 action
+             * 回傳 blocked 且 0 dispatch，看起來像安全地擋下了——但發票已經是
+             * `pending` 而且已經有 attempt，於是 `isRecoverable()` 的「pending
+             * 必須 0 attempt」永遠不成立，Owner 再也按不動。沒有稽核、沒有
+             * job、沒有 provider call，發票卻永久卡死。
+             *
+             * 順序也重要：先寫 audit 再改狀態。audit 失敗時直接拋出，整個
+             * transaction（含尚未發生的狀態轉換）一起回滾，什麼都沒動過。
+             *
+             * ⛔ fail closed 的定義是「什麼都沒發生」，不只是「沒有排 job」。
+             */
+            if (! $this->recordAudit($user, $order)) {
+                return 'blocked_audit_unavailable';
+            }
+
             if ($invoice === null) {
                 // 尚無 invoice row：直接排入，讓既有 job 走 CreateInvoiceForPaidOrder。
                 return 'queued';
-            }
-
-            if (! $this->isRecoverable($invoice)) {
-                return 'blocked_not_eligible';
             }
 
             /*
@@ -129,17 +154,11 @@ class QueueInvoiceRecoveryForOrder
             return $outcome;
         }
 
-        $audited = $this->recordAudit($user, $order);
-
-        if (! $audited) {
-            return 'blocked_audit_unavailable';
-        }
-
         /*
-         * ⛔ 到這裡時上面的 DB::transaction() 早已 commit——這一行本身就是
-         * 「事後才排」,不需要再包一層 afterCommit。真正重要的順序保證是
-         * 「先 commit 狀態轉換與稽核、才 dispatch job」,而不是反過來讓 job
-         * 有機會在寫入生效前就跑。
+         * ⛔ 到這裡時上面的 DB::transaction() 早已 commit,而且稽核與狀態轉換
+         * 是在同一個 transaction 內一起 commit 的——只有兩者都成功才會走到這
+         * 一行。真正重要的順序保證是「先 commit 狀態轉換與稽核、才 dispatch
+         * job」,而不是反過來讓 job 有機會在寫入生效前就跑。
          */
         IssueInvoiceForOrder::dispatch($order->id);
 
@@ -172,6 +191,17 @@ class QueueInvoiceRecoveryForOrder
     /**
      * ⛔ 只記 user id、order id/reference、invoice id、from/to 本地狀態與
      * action token；不含 Email、手機、統編、載具、API key 或 request/response。
+     *
+     * ⭐ R1：這個方法現在在 `handle()` 的 transaction 內、且在任何狀態轉換
+     * **之前**被呼叫。
+     *
+     * ⛔ 例外仍在這裡被吃掉並轉成 `false`,而不是往外拋。這是刻意的:讓
+     * `handle()` 用一個明確的 `return 'blocked_audit_unavailable'` 結束
+     * closure,而不是靠例外穿過 `DB::transaction()`。兩者都會讓外界看不到任何
+     * 變更——因為此刻**還沒有任何寫入發生**——但明確 return 讓「稽核不可用」
+     * 是一個被處理過的結果,不是一個從底層漏出來的錯誤。
+     *
+     * ⛔ 順序就是保證本身:audit 若失敗,狀態轉換那幾行根本不會執行。
      */
     private function recordAudit(User $user, Order $order): bool
     {
