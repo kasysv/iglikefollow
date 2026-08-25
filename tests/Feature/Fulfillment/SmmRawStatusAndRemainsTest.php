@@ -3,7 +3,11 @@
 namespace Tests\Feature\Fulfillment;
 
 use App\Actions\Fulfillment\SyncFulfillmentState;
+use App\Contracts\FulfillmentGateway;
 use App\Contracts\TheMostPanelDispatchCredentialSource;
+use App\Data\Fulfillment\FulfillmentSubmission;
+use App\Data\Fulfillment\FulfillmentSubmissionResult;
+use App\Data\Fulfillment\FulfillmentSyncResult;
 use App\Enums\FulfillmentStatus;
 use App\Models\FulfillmentOrder;
 use App\Models\User;
@@ -94,7 +98,8 @@ class SmmRawStatusAndRemainsTest extends TestCase
             'Partial' => ['Partial', FulfillmentStatus::Partial],
             'Rejected' => ['Rejected', FulfillmentStatus::Failed],
             'processing (lowercase)' => ['processing', FulfillmentStatus::Processing],
-            'Cancel' => ['Cancel', FulfillmentStatus::Failed],
+            // ⛔ R1 修正：Owner 指定 `Cancel = 已取消`，不是失敗。
+            'Cancel' => ['Cancel', FulfillmentStatus::Canceled],
         ];
     }
 
@@ -116,6 +121,36 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $this->assertNotSame($expected->label(), $synced->displayProviderStatus());
 
         Http::assertSentCount(1);
+    }
+
+    /**
+     * ⭐ R1 反證：`Cancel` 與 `Rejected` 是兩個不同的結果，⛔ 不得合併。
+     *
+     * ⛔ 初版把 `Cancel` 映射成 `Failed`。後果不只是標籤不同：`Canceled` 與
+     * `Failed` 的狀態機、事件語意與後台顯示都不一樣，於是後台雖然顯示原文
+     * `Cancel`，內部狀態、時間線與任何後續判斷卻記成「失敗」。
+     *
+     * `Rejected` 是對方**拒絕**了這張單；`Cancel` 是這張單被取消。兩者對客服
+     * 的意義完全不同。
+     */
+    public function test_cancel_and_rejected_map_to_different_internal_states(): void
+    {
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['status' => 'Cancel'])
+            ->push(['status' => 'Rejected']);
+
+        $canceled = $this->sync($this->submittedRow('23501'));
+        $rejected = $this->sync($this->submittedRow('23502'));
+
+        $this->assertSame(FulfillmentStatus::Canceled, $canceled->status);
+        $this->assertSame('已取消', $canceled->status->label());
+        $this->assertSame('Cancel', $canceled->provider_status_code);
+
+        $this->assertSame(FulfillmentStatus::Failed, $rejected->status);
+        $this->assertSame('Rejected', $rejected->provider_status_code);
+
+        // ⛔ 兩者不得是同一個內部狀態。
+        $this->assertNotSame($canceled->status, $rejected->status);
     }
 
     /**
@@ -163,14 +198,49 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $this->assertSame(500, $synced->provider_remains);
     }
 
-    /** ⛔ 非字串 status 同樣 unrecognised，不覆蓋既有原文。 */
-    public function test_a_non_string_status_is_unrecognised(): void
+    /**
+     * ⛔ 非字串 status 同樣 unrecognised，且不覆蓋既有原文與 remains。
+     *
+     * ⛔ R1 修正：初版這個測試**實際送出的是字串 `Completed`**——它只驗證了
+     * 正常成功路徑，名稱與實作完全相反，沒有任何 non-string 反例。那是一個
+     * 假綠燈：測試名稱宣稱涵蓋的路徑，程式從來沒有走過。
+     *
+     * @return array<string, array{0: mixed}>
+     */
+    public static function nonStringStatusProvider(): array
     {
-        Http::fake([self::ENDPOINT => Http::response(['status' => 'Completed'])]);
+        return [
+            'int' => [1],
+            'zero' => [0],
+            'bool true' => [true],
+            'bool false' => [false],
+            'null' => [null],
+            'array' => [['Completed']],
+            'object' => [['status' => 'Completed']],
+            'float' => [1.5],
+        ];
+    }
+
+    #[DataProvider('nonStringStatusProvider')]
+    public function test_a_non_string_status_is_unrecognised(mixed $status): void
+    {
+        // ⛔ 先保存一組已知良好的原文與 remains，才驗證得了「不覆蓋」。
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['status' => 'In progress', 'remains' => 310])
+            ->push(['status' => $status, 'remains' => 999]);
+
         $row = $this->submittedRow();
         $this->sync($row);
 
-        $this->assertSame('Completed', $row->fresh()->provider_status_code);
+        $this->assertSame('In progress', $row->fresh()->provider_status_code);
+        $this->assertSame(310, $row->fresh()->provider_remains);
+
+        $synced = $this->sync($row);
+
+        // ⛔ 讀不懂的回應：狀態、原文與 remains 全部維持上一次的值。
+        $this->assertSame(FulfillmentStatus::Processing, $synced->status);
+        $this->assertSame('In progress', $synced->provider_status_code);
+        $this->assertSame(310, $synced->provider_remains);
     }
 
     // ==================================== 2. Remains 驗證
@@ -356,39 +426,93 @@ class SmmRawStatusAndRemainsTest extends TestCase
     }
 
     /**
-     * ⛔ 較舊的回應不得覆蓋已經是 terminal 的資料。
+     * ⭐ 真正的 in-flight 競態：provider call **進行中**時，另一個 worker 先
+     * 把同一列收斂為 terminal。
      *
-     * 模擬：worker A 還在等 provider 時，worker B 已經把這列推進 completed。
+     * ⛔ R1 修正：初版先把 DB 推成 Completed，再呼叫 action——而
+     * `SyncFulfillmentState::handle()` 開頭的 `fresh()` 會立刻看到 terminal
+     * 並直接 return，**第二個 provider response 根本沒被讀取**。那個測試從來
+     * 沒有進入它宣稱的競態路徑，是另一個假綠燈。
+     *
+     * 這次用一個 test-only gateway 建立真正的交錯：`sync()` 被呼叫時（也就是
+     * worker A 已經通過 `fresh()` 檢查、正在等 provider 回應的那一刻），
+     * 在它**內部**讓 worker B 把該列收斂為 `Completed + remains 0`；等 worker A
+     * 拿到較舊的 `In progress + remains 800` 回來時，DB 已經是 terminal。
+     *
+     * ⛔ 這才是 lock 後重新檢查真正要防的情況。
      */
-    public function test_a_stale_answer_never_overwrites_terminal_data(): void
+    public function test_an_in_flight_answer_never_overwrites_terminal_data(): void
     {
-        // ⛔ 多回應一律 fakeSequence。
-        Http::fakeSequence(self::ENDPOINT)
-            ->push(['status' => 'Completed', 'remains' => 0])
-            ->push(['status' => 'In progress', 'remains' => 800]);
-
         $row = $this->submittedRow();
-        $this->sync($row);
+        $key = $row->getKey();
 
-        /*
-         * 手上還握著一個舊的 model 快照（狀態仍是 submitted）。
-         *
-         * ⛔ `SyncFulfillmentState` 內部會先 `fresh()`，因此這裡真正驗證的是
-         * 「即使有人拿舊 model 進來，lock 後的重新檢查仍會保護 terminal 資料」。
-         */
-        $stale = FulfillmentOrder::query()->whereKey($row->getKey())->first();
-        $stale->setRawAttributes(array_merge($stale->getAttributes(), [
-            'status' => FulfillmentStatus::Submitted->value,
-        ]), true);
+        // worker B：在 worker A 的 provider call 進行中完成這一列。
+        $interleaving = new class($key) implements FulfillmentGateway
+        {
+            public function __construct(private readonly int $key) {}
 
-        app(SyncFulfillmentState::class)->handle($stale);
+            public function submit(FulfillmentSubmission $submission): FulfillmentSubmissionResult
+            {
+                throw new RuntimeException('不在本測試範圍');
+            }
+
+            public function sync(string $providerOrderId): FulfillmentSyncResult
+            {
+                /*
+                 * ⭐ 交錯點：worker A 已經過了 `fresh()` 檢查，正在「等 provider」。
+                 * 此刻 worker B 把這一列收斂為 terminal 並寫入 provider 欄位。
+                 */
+                FulfillmentOrder::query()->whereKey($this->key)->update([
+                    'status' => FulfillmentStatus::Completed->value,
+                    'provider_status_code' => 'Completed',
+                    'provider_remains' => 0,
+                    'last_synced_at' => now(),
+                ]);
+
+                // worker A 拿到的是較舊的答案。
+                return FulfillmentSyncResult::status(
+                    FulfillmentStatus::Processing,
+                    'In progress',
+                    800,
+                );
+            }
+        };
+
+        $eventsBefore = DB::table('fulfillment_events')->count();
+
+        (new SyncFulfillmentState($interleaving))->handle($row->fresh());
 
         $final = $row->fresh();
 
-        // ⛔ terminal 資料原樣保留。
+        // ⛔ terminal 的內部狀態與 provider 欄位全部原樣保留。
         $this->assertSame(FulfillmentStatus::Completed, $final->status);
-        $this->assertSame('Completed', $final->provider_status_code);
-        $this->assertSame(0, $final->provider_remains);
+        $this->assertSame('Completed', $final->provider_status_code, '⛔ 舊回應不得覆蓋 terminal 原文。');
+        $this->assertSame(0, $final->provider_remains, '⛔ 舊回應不得覆蓋 terminal remains。');
+
+        /*
+         * ⛔ 事件必須以 lock 後的**現況**記錄，不得假造舊狀態。
+         *
+         * 這條路徑會寫一筆 unrecognised 事件（我們讀到的答案在此刻已不合法），
+         * 而它的 from／to 都必須是 lock 之後看到的 `completed`——時間線是
+         * append-only，一筆宣稱「submitted → submitted」的錯誤紀錄永遠改不掉。
+         */
+        $events = DB::table('fulfillment_events')
+            ->where('fulfillment_order_id', $key)
+            ->get();
+
+        $this->assertGreaterThan($eventsBefore, $events->count());
+
+        foreach ($events as $event) {
+            foreach (['from_status', 'to_status'] as $column) {
+                if ($event->{$column} !== null) {
+                    $this->assertNotSame(
+                        FulfillmentStatus::Submitted->value,
+                        $event->{$column},
+                        '⛔ 事件不得記錄 lock 之前的舊狀態。',
+                    );
+                }
+            }
+        }
     }
 
     // ==================================== 5. 後台四處顯示

@@ -75,7 +75,18 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
         'Partial' => FulfillmentStatus::Partial,
         'Rejected' => FulfillmentStatus::Failed,
         'processing' => FulfillmentStatus::Processing,
-        'Cancel' => FulfillmentStatus::Failed,
+        /*
+         * ⛔ R1 修正：初版錯誤地映射成 `Failed`。
+         *
+         * Owner 明確指定 `Cancel = 已取消`，而系統本來就有獨立的
+         * `FulfillmentStatus::Canceled`——它的狀態機、事件語意與後台顯示
+         * 都與 `Failed` 不同。映射成 Failed 會讓後台雖然顯示原文 `Cancel`，
+         * 內部狀態、時間線與任何後續判斷卻記成「失敗」。
+         *
+         * ⛔ `Rejected` 仍維持 `Failed`：那是對方**拒絕**了這張單，與客人
+         * 或我們主動取消是兩件不同的事，兩者不得合併。
+         */
+        'Cancel' => FulfillmentStatus::Canceled,
     ];
 
     public function __construct(
