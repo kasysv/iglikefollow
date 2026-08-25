@@ -38,6 +38,7 @@ final class ProviderServiceCatalogSyncResult
         'blocked_catalog_sync_disabled',
         'blocked_lock_unavailable',
         'blocked_sync_in_progress',
+        'blocked_audit_unavailable',
         'catalog_rejected_by_parser',
         'catalog_stale_refused',
         'catalog_apply_failed',

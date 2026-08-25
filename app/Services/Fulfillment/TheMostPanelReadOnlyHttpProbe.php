@@ -58,7 +58,10 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
      */
     private const SAFE_FIELD_NAME = '/^[A-Za-z_][A-Za-z0-9_.\-]{0,39}$/';
 
-    public function __construct(private ?TheMostPanelCurlCapability $capability = null) {}
+    public function __construct(
+        private ?TheMostPanelCurlCapability $capability = null,
+        private readonly ?TheMostPanelServicesFetch $servicesFetch = null,
+    ) {}
 
     /** ⛔ production path 讀真實 runtime；測試可注入。 */
     private function capability(): TheMostPanelCurlCapability
@@ -204,65 +207,11 @@ class TheMostPanelReadOnlyHttpProbe implements TheMostPanelReadOnlyProbe, TheMos
             return TheMostPanelCatalogFetchResult::blocked('blocked_no_credential');
         }
 
-        $payload = ['key' => $key, 'action' => TheMostPanelReadOnlyAction::Services->value];
-
-        $startedAt = microtime(true);
-        $sink = new TheMostPanelBoundedResponseStream(TheMostPanelResponseSizeGuard::MAX_BODY_BYTES);
-        $transfer = new TheMostPanelTransferState;
-
-        try {
-            $response = $this->postExactlyOnce($payload, $sink, $transfer);
-        } catch (Throwable $e) {
-            return TheMostPanelCatalogFetchResult::failed(
-                $this->transportFailureCode($e, $transfer, $sink),
-                elapsedMs: $this->elapsed($startedAt),
-            );
-        }
-
-        $elapsed = $this->elapsed($startedAt);
-        $status = $response->status();
-
-        $statusFailure = $this->statusFailureCode($status);
-
-        if ($statusFailure !== null) {
-            return TheMostPanelCatalogFetchResult::failed($statusFailure, $status, $elapsed);
-        }
-
-        $body = (string) $response->body();
-
-        $bodyFailure = $this->bodyFailureCode($body);
-
-        if ($bodyFailure !== null) {
-            return TheMostPanelCatalogFetchResult::failed($bodyFailure, $status, $elapsed);
-        }
-
         /*
-         * ⛔ 拒收 credential echo，在 body 進入 fetch result 之前。
-         *
-         * CATALOG-A parser 對 `name`／`category` 只驗型別、長度與控制字元——
-         * 一個把我們 key 放進合法欄位的回應會被原樣保存進 `provider_services`。
-         * 這裡用**本次實際送出的同一份 key** 檢查；命中就整份拒收，
-         * 不建立 body closure、不套 snapshot、不印任何 provider 內容。
+         * 上方既有 CLI／probe 授權閘門全部保留，只將固定的 services request
+         * 交給共用低階元件。沒有通過舊閘門就拿不到 key，也不會進到 fetcher。
          */
-        if ($this->bodyEchoesCredential($body, $key)) {
-            return TheMostPanelCatalogFetchResult::failed('credential_echo_refused', $status, $elapsed);
-        }
-
-        return TheMostPanelCatalogFetchResult::fetched($body, $status, $elapsed);
-    }
-
-    /**
-     * Does this body carry the key we just sent, in any form?
-     *
-     * ⛔ Two passes on purpose. The raw scan catches the key anywhere at all,
-     * including invalid JSON; but JSON may hide it behind `\uXXXX` escapes
-     * that the raw scan cannot see, so the decoded structure is walked too —
-     * every object key and every string value, recursively.
-     */
-    private function bodyEchoesCredential(string $body, string $key): bool
-    {
-        // ⛔ B1-R2 接受的雙 pass 檢查,抽取為共用 guard 供 dispatch adapter 重用。
-        return TheMostPanelCredentialEchoGuard::echoes($body, $key);
+        return ($this->servicesFetch ?? app(TheMostPanelServicesFetch::class))->fetch($key);
     }
 
     /**

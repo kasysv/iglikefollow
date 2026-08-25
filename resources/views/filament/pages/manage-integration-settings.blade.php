@@ -1,7 +1,6 @@
 <x-filament-panels::page>
-    {{-- ⛔ 沒有「測試連線」按鈕：那會產生一次真實對外請求，而「我看看能不能連」
-         不該是一個會送出憑證的動作。也沒有端點欄位：一個可以在後台輸入的網址，
-         等於這台伺服器會帶著我們的金鑰去連任何有人填進去的主機。 --}}
+    {{-- ⛔ 沒有任意測試連線或端點欄位。下方同步按鈕只能送一次固定 services
+         唯讀查詢；無法輸入其他 action、order 或網址。 --}}
 
     @if (! $this->outboundAllowed())
         <div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900
@@ -12,6 +11,28 @@
             </p>
         </div>
     @endif
+
+    @php($catalog = $this->theMostPanelCatalogState())
+
+    <div class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <p class="font-bold text-gray-950 dark:text-white">SMM 服務清單</p>
+                <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    目前已保存 <span class="font-bold text-gray-950 dark:text-white">{{ $catalog['count'] }}</span> 筆服務
+                    ・最後成功同步：{{ $catalog['last_synced_at'] ?? '尚未同步' }}
+                </p>
+                <a class="mt-2 inline-block text-sm font-medium text-primary-600 hover:underline dark:text-primary-400"
+                   href="{{ $catalog['index_url'] }}">
+                    查看服務名稱、上下限
+                </a>
+            </div>
+
+            <div wire:loading.attr="aria-busy">
+                {{ $this->syncTheMostPanelCatalogAction }}
+            </div>
+        </div>
+    </div>
 
     {{-- 通道狀態與開關。⛔ 「已設定」「Owner 已啟用」「現在真的會動」是
          三件不同的事，分開顯示，才不會出現畫面說在收款/派單、實際上沒有的情況。

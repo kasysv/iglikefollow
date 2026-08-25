@@ -2,11 +2,14 @@
 
 namespace App\Filament\Pages;
 
+use App\Actions\Fulfillment\SyncTheMostPanelServiceCatalogFromOwner;
 use App\Actions\Integrations\ToggleIntegrationChannel;
 use App\Actions\Integrations\UpdateIntegrationCredentials;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
+use App\Filament\Resources\ProviderServices\ProviderServiceResource;
 use App\Models\IntegrationSetting;
+use App\Models\ProviderService;
 use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Integrations\LiveIntegration;
@@ -43,8 +46,8 @@ use UnitEnum;
  * `ToggleIntegrationChannel` 與 model observer 上,因為一份手寫的 Livewire
  * payload 從來不經過畫面。
  *
- * ⛔ 這一頁沒有「測試連線」按鈕,也沒有端點欄位。前者會產生一次對外請求,
- * 後者會讓有人填進來的網址變成這台伺服器帶著憑證去連的地方。
+ * ⛔ 這一頁沒有任意「測試連線」或端點欄位。服務目錄同步是另一個封閉
+ * action：只能送一次固定 services 查詢，不能輸入 endpoint 或 action。
  */
 class ManageIntegrationSettings extends Page
 {
@@ -234,6 +237,76 @@ class ManageIntegrationSettings extends Page
     public function outboundAllowed(): bool
     {
         return LiveIntegration::outboundAllowed();
+    }
+
+    /** @return array{count: int, last_synced_at: ?string, index_url: string} */
+    public function theMostPanelCatalogState(): array
+    {
+        $query = ProviderService::query()
+            ->where('provider', IntegrationProvider::TheMostPanel);
+
+        $lastSeenAt = (clone $query)->max('last_seen_at');
+
+        return [
+            'count' => (clone $query)->count(),
+            'last_synced_at' => $lastSeenAt === null
+                ? null
+                : date('Y-m-d H:i:s', strtotime((string) $lastSeenAt)),
+            'index_url' => ProviderServiceResource::getUrl('index'),
+        ];
+    }
+
+    public function syncTheMostPanelCatalogAction(): Action
+    {
+        return Action::make('syncTheMostPanelCatalog')
+            ->label('同步 SMM 服務')
+            ->icon(Heroicon::OutlinedArrowPath)
+            ->color('primary')
+            ->requiresConfirmation()
+            ->modalHeading('同步 SMM 服務清單？')
+            ->modalDescription('這會向 TheMostPanel 發送一次唯讀 services 查詢，不會建立訂單。成功後會以完整快照更新本機服務清單。')
+            ->modalSubmitActionLabel('確認同步')
+            ->action(function (SyncTheMostPanelServiceCatalogFromOwner $sync): void {
+                abort_unless(static::canAccess(), 403);
+
+                $result = $sync->handle();
+
+                if ($result->applied) {
+                    $state = $this->theMostPanelCatalogState();
+
+                    Notification::make()
+                        ->title('已同步 '.$state['count'].' 筆 SMM 服務')
+                        ->body('完成時間：'.($state['last_synced_at'] ?? '剛剛'))
+                        ->success()
+                        ->send();
+
+                    return;
+                }
+
+                Notification::make()
+                    ->title('SMM 服務同步未完成')
+                    ->body($this->catalogSyncFailureMessage($result->outcome))
+                    ->danger()
+                    ->send();
+            });
+    }
+
+    private function catalogSyncFailureMessage(string $outcome): string
+    {
+        return match ($outcome) {
+            'blocked_no_credential', 'blocked_credential_unreadable', 'blocked_no_app_key' => '請先儲存有效的 TheMostPanel API Key，再重新同步。',
+            'blocked_unsupported_transport_cap' => '主機缺少 PHP cURL 擴充，尚未送出同步請求。',
+            'blocked_environment', 'blocked_endpoint' => '目前環境不允許同步，尚未送出請求。',
+            'blocked_sync_in_progress' => '另一個同步正在進行，請稍後再試。',
+            'blocked_lock_unavailable' => '目前無法取得同步鎖，舊服務清單未變更。',
+            'blocked_audit_unavailable' => '目前無法建立稽核紀錄，因此沒有執行同步。',
+            'catalog_rejected_by_parser', 'catalog_apply_failed' => '回傳格式未通過安全檢查，舊服務清單已保留。',
+            'catalog_stale_refused' => '這次資料未比現有服務清單更新，因此沒有覆寫。',
+            'body_too_large', 'unsupported_encoding', 'invalid_encoding', 'credential_echo_refused' => '回傳內容未通過安全檢查，舊服務清單已保留。',
+            'transport_failed', 'redirect_refused', 'rate_limited', 'server_error',
+            'client_error', 'empty_body' => 'SMM 平台目前無法完成查詢，請稍後再試。',
+            default => '同步未完成，舊服務清單未變更。',
+        };
     }
 
     protected function getFormActions(): array

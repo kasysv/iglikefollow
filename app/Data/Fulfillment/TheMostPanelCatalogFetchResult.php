@@ -45,6 +45,8 @@ final class TheMostPanelCatalogFetchResult
         // 送出前的閘門。
         'blocked_production',
         'blocked_not_cli',
+        'blocked_not_owner',
+        'blocked_environment',
         'blocked_disabled',
         'blocked_endpoint',
         'blocked_unsupported_transport_cap',

@@ -14,11 +14,9 @@ use UnitEnum;
 /**
  * Read-only view of what the supplier's catalog last declared.
  *
- * ⛔ List only. No create, edit, delete, bulk action, sync button, connection
- * test or export: a catalog row is an observation, and the only legitimate
- * writer is a complete snapshot apply — which CATALOG-A deliberately gives no
- * entry point. A button here would be a claim that clicking it observed the
- * provider, which it did not.
+ * ⛔ List only. No create, edit, delete, bulk action or export. The only
+ * legitimate writer is the complete snapshot action exposed from the
+ * Owner-only integration settings page; this resource itself stays read-only.
  */
 class ProviderServiceResource extends Resource
 {

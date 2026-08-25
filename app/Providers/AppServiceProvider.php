@@ -79,7 +79,7 @@ class AppServiceProvider extends ServiceProvider
         FulfillmentMapping::class => FulfillmentMappingPolicy::class,
         // 履約紀錄唯讀；⛔ 沒有重送、取消或手動標記完成的入口。
         FulfillmentOrder::class => FulfillmentOrderPolicy::class,
-        // 供應商服務目錄僅限 Owner 唯讀；⛔ 後台沒有任何寫入或同步入口。
+        // 供應商服務目錄僅限 Owner 唯讀；唯一 writer 是受控完整快照同步 action。
         ProviderService::class => ProviderServicePolicy::class,
     ];
 
