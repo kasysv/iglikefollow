@@ -75,12 +75,36 @@ class CheckoutSession
     }
 
     /**
+     * Domain separation for the retry token derivation.
+     *
+     * ⛔ 固定字串，讓這個 HMAC 的用途唯一。少了它，同一把 APP_KEY 在別處對
+     * 同一份輸入做 HMAC 就會算出相同結果，兩個不相干的用途從此互相可預測。
+     */
+    private const ROTATION_DOMAIN = 'iglikefollow.checkout.retry.v1';
+
+    /**
      * Start a new checkout over the same selection.
      *
      * 客人上一張訂單的付款全部收斂為失敗／取消／逾期之後，再按一次「前往付款」
      * 是**新的一次結帳**，必須有自己的 order、order reference、checkout token
      * 與 payment attempt reference；舊訂單原樣留著當歷史。token 是那個分界，
      * 因為 `StartCheckout` 就是靠它決定要沿用舊訂單還是建新的。
+     *
+     * ⭐ 新 token 由**前代 token** deterministic 推導，不是隨機產生。
+     *
+     * ⛔ R1 修正的正是這一點。初版每個 request 各自 `Str::uuid()`：兩個同時
+     * 讀到相同舊 snapshot 的 request 會算出兩個**不同**的 token，於是
+     * `orders.checkout_token` 的 unique constraint 完全不會衝突，客人一次雙擊
+     * 就得到兩張新訂單——而 unique constraint 正是這條路徑唯一的並行防線。
+     *
+     * 改成 deterministic 之後，持有相同前代 token 的 request 一律算出同一個新
+     * token，最終由既有的 DB unique constraint 收斂成一張新訂單。收斂條件因此
+     * 只依賴「前代 token 相同」，⛔ 不依賴 session lock：lock 擋不住兩個 worker
+     * 已經各自讀完 session 的情況，而那正是這個 race 的實際樣子。
+     *
+     * ⛔ 用 HMAC 而非裸雜湊。前代 token 就放在客人自己的 cookie 裡，若新 token
+     * 只是它的公開變換（`sha256($old)` 之類），任何拿到舊 token 的人都能算出
+     * 下一個 token。APP_KEY 讓推導需要 server secret 才做得出來。
      *
      * ⛔ 只換 token，不動 variant／quantity／return_url：客人沒有重選商品，
      * 把選購一起清掉會把他踢回商品頁重來一次。
@@ -99,11 +123,42 @@ class CheckoutSession
             return null;
         }
 
-        $stored['token'] = (string) Str::uuid();
+        $previous = $stored['token'] ?? null;
+
+        // ⛔ 沒有前代 token 就無從推導；此時不得改寫 session。
+        if (! is_string($previous) || $previous === '') {
+            return null;
+        }
+
+        $stored['token'] = $this->deriveToken($previous);
 
         $request->session()->put(self::KEY, $stored);
 
         return $stored['token'];
+    }
+
+    /**
+     * The next checkout token in this retry chain.
+     *
+     * 以前代 token 為**唯一**輸入，配上 APP_KEY 做 domain-separated HMAC。
+     *
+     * ⛔ 「唯一輸入」是必要條件：若把時間、request id 或亂數混進來，兩個並行
+     * request 就會再度算出不同的值，race 又回來了。
+     *
+     * ⛔ 也不能只由某個固定值（例如 order id）推導，否則第二次輪替會算回同一個
+     * token，客人在第二次之後再也開不了新訂單。以前代推導形成一條每次都前進
+     * 的鏈：t1 → t2 → t3，兩兩不同。
+     *
+     * 取十六進位前 48 字元：`orders.checkout_token` 上限 64 字，48 個 hex
+     * 字元為 192 bits，遠超過不可猜測所需的安全邊界。
+     */
+    private function deriveToken(string $previous): string
+    {
+        return substr(
+            hash_hmac('sha256', self::ROTATION_DOMAIN.'|'.$previous, (string) config('app.key')),
+            0,
+            48
+        );
     }
 
     /**

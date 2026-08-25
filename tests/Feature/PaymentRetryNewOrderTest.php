@@ -17,8 +17,11 @@ use App\Support\CheckoutSession;
 use Database\Seeders\CatalogSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Session\ArraySessionHandler;
+use Illuminate\Session\Store;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ConfiguresLiveIntegrations;
 use Tests\TestCase;
@@ -814,5 +817,231 @@ class PaymentRetryNewOrderTest extends TestCase
             (int) $first->items()->value('id'),
             (int) $second->items()->value('id')
         );
+    }
+
+    // ==================================== 9. 並行 terminal retry（R1）
+
+    /**
+     * 造出兩個「已經各自讀到同一份舊 session snapshot」的獨立 request。
+     *
+     * ⛔ 這是本節的關鍵手法。用同一個測試 session 連送兩次 HTTP 不算並行：
+     * 第一次的寫入會被第二次讀到，race 根本不會發生。真正要模擬的是兩個
+     * request 都**在對方寫回之前**就讀到了同一份舊資料。
+     *
+     * 每個 request 拿到自己的 session store，但兩者被填入完全相同的
+     * selection＋token snapshot——這正是「客人連按兩下」在兩個 PHP worker
+     * 上同時發生時的狀態。
+     *
+     * @param  array<string, mixed>  $snapshot
+     */
+    private function staleRequest(array $snapshot): Request
+    {
+        $request = Request::create('/payments/start', 'POST');
+
+        // ⛔ 各自獨立的 store，不共用：共用就不是兩個並行 request 了。
+        $store = new Store('stale-'.Str::random(16), new ArraySessionHandler(120));
+        $store->start();
+        $store->put(CheckoutSession::KEY, $snapshot);
+
+        $request->setLaravelSession($store);
+
+        return $request;
+    }
+
+    /**
+     * ⭐ R1 的反證測試：兩個並行 terminal retry 只能建立一張新訂單。
+     *
+     * ⛔ 這個測試在初版 `b69b8d8` 必定失敗。初版的 `rotateToken()` 對每個
+     * request 各產生一個新的隨機 UUID，於是：
+     *
+     *   request A → token A → 建立新 order A
+     *   request B → token B → 建立新 order B
+     *
+     * 兩個 token 不同，`orders.checkout_token` 的 unique constraint 完全不會
+     * 衝突，客人一次雙擊就得到**兩張**新訂單。
+     *
+     * R1 讓輪替以「前代 token」為唯一輸入做 deterministic derivation，兩個
+     * 持有相同前代 token 的 request 因此算出**同一個**新 token，最終由既有的
+     * DB unique constraint 收斂成一張。
+     *
+     * ⛔ 收斂必須發生在「兩個 request 都已讀到相同 stale snapshot」之後，
+     * 不能倚賴 session lock：session lock 擋不住兩個 worker 已經各自讀完的
+     * 情況，而那正是這裡構造出來的狀態。
+     */
+    public function test_two_concurrent_terminal_retries_create_exactly_one_new_order(): void
+    {
+        $this->select();
+        $this->submit();
+
+        $old = Order::latest('id')->firstOrFail();
+        $oldToken = $old->checkout_token;
+        $this->assertSame(PaymentStatus::Failed, $old->paymentAttempts()->latest('id')->firstOrFail()->status);
+
+        // 兩個 worker 各自讀到的同一份舊 snapshot。
+        $snapshot = session(CheckoutSession::KEY);
+        $this->assertSame($oldToken, $snapshot['token']);
+
+        $a = $this->staleRequest($snapshot);
+        $b = $this->staleRequest($snapshot);
+
+        $action = app(StartCheckout::class);
+        $resultA = $action->handle($a, $this->form());
+        $resultB = $action->handle($b, $this->form());
+
+        $this->assertNotNull($resultA);
+        $this->assertNotNull($resultB);
+
+        // ⛔ 恰好兩張：一張舊的（歷史）＋一張新的。不得是三張。
+        $this->assertSame(2, Order::count(), '兩個並行 terminal retry 不得各建一張新訂單。');
+
+        // 兩個 request 收斂到同一個新 token 與同一張新 order。
+        $this->assertSame($resultA['token'], $resultB['token'], '相同前代 token 必須推導出相同新 token。');
+        $this->assertSame($resultA['order']->id, $resultB['order']->id);
+
+        $new = $resultA['order'];
+        $this->assertNotSame($old->id, $new->id);
+        $this->assertNotSame($oldToken, $new->checkout_token, '新 token 必須與前代不同。');
+        $this->assertSame($resultA['token'], $new->checkout_token);
+
+        // 欄位長度限制：⛔ 超過 64 會被 DB 截斷或拒絕。
+        $this->assertLessThanOrEqual(64, strlen($new->checkout_token));
+
+        // 新訂單只有一筆 attempt，⛔ 不是兩個 request 各塞一筆。
+        $this->assertSame(1, $new->paymentAttempts()->count());
+        $this->assertSame(2, PaymentAttempt::count());
+    }
+
+    /** 並行 retry 之後，舊訂單仍然逐欄位原樣。 */
+    public function test_a_concurrent_retry_leaves_the_old_order_untouched(): void
+    {
+        $this->select();
+        $this->submit();
+
+        $old = Order::latest('id')->firstOrFail();
+        $before = $old->fresh()->toArray();
+        $itemsBefore = $old->items()->get()->toArray();
+        $attemptsBefore = $old->paymentAttempts()->get()->toArray();
+        $eventsBefore = $old->events()->get()->toArray();
+
+        $snapshot = session(CheckoutSession::KEY);
+        $action = app(StartCheckout::class);
+        $action->handle($this->staleRequest($snapshot), $this->form());
+        $action->handle($this->staleRequest($snapshot), $this->form());
+
+        $this->assertSame($before, $old->fresh()->toArray());
+        $this->assertSame($itemsBefore, $old->items()->get()->toArray());
+        $this->assertSame($attemptsBefore, $old->paymentAttempts()->get()->toArray());
+        $this->assertSame($eventsBefore, $old->events()->get()->toArray());
+    }
+
+    /**
+     * ⭐ 第二個 terminal 週期必須產生**再下一個**不同 token。
+     *
+     * ⛔ deterministic derivation 最容易做錯的方向：若新 token 只由某個固定值
+     * 推導（例如 order id 或一個常數），第二次收斂後就會永遠算回同一個 token，
+     * 客人再也拿不到第三張訂單——重試功能等於在第二次之後靜默失效。
+     *
+     * 正確的做法是「以前一輪的 token 推導下一輪」，形成一條每次都前進的鏈。
+     */
+    public function test_a_second_terminal_cycle_derives_a_further_different_token(): void
+    {
+        $this->select();
+        $this->submit();
+
+        $first = Order::latest('id')->firstOrFail();
+        $snapshot = session(CheckoutSession::KEY);
+
+        // 第一輪輪替：兩個並行 request 收斂成第二張訂單。
+        $action = app(StartCheckout::class);
+        $r1a = $action->handle($this->staleRequest($snapshot), $this->form());
+        $r1b = $action->handle($this->staleRequest($snapshot), $this->form());
+        $this->assertSame($r1a['token'], $r1b['token']);
+
+        $second = $r1a['order'];
+        $this->assertSame(2, Order::count());
+
+        // 第二張也收斂為 terminal unpaid。
+        $this->settleLatestAttempt($second, PaymentStatus::Canceled);
+
+        // 第二輪：持有「第二張的 token」的兩個並行 request。
+        $snapshot2 = array_merge($snapshot, ['token' => $r1a['token']]);
+        $r2a = $action->handle($this->staleRequest($snapshot2), $this->form());
+        $r2b = $action->handle($this->staleRequest($snapshot2), $this->form());
+
+        $this->assertSame($r2a['token'], $r2b['token']);
+        $this->assertSame(3, Order::count(), '第二個 terminal 週期必須能再開一張。');
+
+        // ⛔ 三個 token 兩兩不同：鏈是往前走的，不是繞回原點。
+        $tokens = [$first->checkout_token, $r1a['token'], $r2a['token']];
+        $this->assertCount(3, array_unique($tokens));
+        $this->assertSame(3, Order::query()->distinct()->count('checkout_token'));
+        $this->assertSame(3, Order::query()->distinct()->count('reference'));
+    }
+
+    /**
+     * 推導必須綁定 server secret，⛔ 不得只是前代 token 的公開函數。
+     *
+     * 前代 token 會出現在客人自己的 cookie／session 裡。若新 token 只是它的
+     * `sha256` 之類的公開變換，任何拿到舊 token 的人都能算出下一個 token，
+     * 進而預測或搶佔下一張訂單的識別碼。
+     *
+     * 這裡以 `APP_KEY` 改變後推導結果必須改變來證明 secret 真的參與運算。
+     */
+    public function test_the_derived_token_depends_on_the_application_secret(): void
+    {
+        $this->select();
+        $snapshot = session(CheckoutSession::KEY);
+
+        $session = app(CheckoutSession::class);
+
+        $first = $session->rotateToken($this->staleRequest($snapshot));
+
+        // 換一把 APP_KEY 再推導同一個前代 token。
+        config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+
+        $second = $session->rotateToken($this->staleRequest($snapshot));
+
+        $this->assertNotSame(
+            $first,
+            $second,
+            '⛔ 推導必須包含 server secret；否則任何人拿到舊 token 都能算出下一個。'
+        );
+
+        // ⛔ 也不得等於前代 token 的裸雜湊——那同樣是公開可算的。
+        $this->assertNotSame(hash('sha256', $snapshot['token']), $first);
+    }
+
+    /** 相同前代 token 在同一把 APP_KEY 下必須穩定重現，否則並行收斂不成立。 */
+    public function test_the_derivation_is_stable_for_the_same_previous_token(): void
+    {
+        $this->select();
+        $snapshot = session(CheckoutSession::KEY);
+
+        $session = app(CheckoutSession::class);
+
+        $a = $session->rotateToken($this->staleRequest($snapshot));
+        $b = $session->rotateToken($this->staleRequest($snapshot));
+        $c = $session->rotateToken($this->staleRequest($snapshot));
+
+        $this->assertSame($a, $b);
+        $this->assertSame($b, $c);
+        $this->assertNotSame($snapshot['token'], $a);
+        $this->assertLessThanOrEqual(64, strlen($a));
+    }
+
+    /** 不同的前代 token 必須推導出不同的新 token。 */
+    public function test_different_previous_tokens_derive_different_new_tokens(): void
+    {
+        $this->select();
+        $snapshot = session(CheckoutSession::KEY);
+
+        $session = app(CheckoutSession::class);
+
+        $a = $session->rotateToken($this->staleRequest($snapshot));
+        $b = $session->rotateToken($this->staleRequest(
+            array_merge($snapshot, ['token' => (string) Str::uuid()])
+        ));
+
+        $this->assertNotSame($a, $b);
     }
 }
