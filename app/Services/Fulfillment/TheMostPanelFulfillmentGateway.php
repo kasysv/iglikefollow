@@ -99,6 +99,28 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
          * 或我們主動取消是兩件不同的事，兩者不得合併。
          */
         'Cancel' => FulfillmentStatus::Canceled,
+
+        /*
+         * ⭐ Owner 以 staging 第一方 live 結果確認：PANEL 實際回傳 exact
+         * `Canceled`（有 `ed`）。
+         *
+         * ⛔ 缺了這一列，每次輪詢都會記一筆 `STATUS_UNRECOGNISED` 並維持原內部
+         * 狀態——後台顯示「供應商狀態無法辨識，維持原狀」。那是可重現的
+         * allowlist 缺口，⛔ 不是 API 連線或排程故障。
+         *
+         * ⛔ `Cancel`（無 `ed`）**暫時保留**：那是先前 Owner 明確提供且已接受
+         * 的 token，本輪沒有相反的 live 證據證明它永遠不會出現。⛔ 在沒有證據
+         * 的情況下移除一個已知 token，只會把今天的缺口換到另一邊。
+         *
+         * ⛔ 兩者都是 exact match：`Cancelled`（英式雙 l）、`canceled`、
+         * `CANCELED` 與前後空白變體一律**不接受**，仍維持 unrecognised。
+         * 這張表不做 trim、不改大小寫、不做模糊正規化——那樣才能讓「對方換了
+         * 拼法」成為一個看得見的事件，而不是被我們猜著吞掉。
+         *
+         * ⛔ 兩者都映射到 `Canceled` 而**不是** `Failed`：取消與被拒絕是兩件
+         * 不同的事（見上方 `Rejected` 的說明）。
+         */
+        'Canceled' => FulfillmentStatus::Canceled,
     ];
 
     public function __construct(

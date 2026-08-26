@@ -344,7 +344,21 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
             'trailing space' => ['Completed '],
             'title-cased variant' => ['In Progress'],
             'unknown token' => ['Processing'], // 我們的內部字彙不是他們的 token
-            'canceled token undocumented' => ['Canceled'],
+
+            /*
+             * ⛔ `Canceled` 已從這份清單**移出**——Owner 以 staging 第一方 live
+             * 結果確認 PANEL 真的會回傳它，因此它現在是被接受的 exact token
+             * （見 `recognisedCancelTokenProvider()`）。
+             *
+             * ⛔ 但英式拼法與大小寫變體仍然全部拒絕：這張表是 exact match，
+             * 不做 trim、不改大小寫、不做模糊正規化。
+             */
+            'british spelling' => ['Cancelled'],
+            'lowercase canceled' => ['canceled'],
+            'uppercase canceled' => ['CANCELED'],
+            'canceled with trailing space' => ['Canceled '],
+            'canceled with leading space' => [' Canceled'],
+
             'not a string' => [123],
             'null' => [null],
             'list' => [['Completed']],
@@ -358,6 +372,46 @@ class TheMostPanelFulfillmentGatewayTest extends TestCase
         Http::fake([self::ENDPOINT => Http::response(['status' => $token])]);
 
         $this->assertFalse($this->gateway()->sync('23501')->isRecognised());
+    }
+
+    /**
+     * ⭐ 兩種取消 token 都必須被認得。
+     *
+     * ⛔ `Canceled`（有 `ed`）是 Owner 以 staging 第一方 live 結果確認的實際
+     * 回傳值；缺了它，每次輪詢都會記一筆 `STATUS_UNRECOGNISED` 並維持原狀。
+     *
+     * ⛔ `Cancel`（無 `ed`）是先前 Owner 明確提供的 token，暫時保留——本輪
+     * 沒有相反的 live 證據證明它永遠不會出現。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function recognisedCancelTokenProvider(): array
+    {
+        return [
+            'live confirmed' => ['Canceled'],
+            'previously provided' => ['Cancel'],
+        ];
+    }
+
+    /**
+     * ⛔⛔ 兩者都映射到 `Canceled`，⛔ 絕不是 `Failed`。
+     *
+     * 取消與被拒絕是兩件不同的事：`Rejected` 才是 `Failed`。映射成 Failed 會
+     * 讓後台雖然顯示原文，內部狀態、時間線與後續判斷卻記成「失敗」。
+     */
+    #[DataProvider('recognisedCancelTokenProvider')]
+    public function test_both_cancel_tokens_map_to_canceled(string $token): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['status' => $token])]);
+
+        $result = $this->gateway()->sync('23501');
+
+        $this->assertTrue($result->isRecognised(), "⛔ `{$token}` 必須被認得。");
+        $this->assertSame(FulfillmentStatus::Canceled, $result->status);
+        $this->assertNotSame(FulfillmentStatus::Failed, $result->status);
+
+        // ⭐ 原文逐字保存，供後台與客服對照。
+        $this->assertSame($token, $result->providerStatusToken);
     }
 
     public function test_a_status_error_object_or_bad_shape_is_unrecognised(): void

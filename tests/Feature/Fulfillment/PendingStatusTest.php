@@ -351,9 +351,23 @@ class PendingStatusTest extends TestCase
             'Rejected' => FulfillmentStatus::Failed,
             'processing' => FulfillmentStatus::Processing,
             'Cancel' => FulfillmentStatus::Canceled,
+            /*
+             * ⭐ Hotfix：Owner 以 staging 第一方 live 結果確認 PANEL 實際回傳
+             * exact `Canceled`（有 `ed`）。
+             *
+             * ⛔ `Cancel`（無 `ed`）暫時保留：本輪沒有相反的 live 證據證明它
+             * 永不出現。在沒有證據的情況下移除一個已知 token，只是把今天的
+             * 缺口換到另一邊。
+             */
+            'Canceled' => FulfillmentStatus::Canceled,
         ], $map);
 
         // ⛔ `Submitted` 不是 provider status token，不得出現在表內。
         $this->assertArrayNotHasKey('Submitted', $map);
+
+        // ⛔ 拒絕的變體一律不得在表內（exact match，不做正規化）。
+        foreach (['Cancelled', 'canceled', 'CANCELED', 'Canceled ', ' Canceled'] as $variant) {
+            $this->assertArrayNotHasKey($variant, $map, "⛔ `{$variant}` 不得被接受。");
+        }
     }
 }

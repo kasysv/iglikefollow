@@ -84,9 +84,10 @@ class SmmRawStatusAndRemainsTest extends TestCase
     // ==================================== 1. 六個允許 token
 
     /**
-     * ⭐ 六個 exact token：內部 enum 正確，且原文被保存下來。
+     * ⭐ 每個 exact token：內部 enum 正確，且原文被保存下來。
      *
-     * 前四個來自公開文件，`processing` 與 `Cancel` 由 Owner 提供。
+     * 前四個來自公開文件；`processing` 與 `Cancel` 由 Owner 提供；
+     * `Pending` 與 `Canceled` 由 Owner 以 staging 第一方 live 結果確認。
      *
      * @return array<string, array{0: string, 1: FulfillmentStatus}>
      */
@@ -100,6 +101,18 @@ class SmmRawStatusAndRemainsTest extends TestCase
             'processing (lowercase)' => ['processing', FulfillmentStatus::Processing],
             // ⛔ R1 修正：Owner 指定 `Cancel = 已取消`，不是失敗。
             'Cancel' => ['Cancel', FulfillmentStatus::Canceled],
+
+            /*
+             * ⭐ Hotfix：Owner 以 staging 第一方 live 結果確認 PANEL 實際回傳
+             * exact `Canceled`（有 `ed`）。缺了它，每次輪詢都會記一筆
+             * `STATUS_UNRECOGNISED` 並維持原內部狀態。
+             *
+             * ⛔ 與 `Cancel` 一樣映射到 `Canceled`，⛔ 不是 `Failed`。
+             */
+            'Canceled (live confirmed)' => ['Canceled', FulfillmentStatus::Canceled],
+
+            // R1：同樣由 Owner live 確認的 exact token。
+            'Pending' => ['Pending', FulfillmentStatus::Pending],
         ];
     }
 
@@ -118,7 +131,20 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $this->assertSame($token, $synced->provider_status_code);
         // ⛔ 後台顯示的就是原文，不是本站翻譯。
         $this->assertSame($token, $synced->displayProviderStatus());
-        $this->assertNotSame($expected->label(), $synced->displayProviderStatus());
+
+        /*
+         * ⛔ 原文欄位不得被本站的 enum label 取代。
+         *
+         * ⭐ 但 `Pending` 是刻意的例外：R2 依 Owner 指示（「PENDING 就是
+         * PENDING」）把該 enum 的 admin label 改成 exact token 本身，所以這裡
+         * 兩者**本來就相同**——那不是「原文被翻譯蓋掉」，而是我們刻意不翻譯。
+         *
+         * ⛔ 因此只對「label 與 token 本來就不同」的 case 做這個反證；
+         * 對 Pending 硬套只會得到一個與 R2 決定互相矛盾的斷言。
+         */
+        if ($expected->label() !== $token) {
+            $this->assertNotSame($expected->label(), $synced->displayProviderStatus());
+        }
 
         Http::assertSentCount(1);
     }
