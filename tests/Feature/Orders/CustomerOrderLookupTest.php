@@ -1576,7 +1576,34 @@ class CustomerOrderLookupTest extends TestCase
         }
     }
 
-    /** 結果頁不得出現「下單時間」。 */
+    /**
+     * ⭐ Owner 指定的處理說明句，顯示在卡片下方。
+     *
+     * ⛔ 只在**有結果**時出現。查無時說「訂單已自動安排處理」是矛盾的——
+     * 客人什麼都沒查到，卻被告知系統已在處理某張他看不到的訂單。
+     */
+    public function test_the_processing_note_appears_only_with_results(): void
+    {
+        $order = $this->orderFor();
+
+        $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])
+            ->assertOk()
+            ->assertSee($order->reference, false)
+            ->assertSee('訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。');
+
+        // ⛔ 查無：不得出現這句。
+        $this->lookup(['email' => 'nobody@example.test', 'phone' => '0900000000'])
+            ->assertOk()
+            ->assertSee('查不到符合的訂單')
+            ->assertDontSee('訂單已自動安排處理');
+
+        // ⛔ 尚未查詢的空表單頁也不得出現。
+        $this->get('/order-check')
+            ->assertOk()
+            ->assertDontSee('訂單已自動安排處理');
+    }
+
+    /** 結果頁使用 Owner 指定的「訂單時間」標籤，⛔ 不用舊的「下單時間」。 */
     public function test_the_result_page_labels_the_order_time_as_approved(): void
     {
         $order = $this->orderFor();

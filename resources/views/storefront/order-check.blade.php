@@ -179,6 +179,17 @@
                             </article>
                         @endforeach
                     </div>
+
+                    {{--
+                        ⭐ Owner 指定的說明句，放在**卡片下方**。
+
+                        ⛔ 放在 `@else`（有結果）分支內，⛔ 不放在查無分支：
+                        「訂單已自動安排處理」對一個什麼都沒查到的人是矛盾的
+                        ——他會以為系統確認了某張他看不到的訂單。
+                    --}}
+                    <p class="mt-6 text-sm leading-6 text-black/60">
+                        訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。
+                    </p>
                 @endif
 
                 <p class="mt-8 text-sm leading-6 text-black/60">
