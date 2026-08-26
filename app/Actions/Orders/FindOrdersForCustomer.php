@@ -31,21 +31,48 @@ class FindOrdersForCustomer
     /**
      * @return Collection<int, Order> 符合**所有**已提供條件的訂單
      */
-    public function handle(?string $reference, ?string $email, ?string $phone): Collection
+    public function handle(mixed $reference, mixed $email, mixed $phone): Collection
     {
-        $reference = self::normalizeReference($reference);
-        $emailHash = ContactLookupHash::forEmail($email);
-        $phoneHash = ContactLookupHash::forPhone($phone);
-
         /*
-         * ⛔ 至少兩項。少於兩項一律回空集合,⛔ 不退化成單項查詢——那正是
-         * 這道門檻存在的理由。
+         * ⭐ R1 修正：先依**原始輸入**判斷哪些欄位「有提供」,再驗證。
+         *
+         * ⛔ 初版是先正規化、再數有幾個非 null——於是一個**無效的**第三欄
+         * (例如 `IGL-%`、array、超長手機)會被正規化成 null 而**靜默消失**,
+         * 剩下的兩項仍然成立,查詢照樣命中。那等於「填錯的欄位不算數」,
+         * 把 AND 門檻悄悄降回兩項。
+         *
+         * 現在的規則：**任何已提供的欄位驗證失敗,整次查詢就是 no-match。**
          */
-        $provided = count(array_filter([$reference, $emailHash, $phoneHash], fn ($v) => $v !== null));
+        $suppliedReference = self::isSupplied($reference);
+        $suppliedEmail = self::isSupplied($email);
+        $suppliedPhone = self::isSupplied($phone);
 
-        if ($provided < 2) {
+        $suppliedCount = (int) $suppliedReference + (int) $suppliedEmail + (int) $suppliedPhone;
+
+        // ⛔ 至少兩項,⛔ 不退化成單項查詢——那正是這道門檻存在的理由。
+        if ($suppliedCount < 2) {
             return collect();
         }
+
+        $normalizedReference = $suppliedReference ? self::normalizeReference($reference) : null;
+        $emailHash = $suppliedEmail ? ContactLookupHash::forEmail(is_string($email) ? $email : null) : null;
+        $phoneHash = $suppliedPhone ? ContactLookupHash::forPhone(is_string($phone) ? $phone : null) : null;
+
+        /*
+         * ⛔ 已提供但驗證失敗 → 整次 no-match。
+         *
+         * ⛔ 回傳空集合而不是拋錯或給不同訊息:呼叫端對所有失敗都顯示同一句
+         * 通用文案,否則「格式錯誤」與「查無資料」的差異就成了一個 oracle,
+         * 可以用來探測某個 Email 是否存在。
+         */
+        if (($suppliedReference && $normalizedReference === null)
+            || ($suppliedEmail && $emailHash === null)
+            || ($suppliedPhone && $phoneHash === null)
+        ) {
+            return collect();
+        }
+
+        $reference = $normalizedReference;
 
         // ⛔ eager load：避免公開頁對每個商品項目各查一次履約列。
         $query = Order::query()->with(['items.fulfillmentOrder']);
@@ -76,6 +103,30 @@ class FindOrdersForCustomer
     }
 
     /**
+     * Did the customer actually fill this field in?
+     *
+     * ⛔ 「有提供」與「有效」是兩件不同的事,必須分開判斷——這正是初版
+     * bypass 的來源。
+     *
+     * ⛔ 非字串(array／object／數字)也算「有提供」:那代表有人送了一個
+     * 我們不預期的型別,必須讓它導致 no-match,而不是被當成「沒填」而忽略。
+     * 空字串與純空白才算沒填。
+     */
+    private static function isSupplied(mixed $value): bool
+    {
+        if ($value === null) {
+            return false;
+        }
+
+        if (is_string($value)) {
+            return trim($value) !== '';
+        }
+
+        // array、object、int、bool…—— 都是不預期的型別,視為有提供且無效。
+        return true;
+    }
+
+    /**
      * The order reference in its canonical shape, or null.
      *
      * ⛔ 只接受本站 reference 的合法形狀(`IGL-` ＋ 12 個大寫英數)。
@@ -83,8 +134,9 @@ class FindOrdersForCustomer
      * ⛔ 不做模糊比對、不做前綴搜尋:那會讓人用一段前綴掃出一批訂單編號,
      * 把查詢變成枚舉工具。
      */
-    public static function normalizeReference(?string $reference): ?string
+    public static function normalizeReference(mixed $reference): ?string
     {
+        // ⛔ 非字串(array／object／數字)一律 null——由呼叫端轉成 no-match。
         if (! is_string($reference)) {
             return null;
         }

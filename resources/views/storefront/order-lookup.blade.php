@@ -39,40 +39,45 @@
             <div class="mt-6 space-y-6">
                 @foreach ($results as $order)
                     <article class="rounded-xl border border-black/10 p-5">
-                        <header class="flex flex-wrap items-baseline justify-between gap-2">
-                            <h2 class="text-base font-bold text-black">
+                        <header>
+                            <h2 class="text-base font-bold break-words text-black">
                                 訂單編號 {{ $order['reference'] }}
                             </h2>
-                            @if ($order['placed_at'])
-                                <p class="text-sm text-black/55">下單時間 {{ $order['placed_at'] }}</p>
-                            @endif
                         </header>
 
-                        <div class="mt-4 overflow-x-auto">
-                            <table class="w-full min-w-[32rem] text-left text-sm">
-                                <thead class="text-black/55">
-                                    <tr>
-                                        <th scope="col" class="py-2 pr-4 font-medium">服務</th>
-                                        <th scope="col" class="py-2 pr-4 font-medium">數量</th>
-                                        <th scope="col" class="py-2 pr-4 font-medium">狀態</th>
-                                        <th scope="col" class="py-2 font-medium">剩餘</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-black/5">
-                                    @foreach ($order['items'] as $item)
-                                        <tr>
-                                            <td class="py-3 pr-4 text-black">
-                                                {{ $item['platform'] }}｜{{ $item['service'] }}
-                                                <span class="block text-black/55">{{ $item['variant'] }}</span>
-                                            </td>
-                                            <td class="py-3 pr-4 text-black">{{ number_format($item['quantity']) }}</td>
-                                            <td class="py-3 pr-4 text-black">{{ $item['status'] }}</td>
-                                            <td class="py-3 text-black">{{ $item['remains'] }}</td>
-                                        </tr>
-                                    @endforeach
-                                </tbody>
-                            </table>
-                        </div>
+                        {{--
+                            ⛔ R1：390px 不得依賴橫向捲動閱讀。
+
+                            初版用 `min-w-[32rem]` 的表格，在 390px 一定要左右
+                            捲才看得完——那是「能看到」而不是「好讀」。改為
+                            手機堆疊卡片、`sm` 以上才用表格式欄位。
+                        --}}
+                        <ul class="mt-4 divide-y divide-black/5">
+                            @foreach ($order['items'] as $item)
+                                <li class="py-4">
+                                    <p class="font-medium break-words text-black">
+                                        {{ $item['platform'] }}｜{{ $item['service'] }}
+                                    </p>
+                                    <p class="mt-0.5 text-sm break-words text-black/55">{{ $item['variant'] }}</p>
+
+                                    {{-- 手機：兩欄標籤／值；桌面：一列四欄。 --}}
+                                    <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+                                        <div>
+                                            <dt class="text-black/55">購買數量</dt>
+                                            <dd class="text-black">{{ number_format($item['quantity']) }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt class="text-black/55">狀態</dt>
+                                            <dd class="text-black">{{ $item['status'] }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt class="text-black/55">剩餘</dt>
+                                            <dd class="text-black">{{ $item['remains'] }}</dd>
+                                        </div>
+                                    </dl>
+                                </li>
+                            @endforeach
+                        </ul>
                     </article>
                 @endforeach
             </div>

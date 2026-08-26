@@ -32,14 +32,17 @@ class OrderLookupController extends Controller
          * 這裡刻意不使用 FormRequest 的自動錯誤回傳(那會 redirect 並把輸入
          * 放進 session flash),而是自己判斷後直接 render 通用結果。
          */
-        $reference = $request->input('reference');
-        $email = $request->input('email');
-        $phone = $request->input('phone');
-
+        /*
+         * ⛔ R1：把**原始輸入**原樣交給 action，⛔ 不先轉成 `?string`。
+         *
+         * 初版在這裡把非字串（array／object）轉成 null，於是一個型別不對的
+         * 第三欄會被當成「沒填」而從 AND 條件中消失——那正是 bypass 的一半。
+         * action 需要看到「有提供但無效」與「沒提供」的差別。
+         */
         $orders = $finder->handle(
-            is_string($reference) ? $reference : null,
-            is_string($email) ? $email : null,
-            is_string($phone) ? $phone : null,
+            $request->input('reference'),
+            $request->input('email'),
+            $request->input('phone'),
         );
 
         /*

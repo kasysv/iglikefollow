@@ -10,6 +10,7 @@ use App\Filament\Resources\Orders\OrderResource;
 use App\Filament\Resources\Orders\Pages\ListOrders;
 use App\Filament\Resources\Orders\Pages\ViewOrder;
 use App\Filament\Resources\Orders\RelationManagers\FulfillmentOrdersRelationManager;
+use App\Filament\Resources\Orders\RelationManagers\OrderEventsRelationManager;
 use App\Filament\Resources\Orders\RelationManagers\PaymentAttemptsRelationManager;
 use App\Models\FulfillmentOrder;
 use App\Models\Invoice;
@@ -229,9 +230,10 @@ class OrderAdminTest extends TestCase
         $order = $this->order();
 
         $this->assertTrue((new PaymentAttemptsRelationManager)->isReadOnly());
-        // ⛔ 履約 relation manager 同樣唯讀；events 那個已併入主畫面時間線，
-        // 不再掛載（見 test_the_order_events_relation_manager_is_no_longer_mounted）。
+        // ⛔ 三個 relation manager 全部唯讀。合併時間線更是連 table 都沒有——
+        // 它用自訂 view 純呈現，⛔ 沒有任何寫入路徑可言。
         $this->assertTrue((new FulfillmentOrdersRelationManager)->isReadOnly());
+        $this->assertTrue((new OrderEventsRelationManager)->isReadOnly());
 
         $this->assertContains(
             PaymentAttemptsRelationManager::class,
@@ -478,31 +480,50 @@ class OrderAdminTest extends TestCase
         );
 
         /*
-         * ⭐ A1：合併時間線的唯一呈現位置改為下方的「訂單時間線」
-         * RelationManager，主畫面不再有重複的「訂單時間表」Section。
+         * ⭐ R1：合併時間線的唯一呈現位置是**下方**的「訂單時間線」
+         * RelationManager；主畫面那個重複的「訂單時間表」Section 已移除。
          *
-         * ⛔ 主畫面必須**不再**出現舊 Section 的標題——同一份合併資料在一頁
-         * 出現兩次，客服會不確定哪一個才是完整的。
+         * ⛔ A1 做反了方向（移除下方、保留上方），與 Owner 原話相反——原話是
+         * 把主畫面的「訂單時間表」**併入下方既有的**「訂單時間線」。R1 改回來。
+         *
+         * ⛔ 主畫面必須不再出現舊 Section 的標題：同一份合併資料在一頁出現
+         * 兩次，客服會不確定哪一個才是完整的。
          */
-        $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
+        $page = Livewire::test(ViewOrder::class, ['record' => $order->reference])
+            ->assertOk()
+            ->html();
 
-        // ⛔ 舊的重複區塊標題必須消失，只留下唯一的「訂單時間線」。
-        $this->assertStringNotContainsString('訂單時間表', $html, '⛔ 不得再有第二條時間線。');
-        $this->assertStringContainsString('訂單時間線', $html);
+        $this->assertStringNotContainsString('訂單時間表', $page, '⛔ 主畫面不得有第二條時間線。');
+        $this->assertStringNotContainsString('已在 SMM 平台下單', $page, '⛔ 合併內容不得留在主畫面。');
 
-        // 合併資料本身仍完整。
-        $this->assertStringContainsString('已在 SMM 平台下單', $html);
-        $this->assertStringContainsString('SMM 平台已進行中', $html);
-        $this->assertStringContainsString('時間表服務名稱', $html);
+        /*
+         * ⛔ 下方的唯一時間線必須同時含**兩個來源**——order events ＋
+         * fulfillment events。只有 order events 的話，它就只是原本那個
+         * relation manager，Owner 要的合併等於沒做。
+         */
+        $timeline = Livewire::test(OrderEventsRelationManager::class, [
+            'ownerRecord' => $order->fresh(),
+            'pageClass' => ViewOrder::class,
+        ])->assertOk()->html();
+
+        $this->assertStringContainsString('已在 SMM 平台下單', $timeline);
+        $this->assertStringContainsString('SMM 平台已進行中', $timeline);
+        $this->assertStringContainsString('時間表服務名稱', $timeline);
     }
 
-    /** ⛔ 只掛載兩個 relation manager；events 那個已併入主畫面時間線。 */
-    public function test_the_order_events_relation_manager_is_no_longer_mounted(): void
+    /**
+     * ⭐ R1：三個 relation manager 都掛載，合併時間線是最後一個。
+     *
+     * ⛔ A1 把 events 那個拿掉了；R1 重新掛回來，因為它才是 Owner 指定的
+     * 唯一時間線位置。
+     */
+    public function test_the_merged_timeline_relation_manager_is_mounted_last(): void
     {
         $this->assertSame(
             [
                 PaymentAttemptsRelationManager::class,
                 FulfillmentOrdersRelationManager::class,
+                OrderEventsRelationManager::class,
             ],
             OrderResource::getRelations(),
         );

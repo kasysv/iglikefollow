@@ -12,6 +12,7 @@ use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\ServiceVariant;
 use App\Support\ContactLookupHash;
+use App\Support\PublicOrderPresenter;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -230,19 +231,154 @@ class CustomerOrderLookupTest extends TestCase
     }
 
     /**
-     * ⛔ 不自行把 `+886` 與 `09` 推定為同一支號碼。
+     * ⭐ R1：Owner 後補的台灣國碼等價規則。
      *
-     * 那是一個關於台灣號碼格式的假設，而這個判斷決定「誰能看到哪一張訂單」
-     * ——猜錯的方向是讓甲看到乙的訂單。
+     * `09XXXXXXXX`、`+8869XXXXXXXX`、`008869XXXXXXXX` 是同一支號碼的三種
+     * 寫法，必須雙向命中。
+     *
+     * ⛔ 初版明文主張「不等價」，與 Owner 最新要求相反——已撤回。
+     *
+     * @return array<string, array{0: string}>
      */
-    public function test_a_different_country_code_form_is_not_assumed_equal(): void
+    public static function taiwanEquivalentPhoneProvider(): array
+    {
+        return [
+            'local' => ['0912345678'],
+            'plus 886' => ['+886912345678'],
+            'zero zero 886' => ['00886912345678'],
+        ];
+    }
+
+    #[DataProvider('taiwanEquivalentPhoneProvider')]
+    public function test_taiwan_phone_forms_are_equivalent_in_both_directions(string $stored): void
+    {
+        // 以其中一種寫法建立訂單。
+        $order = $this->orderFor([
+            'customer_phone' => $stored,
+            'customer_phone_lookup_hash' => ContactLookupHash::forPhone($stored),
+        ]);
+
+        // ⛔ 三種寫法都必須查得到。
+        foreach (['0912345678', '+886912345678', '00886912345678'] as $typed) {
+            $this->lookup([
+                'reference' => $order->reference,
+                'phone' => $typed,
+            ])->assertOk()->assertSee($order->reference, false);
+        }
+    }
+
+    /**
+     * ⛔ 相鄰／模糊形狀不得誤撞。
+     *
+     * ⛔ 裸 `886912345678`（沒有 `+` 或 `00`）不視為國際格式——那是一段我們
+     * 無法確定意圖的數字，可能是別國的本地號碼。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function nonEquivalentPhoneProvider(): array
+    {
+        return [
+            'bare 886 is not international' => ['886912345678'],
+            'one digit short' => ['091234567'],
+            'one digit long' => ['09123456789'],
+            'landline' => ['0223456789'],
+            'different number' => ['0987654321'],
+        ];
+    }
+
+    #[DataProvider('nonEquivalentPhoneProvider')]
+    public function test_adjacent_phone_shapes_never_collide(string $typed): void
     {
         $order = $this->orderFor();
 
         $this->lookup([
             'reference' => $order->reference,
-            'phone' => '+886912345678',
-        ])->assertOk()->assertDontSee($order->reference);
+            'phone' => $typed,
+        ])->assertOk()->assertDontSee($order->reference, false);
+    }
+
+    /** ⭐ 明確國際前綴：`+1…` 與 `001…` 等價；裸數字不自動等價。 */
+    public function test_explicit_international_prefixes_are_equivalent(): void
+    {
+        $order = $this->orderFor([
+            'customer_phone' => '+14155552671',
+            'customer_phone_lookup_hash' => ContactLookupHash::forPhone('+14155552671'),
+        ]);
+
+        foreach (['+14155552671', '0014155552671'] as $typed) {
+            $this->lookup([
+                'reference' => $order->reference,
+                'phone' => $typed,
+            ])->assertOk()->assertSee($order->reference, false);
+        }
+
+        // ⛔ 裸 `14155552671` 沒有明確國際前綴，不得自動等價。
+        $this->lookup([
+            'reference' => $order->reference,
+            'phone' => '14155552671',
+        ])->assertOk()->assertDontSee($order->reference, false);
+    }
+
+    /** normalizePhone 的封閉輸出：三類語意各帶前綴，⛔ 永不互撞。 */
+    public function test_phone_canonicalization_uses_distinct_namespaces(): void
+    {
+        $this->assertSame('TW:0912345678', ContactLookupHash::normalizePhone('0912345678'));
+        $this->assertSame('TW:0912345678', ContactLookupHash::normalizePhone('+886912345678'));
+        $this->assertSame('TW:0912345678', ContactLookupHash::normalizePhone('00886912345678'));
+        $this->assertSame('INT:+14155552671', ContactLookupHash::normalizePhone('+14155552671'));
+        $this->assertSame('INT:+14155552671', ContactLookupHash::normalizePhone('0014155552671'));
+        $this->assertSame('RAW:886912345678', ContactLookupHash::normalizePhone('886912345678'));
+        $this->assertSame('RAW:0223456789', ContactLookupHash::normalizePhone('0223456789'));
+
+        // ⛔ 非數字一律 null。
+        $this->assertNull(ContactLookupHash::normalizePhone('abc'));
+        $this->assertNull(ContactLookupHash::normalizePhone(''));
+    }
+
+    // ==================================== 2b. AND bypass（R1）
+
+    /**
+     * ⭐ R1 反證：**已提供但無效**的第三欄必須讓整次查詢 no-match。
+     *
+     * ⛔ 初版先正規化、再數有幾個非 null——於是無效的第三欄被正規化成 null
+     * 而**靜默消失**，剩下的兩項仍然成立，查詢照樣命中。那等於「填錯的欄位
+     * 不算數」，把 AND 門檻悄悄降回兩項。
+     *
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function malformedThirdFieldProvider(): array
+    {
+        return [
+            'malformed reference' => [['reference' => 'IGL-%']],
+            'short reference' => [['reference' => 'IGL-ABC']],
+            'array reference' => [['reference' => ['IGL-ABCDEFGHIJKL']]],
+            'malformed phone' => [['phone' => 'not-a-phone']],
+            'array phone' => [['phone' => ['0912345678']]],
+            'array email' => [['email' => ['buyer@example.test']]],
+        ];
+    }
+
+    #[DataProvider('malformedThirdFieldProvider')]
+    public function test_a_supplied_but_invalid_field_forces_no_match(array $extra): void
+    {
+        $order = $this->orderFor();
+
+        // 兩個正確欄位 ＋ 一個已提供但無效的欄位。
+        $payload = array_merge([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ], $extra);
+
+        // 若被查詢的欄位本身就是 email／phone，改用 reference 當第二個有效項。
+        if (isset($extra['email'])) {
+            $payload['reference'] = $order->reference;
+        }
+
+        $response = $this->lookup($payload);
+
+        $response->assertOk();
+        $response->assertDontSee($order->reference, false);
+        $response->assertSee('查不到符合的訂單');
     }
 
     /** 沒有手機的訂單：phone hash 為 null，用手機查不到。 */
@@ -700,6 +836,125 @@ class CustomerOrderLookupTest extends TestCase
         }
     }
 
+    /**
+     * ⛔ 手機 domain 必須明確標記為 v2，且與 Email domain 不同。
+     *
+     * ⛔ 這條是**釘住常數字面值**，看起來像在重複實作——它不是。
+     *
+     * 手機語意升版後，正式站上還留著用 v1 語意算出來的 hash。domain 字串本身
+     * 在本機不可觀測（本機沒有 v1 資料可比對），所以任何行為測試都殺不掉
+     * 「把 v2 改回 v1」這個變異——我實測過，它是 equivalent mutant。
+     *
+     * 但在**正式站**上它一點都不等價：沿用 v1 domain 會讓新算出來的 hash 與
+     * 殘留的 v1 值在同一個 keyspace 裡混在一起，兩種語意的值再也分不開，
+     * backfill 也無法判斷哪些還沒升級。⛔ 因此這裡直接釘住字面值。
+     */
+    public function test_the_phone_domain_is_explicitly_versioned(): void
+    {
+        $reflection = new \ReflectionClass(ContactLookupHash::class);
+
+        $this->assertSame(
+            'iglikefollow.order-lookup.phone.v2',
+            $reflection->getConstant('PHONE_DOMAIN'),
+            '⛔ 改動手機正規化語意時必須同時進版，否則新舊 hash 會混在同一個 keyspace。',
+        );
+
+        $this->assertNotSame(
+            $reflection->getConstant('EMAIL_DOMAIN'),
+            $reflection->getConstant('PHONE_DOMAIN'),
+            '⛔ 兩種聯絡方式不得共用 domain。',
+        );
+    }
+
+    /**
+     * ⭐ R1：v1 舊 hash 必須能由受控 apply 升級為 v2。
+     *
+     * ⛔ 初版的 backfill 只處理 null，於是曾跑過 A2 的訂單留著 v1 hash——
+     * 手機語意升版後，那些客人永遠查不到自己的訂單。
+     */
+    public function test_the_backfill_upgrades_a_stale_v1_phone_hash(): void
+    {
+        /*
+         * ⛔ 這裡刻意用**國際寫法**的號碼。
+         *
+         * v1 的語意是「原樣數字序列」，v2 是 canonical form。對 `0912345678`
+         * 這種本地寫法，兩版算出來剛好相同——⛔ 拿它當 fixture 測不到升版，
+         * 因為根本沒有東西改變。真正會分歧的是 `+886912345678`：
+         * v1 → `886912345678`，v2 → `TW:0912345678`。
+         */
+        $international = '+886912345678';
+
+        $order = $this->orderFor(['customer_phone' => $international]);
+
+        // v1 舊值：用舊語意（去格式字元後的原樣數字序列）算出來的 hash。
+        $legacy = hash_hmac(
+            'sha256',
+            'iglikefollow.order-lookup.phone.v1|886912345678',
+            (string) config('app.key'),
+        );
+        $order->forceFill(['customer_phone_lookup_hash' => $legacy])->save();
+
+        $this->assertNotSame(
+            ContactLookupHash::forPhone($international),
+            $legacy,
+            '⛔ fixture 必須是真正過期的 v1 值，否則這個測試什麼都沒測到。',
+        );
+
+        // 舊值與 v2 desired 不同，因此查不到——這正是升版造成的斷點。
+        $this->lookup(['email' => self::EMAIL, 'phone' => $international])
+            ->assertOk()->assertDontSee($order->reference, false);
+
+        $this->artisan('orders:backfill-lookup-hashes --apply')->assertSuccessful();
+
+        $this->assertSame(
+            ContactLookupHash::forPhone($international),
+            $order->fresh()->customer_phone_lookup_hash,
+        );
+
+        // 升級後查得到，且三種寫法都命中同一筆。
+        foreach (['+886912345678', '0912345678', '00886912345678'] as $typed) {
+            $this->lookup(['email' => self::EMAIL, 'phone' => $typed])
+                ->assertOk()->assertSee($order->reference, false);
+        }
+    }
+
+    /**
+     * ⛔ 沒有手機的訂單不得每次都被列為待更新。
+     *
+     * ⛔ 初版以「phone hash 為 null」判斷待補，於是這種訂單的計數永遠不會
+     * 歸零，看起來像有事沒做完。
+     */
+    public function test_an_order_without_a_phone_never_stays_pending(): void
+    {
+        $this->orderFor([
+            'customer_phone' => null,
+            'customer_phone_lookup_hash' => null,
+        ]);
+
+        $this->artisan('orders:backfill-lookup-hashes --apply')->assertSuccessful();
+
+        // 第二次：0 待更新、0 變更。
+        $this->artisan('orders:backfill-lookup-hashes')
+            ->expectsOutputToContain('待檢查：0')
+            ->assertSuccessful();
+    }
+
+    /** ⛔ 第二次 apply 必須 0 change。 */
+    public function test_a_second_apply_changes_nothing(): void
+    {
+        $this->orderFor([
+            'customer_email_lookup_hash' => null,
+            'customer_phone_lookup_hash' => null,
+        ]);
+
+        $this->artisan('orders:backfill-lookup-hashes --apply')->assertSuccessful();
+
+        $this->artisan('orders:backfill-lookup-hashes --apply')
+            ->expectsOutputToContain('已更新：0')
+            ->expectsOutputToContain('剩餘待更新：0')
+            ->assertSuccessful();
+    }
+
     /** 補完之後，既有訂單就查得到了。 */
     public function test_a_backfilled_order_becomes_findable(): void
     {
@@ -717,6 +972,144 @@ class CustomerOrderLookupTest extends TestCase
         // 補之後查得到。
         $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])
             ->assertOk()->assertSee($order->reference);
+    }
+
+    // ==================================== 8b. R1：presenter allowlist 與 enum
+
+    /**
+     * ⭐ R1：presenter 的 key 完全等於批准清單，⛔ 不多不少。
+     *
+     * ⛔ 移除了 `placed_at`：它看起來無害，但**不在 Owner 批准的欄位內**。
+     * 公開輸出的判準是「批准了什麼」，不是「這個看起來還好吧」——後者正是
+     * allowlist 會逐漸擴張、最後洩漏東西的方式。
+     */
+    public function test_the_presenter_exposes_exactly_the_approved_keys(): void
+    {
+        $order = $this->orderFor();
+        FulfillmentOrder::factory()->submitted('99010')->create([
+            'order_item_id' => $order->items()->first()->id,
+        ]);
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame(['reference', 'items'], array_keys($shaped));
+        $this->assertArrayNotHasKey('placed_at', $shaped);
+
+        $this->assertSame(
+            ['platform', 'service', 'variant', 'quantity', 'status', 'remains'],
+            array_keys($shaped['items'][0]),
+        );
+    }
+
+    /** 結果頁不得出現「下單時間」。 */
+    public function test_the_result_page_no_longer_shows_the_order_time(): void
+    {
+        $order = $this->orderFor();
+
+        $this->lookup(['reference' => $order->reference, 'email' => self::EMAIL])
+            ->assertOk()
+            ->assertDontSee('下單時間');
+    }
+
+    /**
+     * ⭐ R1：每個 fulfillment enum 都有明確的公開映射。
+     *
+     * ⛔ `ConfigurationPending` 不得是「進行中」：它代表 mapping／開關／
+     * payload 尚未就緒，**根本還沒開始履約**——客人再等也不會好。
+     *
+     * ⛔ presenter 逐一窮舉 enum，不用會把未來新狀態默認成進行中的 default。
+     *
+     * @return array<string, array{0: FulfillmentStatus, 1: string}>
+     */
+    public static function everyFulfillmentStatusProvider(): array
+    {
+        return [
+            'configuration pending' => [FulfillmentStatus::ConfigurationPending, '請聯絡客服'],
+            'ready' => [FulfillmentStatus::Ready, '進行中'],
+            'submitting' => [FulfillmentStatus::Submitting, '進行中'],
+            'submitted' => [FulfillmentStatus::Submitted, '進行中'],
+            'processing' => [FulfillmentStatus::Processing, '進行中'],
+            'completed' => [FulfillmentStatus::Completed, '已完成'],
+            'partial' => [FulfillmentStatus::Partial, '請聯絡客服'],
+            'canceled' => [FulfillmentStatus::Canceled, '請聯絡客服'],
+            'failed' => [FulfillmentStatus::Failed, '請聯絡客服'],
+            'submission unknown' => [FulfillmentStatus::SubmissionUnknown, '請聯絡客服'],
+        ];
+    }
+
+    #[DataProvider('everyFulfillmentStatusProvider')]
+    public function test_every_fulfillment_status_has_an_explicit_public_mapping(
+        FulfillmentStatus $status,
+        string $expected,
+    ): void {
+        $order = $this->orderFor();
+
+        /*
+         * ⛔ 直接**建立**在目標狀態，⛔ 不是先 submitted 再改過去。
+         *
+         * `FulfillmentOrderIntegrityObserver` 與 DB trigger 兩層都會（正確地）
+         * 擋下 `submitted → ready` 這類回頭轉移——連 raw `DB::table()->update()`
+         * 也擋，因為那道防線在資料庫裡。
+         *
+         * ⭐ 這個測試要驗證的是 **presenter 對每個 enum 的公開映射**，不是轉移
+         * 合法性。硬繞過那道 trigger 只會把測試變成在測 observer，而且等於在
+         * 測試裡示範怎麼繞過一個真正的完整性防線。
+         */
+        /*
+         * ⛔ 已送出（含之後）的狀態依規則必須具備供應商單號——那條完整性規則
+         * 也是對的，因此這裡照著給，而不是把它關掉。
+         */
+        $submittedOrLater = in_array($status, [
+            FulfillmentStatus::Submitted,
+            FulfillmentStatus::Processing,
+            FulfillmentStatus::Completed,
+            FulfillmentStatus::Partial,
+        ], true);
+
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => $status,
+            'provider_order_id' => $submittedOrLater ? '99011' : null,
+            'submitted_at' => $submittedOrLater ? now() : null,
+        ]);
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame($expected, $shaped['items'][0]['status']);
+    }
+
+    /** ⛔ enum 全覆蓋：任何新增的狀態都會讓上面的 provider 少一格。 */
+    public function test_the_public_mapping_covers_every_enum_case(): void
+    {
+        $this->assertCount(
+            count(FulfillmentStatus::cases()),
+            self::everyFulfillmentStatusProvider(),
+            '⛔ 新增 FulfillmentStatus 時必須同時決定它的公開顯示。',
+        );
+    }
+
+    // ==================================== 8c. R1：390px 可讀性
+
+    /**
+     * ⛔ 結果頁在 390px 不得依賴橫向捲動閱讀。
+     *
+     * ⛔ 初版用 `min-w-[32rem]` 的表格——在 390px 一定要左右捲才看得完。
+     * 這裡檢查那個強制寬度已經不存在，且改用可堆疊的結構。
+     *
+     * ⛔ 這是結構檢查，不是視覺驗收；實機 390px 仍標記 NOT VERIFIED。
+     */
+    public function test_the_result_page_does_not_force_horizontal_scrolling(): void
+    {
+        $order = $this->orderFor();
+
+        $html = (string) $this->lookup([
+            'reference' => $order->reference,
+            'email' => self::EMAIL,
+        ])->getContent();
+
+        $this->assertStringNotContainsString('min-w-[32rem]', $html, '⛔ 不得強制最小寬度。');
+        // 手機以堆疊清單呈現，桌面才展開為多欄。
+        $this->assertStringContainsString('grid-cols-2', $html);
     }
 
     // ==================================== 9. 首頁 SEO 不變

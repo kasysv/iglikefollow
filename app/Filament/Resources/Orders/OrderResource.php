@@ -46,20 +46,15 @@ class OrderResource extends Resource
             RelationManagers\PaymentAttemptsRelationManager::class,
             RelationManagers\FulfillmentOrdersRelationManager::class,
             /*
-             * ⛔ `OrderEventsRelationManager` 已不再掛載。
+             * ⭐ 唯一的合併時間線，位於頁面**下方**。
              *
-             * Owner 要求「訂單時間表」與「訂單時間線」合併為一個。原本的
-             * relation manager 只列 `order_events`，與主畫面那個已經合併了
-             * 履約事件的時間表並存——同一頁兩份時間線，客服會不確定哪一個
-             * 才是完整的，而兩處各自演進就會開始不一致。
-             *
-             * 合併後的唯一呈現位置是 `ViewOrder` 的「訂單時間線」Section，
-             * 資料來自唯讀的 `OrderActivityTimeline`（order events ＋
-             * fulfillment events，穩定排序、每列帶唯一 key）。
-             *
-             * ⛔ 類別本身保留未刪：它不再被掛載，但刪掉會影響既有測試與任何
-             * 外部引用，而本輪的目標是「只呈現一份」，不是清理程式碼。
+             * Owner 原話是把主畫面「訂單時間表」併入下方既有的「訂單時間線」。
+             * A1 做反了方向（移除下方、保留上方），R1 改回來：這個 relation
+             * manager 以自訂唯讀 view 呈現 `OrderActivityTimeline` 的合併資料
+             * （order events ＋ fulfillment events），主畫面那個重複的
+             * Section 已移除。
              */
+            RelationManagers\OrderEventsRelationManager::class,
         ];
     }
 

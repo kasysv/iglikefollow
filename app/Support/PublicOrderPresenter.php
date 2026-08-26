@@ -32,14 +32,18 @@ use App\Models\OrderItem;
 final class PublicOrderPresenter
 {
     /**
-     * @return array{reference: string, placed_at: ?string, items: list<array<string, mixed>>}
+     * ⛔ R1：移除 `placed_at`。
+     *
+     * 下單時間看起來無害，但它**不在 Owner 批准的欄位清單內**。公開輸出的
+     * 判準是「批准了什麼」，不是「這個看起來還好吧」——後者正是 allowlist
+     * 會逐漸擴張、最後洩漏東西的方式。
+     *
+     * @return array{reference: string, items: list<array<string, mixed>>}
      */
     public static function for(Order $order): array
     {
         return [
             'reference' => (string) $order->reference,
-            // 下單時間對客人有意義，且不洩漏任何額外資訊。
-            'placed_at' => $order->created_at?->format('Y-m-d H:i'),
             'items' => $order->items
                 ->map(fn (OrderItem $item): array => self::item($order, $item))
                 ->all(),
@@ -102,23 +106,38 @@ final class PublicOrderPresenter
             return '準備中';
         }
 
+        /*
+         * ⛔ R1：**逐一窮舉** enum，⛔ 不用會把未知狀態默認成「進行中」的
+         * `default`。
+         *
+         * 初版的 `default => '進行中'` 有兩個問題：`ConfigurationPending`
+         * （mapping／開關／payload 尚未就緒，**根本還沒開始履約**）被誤報成
+         * 進行中；而日後新增任何狀態也會自動被歸進「進行中」——一個安全預設
+         * 應該是相反方向。
+         */
         return match ($fulfillment->status) {
             FulfillmentStatus::Completed => '已完成',
 
+            // 真正在跑的四個狀態。
+            FulfillmentStatus::Ready,
+            FulfillmentStatus::Submitting,
+            FulfillmentStatus::Submitted,
+            FulfillmentStatus::Processing => '進行中',
+
             /*
-             * ⛔ 需要人處理的四種狀態，統一「請聯絡客服」。
+             * ⛔ 需要人處理的五種狀態，統一「請聯絡客服」。
              *
-             * 不細分原因：對客人來說「部分完成」與「已取消」的下一步都是聯絡
-             * 客服，而細分會洩漏我們與供應商之間發生了什麼。
+             * 不細分原因：對客人來說下一步都是聯絡客服，而細分會洩漏我們與
+             * 供應商之間發生了什麼。
+             *
+             * ⭐ `ConfigurationPending` 屬於這一類：它代表設定沒就緒，客人
+             * 再等也不會好。
              */
             FulfillmentStatus::Partial,
             FulfillmentStatus::Canceled,
             FulfillmentStatus::Failed,
-            FulfillmentStatus::SubmissionUnknown => '請聯絡客服',
-
-            // 其餘（ready／submitting／submitted／processing／
-            // configuration_pending）都是正常進行中。
-            default => '進行中',
+            FulfillmentStatus::SubmissionUnknown,
+            FulfillmentStatus::ConfigurationPending => '請聯絡客服',
         };
     }
 

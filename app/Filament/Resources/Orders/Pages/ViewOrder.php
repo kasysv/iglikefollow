@@ -347,33 +347,16 @@ class ViewOrder extends ViewRecord
              * DB event——這裡是呈現層,不是第三個 event 來源。
              */
             /*
-             * ⭐ 唯一的「訂單時間線」——訂單事件與履約事件合併在這一個區塊。
+             * ⛔ 主畫面**沒有**時間線區塊。
              *
-             * ⛔ 舊版是「主畫面『訂單時間表』（已合併）」＋「下方『訂單時間線』
-             * relation manager（只有 order_events）」兩份並存。同一頁兩條時間
-             * 線，客服會不確定哪一個才是完整的，而兩處各自演進就會開始不一致。
-             * Owner 要求併成一個，因此 relation manager 已不再掛載
-             * （見 `OrderResource::getRelations()`），這裡是唯一呈現位置。
+             * Owner 要求把主畫面的「訂單時間表」併入**下方既有的**「訂單時間
+             * 線」。合併後的唯一呈現位置是頁面下方的
+             * `OrderEventsRelationManager`（自訂唯讀 view，資料同樣來自
+             * `OrderActivityTimeline`）。
              *
-             * ⛔ 唯讀 presenter：`OrderActivityTimeline` 只讀 `order_events`
-             * 與 `fulfillment_events` 兩張 append-only 表，⛔ 不新增第三個事件
-             * 來源、不在開頁時寫入、不呼叫任何 provider。
-             *
-             * ⛔ 每列帶穩定唯一 key（`order:{id}`／`fulfillment:{id}`），
-             * 排序固定為 `created_at → id → source`。
+             * ⛔ 這裡不得再加回任何時間線——同一頁兩條，客服會不確定哪一個
+             * 才是完整的，而兩處各自演進就會開始不一致。
              */
-            Section::make('訂單時間線')
-                ->description('依時間合併顯示訂單事件與履約進度。')
-                ->schema([
-                    RepeatableEntry::make('activity_timeline')
-                        ->hiddenLabel()
-                        ->state(fn (Order $record): array => OrderActivityTimeline::for($record))
-                        ->schema([
-                            TextEntry::make('created_at')->label('時間')->dateTime('Y-m-d H:i:s'),
-                            TextEntry::make('label')->label('事件')->weight('bold'),
-                            TextEntry::make('smm_service_name')->label('SMM 服務')->placeholder('—'),
-                        ])->columns(3),
-                ]),
         ]);
     }
 }

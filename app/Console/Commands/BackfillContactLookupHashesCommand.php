@@ -38,15 +38,19 @@ class BackfillContactLookupHashesCommand extends Command
         $total = Order::query()->count();
 
         /*
-         * ⛔ 待補的定義：兩個 hash 至少有一個是 null。
+         * ⭐ R1：待補的定義改為「算出來的 desired hash 與現值不同」。
          *
-         * 手機是選填欄位，所以「phone hash 為 null」不一定代表待補——下面
-         * 逐列處理時會再判斷該列是否真的有手機。
+         * ⛔ 初版只看 `null`，有兩個問題：
+         *
+         *  1. 手機語意升到 v2 之後，曾跑過 A2 的訂單留著 v1 hash——它不是
+         *     null，所以永遠不會被更新，那些客人永遠查不到自己的訂單。
+         *  2. **沒有手機**的訂單 phone hash 恆為 null，於是每次執行都被列為
+         *     pending，計數永遠不會歸零，看起來像有事沒做完。
+         *
+         * 因此改成逐列比對 desired 值——它同時解決兩者，也讓「第二次 apply
+         * 為 0 change」成為可驗證的性質。
          */
-        $pending = Order::query()
-            ->whereNull('customer_email_lookup_hash')
-            ->orWhereNull('customer_phone_lookup_hash')
-            ->count();
+        $pending = $this->countRowsNeedingUpdate();
 
         $this->line('訂單總數：'.$total);
         $this->line('待檢查：'.$pending);
@@ -60,61 +64,37 @@ class BackfillContactLookupHashesCommand extends Command
         $updated = 0;
         $failed = 0;
 
-        Order::query()
-            ->where(function ($query) {
-                $query->whereNull('customer_email_lookup_hash')
-                    ->orWhereNull('customer_phone_lookup_hash');
-            })
-            ->chunkById(self::CHUNK, function ($orders) use (&$updated, &$failed) {
-                foreach ($orders as $order) {
-                    try {
-                        /*
-                         * ⛔ 每一列各自一個 transaction：一列的解密失敗不該
-                         * 讓整批已成功的更新被回滾。
-                         */
-                        DB::transaction(function () use ($order, &$updated) {
-                            $changes = [];
+        Order::query()->chunkById(self::CHUNK, function ($orders) use (&$updated, &$failed) {
+            foreach ($orders as $order) {
+                try {
+                    /*
+                     * ⛔ 每一列各自一個 transaction：一列的解密失敗不該讓
+                     * 整批已成功的更新被回滾。
+                     */
+                    DB::transaction(function () use ($order, &$updated) {
+                        $changes = $this->changesFor($order);
 
-                            /*
-                             * ⛔ 讀取 `customer_email` 會觸發解密。解密失敗
-                             * （例如 APP_KEY 換過）會拋出——由外層 catch 記為
-                             * failed，⛔ 不猜值、不寫入部分結果。
-                             */
-                            if ($order->customer_email_lookup_hash === null) {
-                                $hash = ContactLookupHash::forEmail($order->customer_email);
+                        if ($changes === []) {
+                            return;
+                        }
 
-                                if ($hash !== null) {
-                                    $changes['customer_email_lookup_hash'] = $hash;
-                                }
-                            }
-
-                            if ($order->customer_phone_lookup_hash === null) {
-                                $hash = ContactLookupHash::forPhone($order->customer_phone);
-
-                                // ⛔ 沒有手機的訂單維持 null，不是失敗。
-                                if ($hash !== null) {
-                                    $changes['customer_phone_lookup_hash'] = $hash;
-                                }
-                            }
-
-                            if ($changes === []) {
-                                return;
-                            }
-
-                            $order->forceFill($changes)->save();
-                            $updated++;
-                        });
-                    } catch (Throwable) {
-                        /*
-                         * ⛔ 只計數，⛔ 不輸出 exception 訊息——它可能含有
-                         * 買受人資料或 credential 片段。
-                         */
-                        $failed++;
-                    }
+                        $order->forceFill($changes)->save();
+                        $updated++;
+                    });
+                } catch (Throwable) {
+                    /*
+                     * ⛔ 只計數，⛔ 不輸出 exception 訊息——它可能含有
+                     * 買受人資料或 credential 片段。
+                     */
+                    $failed++;
                 }
-            });
+            }
+        });
 
         $this->info('已更新：'.$updated);
+
+        // 這行讓「第二次 apply 應為 0」成為可直接讀出的事實。
+        $this->line('剩餘待更新：'.$this->countRowsNeedingUpdate());
 
         if ($failed > 0) {
             $this->error('失敗：'.$failed.'（資料異常或無法解密，未寫入）');
@@ -123,5 +103,64 @@ class BackfillContactLookupHashesCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The columns that would actually change for this order.
+     *
+     * ⭐ 以「desired 值 vs 現值」判斷，⛔ 不是「現值是不是 null」。
+     *
+     * 這一點同時解決兩件事：手機語意升到 v2 之後，留著 v1 hash 的舊訂單會被
+     * 更新；而**沒有手機**的訂單 desired 就是 null、現值也是 null，兩者相同，
+     * ⛔ 因此不會每次都被算成待更新。
+     *
+     * ⛔ 讀取 `customer_email`／`customer_phone` 會觸發解密。解密失敗（例如
+     * `APP_KEY` 換過）會拋出，由呼叫端計為 failed，⛔ 不猜值、不寫入部分結果。
+     *
+     * @return array<string, string|null>
+     */
+    private function changesFor(Order $order): array
+    {
+        $changes = [];
+
+        $email = ContactLookupHash::forEmail($order->customer_email);
+
+        if ($email !== $order->customer_email_lookup_hash) {
+            $changes['customer_email_lookup_hash'] = $email;
+        }
+
+        $phone = ContactLookupHash::forPhone($order->customer_phone);
+
+        if ($phone !== $order->customer_phone_lookup_hash) {
+            $changes['customer_phone_lookup_hash'] = $phone;
+        }
+
+        return $changes;
+    }
+
+    /**
+     * How many rows would `--apply` actually change.
+     *
+     * ⛔ 逐列計算（需要解密），因此用 chunk 而不是一次載入整張表。
+     * ⛔ 解密失敗的列計入待更新——它們確實還沒到位，只是 apply 時會失敗；
+     * 把它們算成「已完成」會讓計數說謊。
+     */
+    private function countRowsNeedingUpdate(): int
+    {
+        $count = 0;
+
+        Order::query()->chunkById(self::CHUNK, function ($orders) use (&$count) {
+            foreach ($orders as $order) {
+                try {
+                    if ($this->changesFor($order) !== []) {
+                        $count++;
+                    }
+                } catch (Throwable) {
+                    $count++;
+                }
+            }
+        });
+
+        return $count;
     }
 }
