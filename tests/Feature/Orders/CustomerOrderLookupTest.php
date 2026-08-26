@@ -1658,6 +1658,17 @@ class CustomerOrderLookupTest extends TestCase
         if ($needsSupport) {
             $response->assertSee('此訂單需要人工確認，請與我們聯繫。');
             $response->assertDontSee('訂單已自動安排處理');
+
+            /*
+             * ⛔ 卡住的單，剩餘顯示 `-` 而不是「更新中」。
+             *
+             * 「更新中」是在承諾這個數字待會就會有；但這五種狀態代表排程不會
+             * 再帶回新的剩餘數量。⛔ 對一個永遠不會更新的欄位說「更新中」，
+             * 是在請客人等一個不會來的東西。
+             */
+            $shaped = PublicOrderPresenter::for($order->fresh());
+            $this->assertSame('-', $shaped['items'][0]['remains']);
+            $response->assertDontSee('更新中');
         } else {
             $response->assertSee('訂單已自動安排處理');
             $response->assertDontSee('需要人工確認');

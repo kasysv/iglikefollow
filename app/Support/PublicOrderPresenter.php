@@ -104,6 +104,7 @@ final class PublicOrderPresenter
         $fulfillment = $item->fulfillmentOrder;
 
         $target = self::target($item);
+        $status = self::status($order, $fulfillment);
 
         return [
             // ⛔ 全部來自本站訂單快照，不是 provider 資料。
@@ -111,8 +112,8 @@ final class PublicOrderPresenter
             'service' => (string) $item->service_name,
             'variant' => (string) $item->variant_label,
             'quantity' => (int) $item->quantity,
-            'status' => self::status($order, $fulfillment),
-            'remains' => self::remains($fulfillment),
+            'status' => $status,
+            'remains' => self::remains($fulfillment, $status),
 
             /*
              * ⭐ Owner 批准：顯示客人**自己下單時提交**的帳號／網址。
@@ -264,9 +265,19 @@ final class PublicOrderPresenter
      * 編出來的數字。`null` 就誠實說「更新中」——那是真話（排程還沒問到）。
      *
      * ⛔ `0` 顯示 `0`（全部補完），不被 placeholder 吞掉。
+     *
+     * ⭐ 狀態是「請聯絡客服」時顯示 `-`，⛔ 不是「更新中」。
+     * 「更新中」是在承諾這個數字待會就會有——但那五種狀態代表這張單卡住了、
+     * 需要人介入，排程不會再帶回新的剩餘數量。⛔ 對一個永遠不會更新的欄位
+     * 說「更新中」，是在請客人等一個不會來的東西。
      */
-    private static function remains(?FulfillmentOrder $fulfillment): string
+    private static function remains(?FulfillmentOrder $fulfillment, string $status): string
     {
+        // ⛔ 先判狀態：卡住的單不該顯示任何「稍後就有」的暗示。
+        if ($status === '請聯絡客服') {
+            return '-';
+        }
+
         if ($fulfillment === null || $fulfillment->provider_remains === null) {
             return '更新中';
         }
