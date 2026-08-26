@@ -95,10 +95,29 @@
                     <div class="mt-6 space-y-6">
                         @foreach ($results as $order)
                             <article class="rounded-xl border border-black/10 p-5">
-                                <header>
-                                    <h3 class="text-base font-bold break-words text-black">
-                                        訂單編號 {{ $order['reference'] }}
-                                    </h3>
+                                {{--
+                                    卡片 header：左側訂單編號＋訂單時間，右上付款藥丸。
+
+                                    ⛔ `flex-wrap` ＋ `min-w-0`：390px 時藥丸會換到下一行，
+                                    ⛔ 不擠壓訂單編號、也不產生橫向捲動。
+                                --}}
+                                <header class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                                    <div class="min-w-0">
+                                        <h3 class="text-base font-bold break-words text-black">
+                                            訂單編號 {{ $order['reference'] }}
+                                        </h3>
+                                        <p class="mt-1 text-sm text-black/55">
+                                            訂單時間 {{ $order['placed_at'] }}
+                                        </p>
+                                    </div>
+
+                                    {{--
+                                        ⛔ 只有付款成功的訂單會進到這裡（查詢已在 SQL 層
+                                        限定），所以這個藥丸是固定字串,⛔ 不是狀態映射。
+                                    --}}
+                                    <span class="shrink-0 rounded-full bg-trust/12 px-3 py-1 text-sm font-bold text-trust">
+                                        {{ $order['payment_label'] }}
+                                    </span>
                                 </header>
 
                                 {{--
@@ -112,6 +131,33 @@
                                                 {{ $item['platform'] }}｜{{ $item['service'] }}
                                             </p>
                                             <p class="mt-0.5 text-sm break-words text-black/55">{{ $item['variant'] }}</p>
+
+                                            {{--
+                                                客人下單時提交的帳號／網址。
+
+                                                ⛔ `break-all`：長網址在 390px 必須斷行,
+                                                ⛔ 不得把卡片撐寬造成橫向捲動。
+
+                                                ⛔ 只有 presenter 判定為合法 http(s) 的值
+                                                才會有 `target_url`,才做成連結;其餘一律
+                                                純文字。⛔ Blade 的 `{{ }}` 會 escape,
+                                                惡意內容不會變成 HTML。
+                                            --}}
+                                            @if (filled($item['target']))
+                                                <p class="mt-2 text-sm text-black/55">下單連結／帳號</p>
+                                                @if ($item['target_url'] !== null)
+                                                    {{--
+                                                        ⛔ `rel="noopener noreferrer"`：`noopener`
+                                                        讓新分頁無法透過 `window.opener` 操作本站,
+                                                        `noreferrer` 不把本頁 URL 送給對方。
+                                                    --}}
+                                                    <a href="{{ $item['target_url'] }}"
+                                                       target="_blank" rel="noopener noreferrer"
+                                                       class="mt-0.5 block text-sm break-all text-trust underline underline-offset-2">{{ $item['target'] }}</a>
+                                                @else
+                                                    <p class="mt-0.5 text-sm break-all text-black">{{ $item['target'] }}</p>
+                                                @endif
+                                            @endif
 
                                             <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
                                                 <div>

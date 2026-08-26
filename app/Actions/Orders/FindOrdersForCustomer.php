@@ -2,6 +2,8 @@
 
 namespace App\Actions\Orders;
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 use App\Models\Order;
 use App\Support\ContactLookupHash;
 use Illuminate\Support\Collection;
@@ -16,8 +18,11 @@ use Illuminate\Support\Collection;
  * 訂單；單靠 Email 則可以拿別人的 Email 去試。要求兩項相符大幅提高門檻，
  * 同時不強迫客人註冊帳號。
  *
- * ⛔ 這個 action 只負責「找出符合的訂單」。它**不決定**要顯示什麼——那是
- * `PublicOrderPresenter` 的 allowlist 職責。
+ * ⭐ 只回傳**付款成功**的訂單（`Paid` ＋ `Succeeded`）。等待付款的單即使
+ * 三選二完全相符也一律 no-match——這道限制在 SQL 層,見 `handle()`。
+ *
+ * ⛔ 這個 action 決定「哪些訂單可以被看到」,但**不決定**每張訂單要顯示什麼
+ * 欄位——那是 `PublicOrderPresenter` 的 allowlist 職責。
  */
 class FindOrdersForCustomer
 {
@@ -76,6 +81,25 @@ class FindOrdersForCustomer
 
         // ⛔ eager load：避免公開頁對每個商品項目各查一次履約列。
         $query = Order::query()->with(['items.fulfillmentOrder']);
+
+        /*
+         * ⭐ Owner 要求：等待付款的訂單**完全不要**出現在查詢結果。
+         *
+         * ⛔⛔ 這道限制必須在**排序與 limit 之前**加進 SQL,⛔ 不能查出來
+         * 之後再由 Blade 隱藏。
+         *
+         * 理由不是效能,是正確性：`limit(20)` 是在 DB 端套用的。若先撈 20 筆
+         * 再隱藏未付款的,一個有很多待付款訂單的客人會發現他真正付過款的訂單
+         * 被那些 pending row 擠出了前 20 名——畫面上什麼都沒有,而他其實有單。
+         * 「先撈後隱藏」在這裡是會吃掉結果的錯,不只是多做工。
+         *
+         * ⛔ 兩個條件都要:`order_status` 是本站訂單生命週期,`payment_status`
+         * 是金流結果。只看其中一個,都可能讓一張還沒真正收到錢的單被當成
+         * 「付款成功」顯示給客人——而卡片上的藥丸是寫死的固定字串。
+         */
+        $query
+            ->where('order_status', OrderStatus::Paid)
+            ->where('payment_status', PaymentStatus::Succeeded);
 
         /*
          * ⛔ 每一個「有填」的條件都必須相符（AND),不是任一相符(OR)。

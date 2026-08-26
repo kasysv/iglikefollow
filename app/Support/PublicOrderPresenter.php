@@ -32,22 +32,62 @@ use App\Models\OrderItem;
 final class PublicOrderPresenter
 {
     /**
-     * ⛔ R1：移除 `placed_at`。
+     * ⭐ Owner 於 2026-08-26 明確批准新增 `placed_at` 與 `payment_label`。
      *
-     * 下單時間看起來無害，但它**不在 Owner 批准的欄位清單內**。公開輸出的
-     * 判準是「批准了什麼」，不是「這個看起來還好吧」——後者正是 allowlist
-     * 會逐漸擴張、最後洩漏東西的方式。
+     * ⛔ 前一輪曾把 `placed_at` 移除,理由是它「不在批准清單內」。那個理由
+     * 當時成立;現在 Owner 已明確要求顯示訂單時間,所以它進來了。
+     * ⭐ 判準始終是「Owner 批准了什麼」,不是「這個欄位看起來危不危險」——
+     * 兩次相反的決定用的是同一條規則。
      *
-     * @return array{reference: string, items: list<array<string, mixed>>}
+     * ⛔ `payment_label` 是**固定字串**,不是從資料推導出來的。這一頁只會拿到
+     * 付款成功的訂單(`FindOrdersForCustomer` 已在 SQL 層限定),所以標籤沒有
+     * 第二種可能。⛔ 不從 `payment_status` 映射:那會讓一個未來的新狀態悄悄
+     * 產生一個沒人設計過的標籤。
+     *
+     * @return array{reference: string, placed_at: string, payment_label: string, items: list<array<string, mixed>>}
      */
     public static function for(Order $order): array
     {
         return [
             'reference' => (string) $order->reference,
+            'placed_at' => self::placedAt($order),
+            'payment_label' => '付款成功',
             'items' => $order->items
                 ->map(fn (OrderItem $item): array => self::item($order, $item))
                 ->all(),
         ];
+    }
+
+    /**
+     * The order time in the site's own timezone.
+     *
+     * ⭐ 明確轉成 `config('app.timezone')` 再格式化（施工單指定）。
+     *
+     * ⛔ 誠實說明現況：本站 `app.timezone` 是 `Asia/Taipei`，且**沒有**把
+     * datetime 以 UTC 落盤，因此 `created_at` 取出來已經是台北時間——
+     * 這行 `setTimezone()` 目前是 no-op，我實測確認過（拿掉它輸出完全相同）。
+     *
+     * ⛔ 那為什麼還留著？因為它讓「以本站時區顯示」成為這段程式**明講的
+     * 保證**，而不是一個依賴全域設定碰巧相符的巧合。若日後有人把 `Order`
+     * 的 `created_at` 改成 UTC cast（Laravel 11+ 的常見作法），沒有這行的
+     * 版本會靜默開始顯示差 8 小時的時間，而客人只會覺得「這不是我的訂單」。
+     *
+     * ⛔ 我沒有為它寫一條「反證能失敗」的測試——在目前設定下它不可觀測，
+     * 硬寫只會得到一條假裝有測到東西的測試。這一點已寫進結果文件。
+     */
+    private static function placedAt(Order $order): string
+    {
+        $createdAt = $order->created_at;
+
+        // ⛔ 理論上 `created_at` 一定有值;仍不假設,避免公開頁因 null 而 500。
+        if ($createdAt === null) {
+            return '';
+        }
+
+        return $createdAt
+            ->copy()
+            ->setTimezone((string) config('app.timezone'))
+            ->format('Y-m-d H:i');
     }
 
     /**
@@ -63,6 +103,8 @@ final class PublicOrderPresenter
          */
         $fulfillment = $item->fulfillmentOrder;
 
+        $target = self::target($item);
+
         return [
             // ⛔ 全部來自本站訂單快照，不是 provider 資料。
             'platform' => (string) $item->platform_name,
@@ -71,7 +113,79 @@ final class PublicOrderPresenter
             'quantity' => (int) $item->quantity,
             'status' => self::status($order, $fulfillment),
             'remains' => self::remains($fulfillment),
+
+            /*
+             * ⭐ Owner 批准：顯示客人**自己下單時提交**的帳號／網址。
+             *
+             * ⛔ 這是客人自己填的值,不是 provider 資料——顯示它不會洩漏我們
+             * 用哪一家供應商。它只在三選二驗證通過後才會被輸出。
+             */
+            'target' => $target,
+            'target_url' => self::targetUrl($target),
         ];
+    }
+
+    /**
+     * The delivery target exactly as the customer typed it.
+     *
+     * ⛔ 原樣輸出,⛔ 不修剪、不補 `https://`、不「修正」看起來像網址的東西。
+     * 客人要能認出這就是他當初填的那一行;我們自作主張改過的版本會讓他懷疑
+     * 自己填錯了。
+     *
+     * ⛔ `target_value` 是 encrypted cast,讀取即解密。解密失敗會拋出——
+     * 那代表 `APP_KEY` 有問題,不該靜默變成空字串讓客人以為自己沒填。
+     */
+    private static function target(OrderItem $item): string
+    {
+        return (string) $item->target_value;
+    }
+
+    /**
+     * The target as a safe, linkable URL — or null.
+     *
+     * ⛔⛔ 這個回傳值會直接變成 `href`,所以它是本輪的注入邊界。
+     *
+     * ⛔ **只接受 `http` 與 `https`**,⛔ 用 allowlist 而不是「把 javascript:
+     * 擋掉」的 denylist。denylist 永遠少一個:`javascript:`、`JavaScript:`、
+     * `data:`、`vbscript:`、`file:`、含跳脫字元的變形……列不完。allowlist
+     * 的預設是「不可點」。
+     *
+     * ⛔ 另外要求 host 存在:`http:///path` 這種 scheme 對但沒有主機的值,
+     * 不是一個能連到任何地方的連結。
+     *
+     * ⛔ 純帳號(`my_account`)本來就不是 URL,回 null——它會被當成文字顯示。
+     */
+    private static function targetUrl(string $target): ?string
+    {
+        $target = trim($target);
+
+        if ($target === '') {
+            return null;
+        }
+
+        /*
+         * ⛔ 先用 `FILTER_VALIDATE_URL` 擋掉結構不合法的值,再自己檢查 scheme。
+         * ⛔ 只做其中一項都不夠:`FILTER_VALIDATE_URL` 會**接受**
+         * `javascript://comment%0aalert(1)` 這類值(它結構上是合法 URL),
+         * 而只看 scheme 則會放行結構破碎的字串。
+         */
+        if (filter_var($target, FILTER_VALIDATE_URL) === false) {
+            return null;
+        }
+
+        $scheme = parse_url($target, PHP_URL_SCHEME);
+        $host = parse_url($target, PHP_URL_HOST);
+
+        if (! is_string($scheme) || ! is_string($host) || $host === '') {
+            return null;
+        }
+
+        // ⛔ 小寫比對:`HTTPS://` 與 `https://` 是同一個 scheme。
+        if (! in_array(strtolower($scheme), ['http', 'https'], true)) {
+            return null;
+        }
+
+        return $target;
     }
 
     /**

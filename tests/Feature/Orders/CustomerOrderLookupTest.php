@@ -598,6 +598,288 @@ class CustomerOrderLookupTest extends TestCase
         }
     }
 
+    // ==================================== 2d. 只顯示付款成功的訂單
+
+    /**
+     * ⭐ Owner 要求：等待付款的訂單**完全不要**出現在查詢結果。
+     *
+     * ⛔ 即使三選二完全相符也一樣——回傳的必須是通用查無，
+     * ⛔ 不是「這張單還沒付款」之類的另一種訊息。
+     *
+     * @return array<string, array{0: OrderStatus, 1: PaymentStatus}>
+     */
+    public static function unpaidOrderProvider(): array
+    {
+        return [
+            'pending payment / initiated' => [OrderStatus::PendingPayment, PaymentStatus::Initiated],
+            'pending payment / pending' => [OrderStatus::PendingPayment, PaymentStatus::Pending],
+            'pending payment / failed' => [OrderStatus::PendingPayment, PaymentStatus::Failed],
+            'canceled order' => [OrderStatus::Canceled, PaymentStatus::Canceled],
+            'expired order' => [OrderStatus::Expired, PaymentStatus::Expired],
+            'reconciliation required' => [OrderStatus::PendingPayment, PaymentStatus::ReconciliationRequired],
+            // ⛔ 兩個欄位不一致時也必須排除：兩個條件都要成立才算付款成功。
+            'paid but not succeeded' => [OrderStatus::Paid, PaymentStatus::Pending],
+            'succeeded but not paid' => [OrderStatus::PendingPayment, PaymentStatus::Succeeded],
+        ];
+    }
+
+    #[DataProvider('unpaidOrderProvider')]
+    public function test_an_unpaid_order_is_never_returned(
+        OrderStatus $orderStatus,
+        PaymentStatus $paymentStatus,
+    ): void {
+        $order = $this->orderFor([
+            'order_status' => $orderStatus,
+            'payment_status' => $paymentStatus,
+            'paid_at' => null,
+        ]);
+
+        $order->items()->first()->forceFill([
+            'target_value' => 'secret_pending_target',
+        ])->save();
+
+        // 三項全符——仍然查不到。
+        $response = $this->lookup([
+            'reference' => $order->reference,
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ]);
+
+        $response->assertOk();
+        $response->assertSee('查不到符合的訂單');
+
+        // ⛔ reference 與 target 都不得出現在頁面上。
+        $response->assertDontSee($order->reference, false);
+        $response->assertDontSee('secret_pending_target', false);
+    }
+
+    /**
+     * ⛔⛔ 大量 pending 訂單不得吃掉 paid 訂單的 20 筆上限。
+     *
+     * ⭐ 這是「必須在 SQL 層過濾」而不是「查出來再由 Blade 隱藏」的**理由**。
+     *
+     * `limit(20)` 在 DB 端套用。若先撈 20 筆再隱藏未付款的，這個客人的 25 張
+     * pending 單會把他唯一一張 paid 單擠出前 20 名——畫面上什麼都沒有，
+     * 而他其實有單。那不是效能問題，是會吃掉結果的正確性錯誤。
+     */
+    public function test_many_pending_orders_do_not_crowd_out_a_paid_one(): void
+    {
+        // 先建 paid，再建 25 張更新的 pending（排序為最新在前）。
+        $paid = $this->orderFor();
+
+        for ($i = 0; $i < 25; $i++) {
+            $this->orderFor([
+                'order_status' => OrderStatus::PendingPayment,
+                'payment_status' => PaymentStatus::Pending,
+                'paid_at' => null,
+            ]);
+        }
+
+        $response = $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE]);
+
+        $response->assertOk();
+        // ⛔ 那張唯一的 paid 訂單必須出現。
+        $response->assertSee($paid->reference, false);
+        $response->assertSee('共 1 筆訂單。');
+    }
+
+    /** 付款成功的訂單仍查得到，且顯示訂單時間與付款藥丸。 */
+    public function test_a_paid_order_shows_its_time_and_payment_pill(): void
+    {
+        $order = $this->orderFor();
+
+        $response = $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE]);
+
+        $response->assertOk();
+        $response->assertSee($order->reference, false);
+        $response->assertSee('付款成功');
+        $response->assertSee('訂單時間');
+    }
+
+    /**
+     * ⭐ 訂單時間以 `Y-m-d H:i` 顯示，且與落盤值一致。
+     *
+     * ⛔ 誠實記錄一件我查證後修正的事：我原本寫這條測試時假設 `created_at`
+     * 落盤是 UTC，預期 `01:30` 會被換算成 `09:30`。**那個假設是錯的**——
+     * 本站 `app.timezone` 是 `Asia/Taipei` 且沒有以 UTC 落盤，取出來就已經是
+     * 台北時間，presenter 裡的 `setTimezone()` 目前是 no-op。
+     *
+     * ⛔ 我沒有為了讓測試變綠而去改 production code 的行為，也沒有留下一條
+     * 斷言錯誤時間的測試。這條現在驗證真正可觀測的性質：格式正確、值與
+     * 落盤一致、⛔ 不出現秒數或時區後綴。
+     *
+     * `setTimezone()` 為何仍保留（以及它為什麼沒有對應測試），見
+     * `PublicOrderPresenter::placedAt()` 的註解與結果文件。
+     */
+    public function test_the_order_time_is_formatted_for_display(): void
+    {
+        $order = $this->orderFor();
+
+        DB::table('orders')->where('id', $order->id)->update([
+            'created_at' => '2026-08-26 09:30:00',
+        ]);
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame('2026-08-26 09:30', $shaped['placed_at']);
+
+        $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])
+            ->assertOk()
+            ->assertSee('訂單時間 2026-08-26 09:30')
+            // ⛔ 不得洩漏秒數或內部時間格式。
+            ->assertDontSee('09:30:00');
+    }
+
+    // ==================================== 2e. 交付目標的顯示與連結安全
+
+    /**
+     * ⛔⛔ `target_url` 會直接變成 `href`，所以它是本輪的注入邊界。
+     *
+     * ⛔ 只有 `http`／`https` 可以成為連結；其餘一律純文字。用 allowlist
+     * 而不是把 `javascript:` 擋掉的 denylist——denylist 永遠少一個。
+     *
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function targetLinkabilityProvider(): array
+    {
+        return [
+            'https' => ['https://instagram.com/my_account', true],
+            'http' => ['http://example.com/profile', true],
+            'uppercase scheme' => ['HTTPS://Example.com/x', true],
+
+            // ⛔ 以下全部不得成為連結。
+            'plain account' => ['my_account', false],
+            'at handle' => ['@my_handle', false],
+            'javascript' => ['javascript:alert(1)', false],
+            'javascript with comment' => ['javascript://comment%0aalert(1)', false],
+            'mixed case javascript' => ['JavaScript:alert(1)', false],
+            'data uri' => ['data:text/html,<script>alert(1)</script>', false],
+            'vbscript' => ['vbscript:msgbox(1)', false],
+            'file' => ['file:///etc/passwd', false],
+            'scheme without host' => ['http:///nopath', false],
+            'protocol relative' => ['//example.com', false],
+
+            /*
+             * ⛔⛔ 這一組是 allowlist 與 denylist 的**分界線**。
+             *
+             * 上面那些危險 scheme（`data:`／`vbscript:`／`file:`）都沒有 host，
+             * 所以就算把 scheme 檢查換成「只擋 javascript:」的 denylist，
+             * 它們仍會被 host 檢查攔下——⛔ 於是那個變異測不出來。
+             *
+             * 這些則是**帶合法 host 的非 http scheme**：denylist 會全部放行，
+             * 只有 allowlist 擋得住。⛔ 這正是「denylist 永遠少一個」的具體
+             * 樣子——沒有人會想到要把 `intent:`／`chrome:` 也列進去。
+             */
+            'ftp with host' => ['ftp://evil.example.com/x', false],
+            'websocket with host' => ['ws://evil.example.com/x', false],
+            'chrome scheme' => ['chrome://settings', false],
+            'android intent' => ['intent://scan/#Intent;end', false],
+
+            /*
+             * ⛔ 結構不合法的 URL：scheme 與 host 看起來都對，但字串裡有
+             * 空白、引號或角括號。這些只有 `FILTER_VALIDATE_URL` 擋得住——
+             * 只檢查 scheme 與 host 的話會全部放行。
+             *
+             * ⛔ 這些字元正是在 `href` 裡最需要在意的：即使 Blade 會 escape，
+             * 一個結構破碎的值也不該被當成「可以點的連結」交給客人。
+             */
+            'space in host' => ['https://exa mple.com/x', false],
+            'quote in host' => ['http://exam"ple.com/', false],
+            'angle bracket in host' => ['https://ex<script>.com', false],
+            'space in path' => ['https://example.com/a b', false],
+        ];
+    }
+
+    #[DataProvider('targetLinkabilityProvider')]
+    public function test_only_real_http_targets_become_links(string $target, bool $linkable): void
+    {
+        $order = $this->orderFor();
+        $order->items()->first()->forceFill(['target_value' => $target])->save();
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame($target, $shaped['items'][0]['target']);
+
+        if ($linkable) {
+            $this->assertSame($target, $shaped['items'][0]['target_url']);
+        } else {
+            $this->assertNull(
+                $shaped['items'][0]['target_url'],
+                '⛔ 非 http(s) 的值絕不可成為 href。',
+            );
+        }
+    }
+
+    /** 合法 HTTPS target 在頁面上是安全外連。 */
+    public function test_a_valid_https_target_is_rendered_as_a_safe_link(): void
+    {
+        $order = $this->orderFor();
+        $order->items()->first()->forceFill([
+            'target_value' => 'https://instagram.com/my_account',
+        ])->save();
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        $this->assertStringContainsString('href="https://instagram.com/my_account"', $html);
+        // ⛔ noopener：新分頁不得透過 window.opener 操作本站。
+        $this->assertStringContainsString('rel="noopener noreferrer"', $html);
+        $this->assertStringContainsString('target="_blank"', $html);
+        // ⛔ 長網址必須可斷行。
+        $this->assertStringContainsString('break-all', $html);
+    }
+
+    /** ⛔ 非 URL 帳號只顯示文字，不得產生 `<a>`。 */
+    public function test_a_plain_account_target_is_text_only(): void
+    {
+        $order = $this->orderFor();
+        $order->items()->first()->forceFill(['target_value' => 'my_plain_account'])->save();
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        $this->assertStringContainsString('my_plain_account', $html);
+        $this->assertStringNotContainsString('href="my_plain_account"', $html);
+    }
+
+    /**
+     * ⛔ 惡意 target 必須被 Blade escape，不得注入 HTML／script。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function hostileTargetProvider(): array
+    {
+        return [
+            'script tag' => ['<script>alert(1)</script>'],
+            'img onerror' => ['<img src=x onerror=alert(1)>'],
+            'attribute break out' => ['" onmouseover="alert(1)'],
+            'javascript href' => ['javascript:alert(document.cookie)'],
+            'html in url path' => ['https://example.com/<script>alert(1)</script>'],
+        ];
+    }
+
+    #[DataProvider('hostileTargetProvider')]
+    public function test_a_hostile_target_is_escaped(string $hostile): void
+    {
+        $order = $this->orderFor();
+        $order->items()->first()->forceFill(['target_value' => $hostile])->save();
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        // ⛔ 原始 script／事件處理器不得以可執行形式出現。
+        $this->assertStringNotContainsString('<script>alert(1)</script>', $html);
+        $this->assertStringNotContainsString('<img src=x onerror=alert(1)>', $html);
+        $this->assertStringNotContainsString('onmouseover="alert(1)"', $html);
+        $this->assertStringNotContainsString('href="javascript:', $html);
+    }
+
     // ==================================== 3. 多訂單／多商品
 
     public function test_email_and_phone_return_every_matching_order(): void
@@ -693,8 +975,17 @@ class CustomerOrderLookupTest extends TestCase
         $response->assertSee($expected);
     }
 
-    /** 未付款：顯示本站真實狀態，⛔ 不假裝進行中。 */
-    public function test_an_unpaid_order_shows_its_real_local_status(): void
+    /**
+     * ⭐ Owner 本輪改變規則：未付款訂單**完全不出現**在查詢結果。
+     *
+     * ⛔ 這條先前斷言未付款訂單會顯示「等待付款」——那與新規則直接矛盾，
+     * 已改為斷言它根本查不到。這是產品決定的改變，不是回歸。
+     *
+     * ⛔ `PublicOrderPresenter::status()` 裡的未付款分支仍然保留：presenter
+     * 是通用的 allowlist，不該假設呼叫端一定只餵付款成功的訂單。防線留著，
+     * 只是這條路徑現在走不到。
+     */
+    public function test_an_unpaid_order_does_not_appear_at_all(): void
     {
         $order = $this->orderFor([
             'order_status' => OrderStatus::PendingPayment,
@@ -705,8 +996,10 @@ class CustomerOrderLookupTest extends TestCase
         $response = $this->lookup(['reference' => $order->reference, 'email' => self::EMAIL]);
 
         $response->assertOk();
-        $response->assertSee('等待付款');
-        $response->assertDontSee('進行中');
+        $response->assertSee('查不到符合的訂單');
+        $response->assertDontSee($order->reference, false);
+        // ⛔ 連狀態文字都不該出現——這張單完全不在結果裡。
+        $response->assertDontSee('等待付款');
     }
 
     /** 已付款但尚未建立履約：誠實說「準備中」。 */
@@ -774,11 +1067,23 @@ class CustomerOrderLookupTest extends TestCase
             'SENTINEL-PROVIDER-SERVICE-NAME', 'SENTINEL-RAW-STATUS',
             // 供應商字樣。
             'TheMostPanel', 'themostpanel', 'SMM',
-            // 客戶個資與交付目標。
-            self::EMAIL, self::PHONE, 'secret_customer_account',
+            // 客戶個資。
+            self::EMAIL, self::PHONE,
         ] as $forbidden) {
             $this->assertStringNotContainsString($forbidden, (string) $html, "公開頁外洩：{$forbidden}");
         }
+
+        /*
+         * ⭐ 交付目標已由 Owner 明確批准顯示，因此**不再**在禁止清單中。
+         *
+         * ⛔ 這一項先前是禁止的，現在改為必須出現——是 Owner 的產品決定改變。
+         * ⭐ 它與上面那些的差別很實在：provider 資料與 Email／手機是**我們或
+         * 第三方**的資訊，而交付目標是**客人自己填的、要給他自己看的**。
+         * 顯示它不會洩漏我們用哪一家供應商，也不會洩漏別人的個資。
+         *
+         * ⛔ 其餘禁止項目一項都沒有放寬。
+         */
+        $this->assertStringContainsString('secret_customer_account', (string) $html);
     }
 
     /** ⛔ Email／手機不得出現在 URL、redirect location 或 session。 */
@@ -1202,11 +1507,15 @@ class CustomerOrderLookupTest extends TestCase
     // ==================================== 8b. R1：presenter allowlist 與 enum
 
     /**
-     * ⭐ R1：presenter 的 key 完全等於批准清單，⛔ 不多不少。
+     * ⭐ presenter 的 key 完全等於批准清單，⛔ 不多不少。
      *
-     * ⛔ 移除了 `placed_at`：它看起來無害，但**不在 Owner 批准的欄位內**。
-     * 公開輸出的判準是「批准了什麼」，不是「這個看起來還好吧」——後者正是
-     * allowlist 會逐漸擴張、最後洩漏東西的方式。
+     * ⭐ 本輪 Owner 明確批准新增 `placed_at`、`payment_label`、`target`
+     * 與 `target_url`。前一輪曾把 `placed_at` 移除，理由是它不在批准清單內
+     * ——那個理由當時成立；現在 Owner 要求顯示訂單時間，所以它回來了。
+     * ⭐ 兩次相反的決定用的是**同一條規則**：判準是「Owner 批准了什麼」，
+     * 不是「這個欄位看起來危不危險」。
+     *
+     * ⛔ 清單仍然是封閉的：任何未列出的欄位一旦出現，這條就會失敗。
      */
     public function test_the_presenter_exposes_exactly_the_approved_keys(): void
     {
@@ -1217,23 +1526,68 @@ class CustomerOrderLookupTest extends TestCase
 
         $shaped = PublicOrderPresenter::for($order->fresh());
 
-        $this->assertSame(['reference', 'items'], array_keys($shaped));
-        $this->assertArrayNotHasKey('placed_at', $shaped);
+        $this->assertSame(
+            ['reference', 'placed_at', 'payment_label', 'items'],
+            array_keys($shaped),
+        );
 
         $this->assertSame(
-            ['platform', 'service', 'variant', 'quantity', 'status', 'remains'],
+            ['platform', 'service', 'variant', 'quantity', 'status', 'remains', 'target', 'target_url'],
             array_keys($shaped['items'][0]),
         );
+
+        // ⛔ 仍然嚴禁的欄位——新增四個 key 不代表放寬其他邊界。
+        foreach (['email', 'phone', 'customer_email', 'customer_phone', 'provider', 'provider_order_id',
+            'provider_status_code', 'provider_service_name_snapshot', 'payment_status', 'order_status',
+        ] as $forbidden) {
+            $this->assertArrayNotHasKey($forbidden, $shaped);
+            $this->assertArrayNotHasKey($forbidden, $shaped['items'][0]);
+        }
+    }
+
+    /**
+     * ⛔ 即使 presenter 新增了欄位，PII 與 provider 資料仍不得出現在 HTML。
+     *
+     * ⛔ 這條與上一條不同：上一條檢查 presenter 的回傳結構，這條檢查**實際
+     * 輸出的頁面**。兩者都要——presenter 正確但 Blade 另外撈 model 的話，
+     * 只驗 presenter 是看不出來的。
+     */
+    public function test_the_page_still_leaks_no_pii_or_provider_data(): void
+    {
+        $order = $this->orderFor();
+        $item = $order->items()->first();
+        $item->forceFill(['target_value' => 'https://instagram.com/my_account'])->save();
+
+        FulfillmentOrder::factory()->submitted('SMM-SECRET-9911')->create([
+            'order_item_id' => $item->id,
+            'provider_service_name_snapshot' => 'PROVIDER SERVICE NAME',
+            'provider_status_code' => 'In progress',
+        ]);
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        foreach ([self::EMAIL, self::PHONE, 'SMM-SECRET-9911', 'PROVIDER SERVICE NAME',
+            'In progress', 'TheMostPanel', 'SMM',
+        ] as $secret) {
+            $this->assertStringNotContainsString($secret, $html, "⛔ 公開頁不得出現 {$secret}。");
+        }
     }
 
     /** 結果頁不得出現「下單時間」。 */
-    public function test_the_result_page_no_longer_shows_the_order_time(): void
+    public function test_the_result_page_labels_the_order_time_as_approved(): void
     {
         $order = $this->orderFor();
 
-        $this->lookup(['reference' => $order->reference, 'email' => self::EMAIL])
-            ->assertOk()
-            ->assertDontSee('下單時間');
+        $response = $this->lookup(['reference' => $order->reference, 'email' => self::EMAIL])
+            ->assertOk();
+
+        // ⭐ Owner 指定的標籤是「訂單時間」。
+        $response->assertSee('訂單時間');
+        // ⛔ 舊的「下單時間」字樣不得同時存在，避免同一件事有兩種說法。
+        $response->assertDontSee('下單時間');
     }
 
     /**
