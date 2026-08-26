@@ -113,6 +113,7 @@ final class PublicOrderPresenter
             'variant' => (string) $item->variant_label,
             'quantity' => (int) $item->quantity,
             'status' => $status,
+            'status_tone' => self::tone($status),
             'remains' => self::remains($fulfillment, $status),
 
             /*
@@ -124,6 +125,34 @@ final class PublicOrderPresenter
             'target' => $target,
             'target_url' => self::targetUrl($target),
         ];
+    }
+
+    /**
+     * The colour tone for a public status — a closed allowlist.
+     *
+     * ⛔⛔ 回傳的是**本站自己的語意 token**（`success`／`info`／`warning`／
+     * `danger`），⛔ 不是 CSS class、⛔ 更不是任何 DB 值或供應商原文。
+     *
+     * ⭐ 為什麼多一層 token 而不是讓 Blade 直接 `match` 狀態文字：
+     * Blade 拿到什麼就會印什麼。若讓它自己決定 class，任何日後從 DB 流進
+     * `status` 的字串都有機會變成 class 屬性的一部分——那是一條把資料庫內容
+     * 送進 HTML 屬性的路。這裡先收斂成四個固定 token，Blade 只能在自己的
+     * 封閉 `match` 裡把 token 換成 class。
+     *
+     * ⛔ `status` 只可能是 `self::status()` 的四種輸出，因此這裡不需要
+     * `default`——但仍然寫了一個，且它回傳最保守的 `warning`：若日後有人在
+     * `status()` 新增第五種文字卻忘了這裡，畫面會是一個中性的琥珀色藥丸，
+     * ⛔ 不會是「綠色的已完成」那種會誤導客人的預設。
+     */
+    private static function tone(string $status): string
+    {
+        return match ($status) {
+            '已完成' => 'success',
+            '進行中' => 'info',
+            '準備中' => 'warning',
+            '請聯絡客服' => 'danger',
+            default => 'warning',
+        };
     }
 
     /**

@@ -190,7 +190,35 @@
                                                 </div>
                                                 <div>
                                                     <dt class="text-black/55">狀態</dt>
-                                                    <dd class="text-black">{{ $item['status'] }}</dd>
+                                                    <dd>
+                                                        {{--
+                                                            ⛔⛔ class 只能來自這個**封閉 match**，
+                                                            ⛔ 絕不由 presenter 或 DB 提供 class 字串。
+
+                                                            presenter 給的是本站語意 token
+                                                            （success／info／warning／danger），
+                                                            這裡才把 token 換成 class。若讓資料端直接
+                                                            決定 class，任何流進 `status` 的字串都有機會
+                                                            變成 HTML 屬性的一部分。
+
+                                                            ⛔ `default` 走中性的琥珀色，⛔ 不是綠色
+                                                            ——未知狀態不該長得像「已完成」。
+
+                                                            ⛔ 藥丸內**保留文字**：不能只靠顏色傳達狀態
+                                                            （色盲、單色列印、高對比模式都看不出顏色）。
+                                                        --}}
+                                                        @php
+                                                            $toneClass = match ($item['status_tone']) {
+                                                                'success' => 'bg-trust/12 text-trust',
+                                                                'info' => 'bg-[#1d4ed8]/10 text-[#1d4ed8]',
+                                                                'danger' => 'bg-accent/10 text-accent',
+                                                                default => 'bg-[#a16207]/12 text-[#a16207]',
+                                                            };
+                                                        @endphp
+                                                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-semibold {{ $toneClass }}">
+                                                            {{ $item['status'] }}
+                                                        </span>
+                                                    </dd>
                                                 </div>
                                                 <div>
                                                     <dt class="text-black/55">剩餘</dt>

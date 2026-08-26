@@ -1532,11 +1532,11 @@ class CustomerOrderLookupTest extends TestCase
         );
 
         $this->assertSame(
-            ['platform', 'service', 'variant', 'quantity', 'status', 'remains', 'target', 'target_url'],
+            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url'],
             array_keys($shaped['items'][0]),
         );
 
-        // ⛔ 仍然嚴禁的欄位——新增四個 key 不代表放寬其他邊界。
+        // ⛔ 仍然嚴禁的欄位——新增 key 不代表放寬其他邊界。
         foreach (['email', 'phone', 'customer_email', 'customer_phone', 'provider', 'provider_order_id',
             'provider_status_code', 'provider_service_name_snapshot', 'payment_status', 'order_status',
         ] as $forbidden) {
@@ -1574,6 +1574,129 @@ class CustomerOrderLookupTest extends TestCase
         ] as $secret) {
             $this->assertStringNotContainsString($secret, $html, "⛔ 公開頁不得出現 {$secret}。");
         }
+    }
+
+    // ==================================== 2f. 公開狀態藥丸
+
+    /**
+     * ⭐ 四種公開狀態文字與 tone 的 exact mapping。
+     *
+     * ⛔ tone 是本站自己的語意 token，⛔ 不是 CSS class、⛔ 不是 DB 值。
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function statusToneProvider(): array
+    {
+        return [
+            'completed' => ['已完成', 'success'],
+            'processing' => ['進行中', 'info'],
+            'preparing' => ['準備中', 'warning'],
+            'contact support' => ['請聯絡客服', 'danger'],
+        ];
+    }
+
+    #[DataProvider('statusToneProvider')]
+    public function test_each_public_status_maps_to_its_exact_tone(string $status, string $tone): void
+    {
+        $method = new \ReflectionMethod(PublicOrderPresenter::class, 'tone');
+        $method->setAccessible(true);
+
+        $this->assertSame($tone, $method->invoke(null, $status));
+    }
+
+    /**
+     * ⛔ 未知／供應商原文不得成為 tone，⛔ 也不得變成綠色。
+     *
+     * ⭐ `default` 走中性的 `warning`：若日後有人在 `status()` 新增第五種文字
+     * 卻忘了更新 tone，畫面會是中性琥珀色，⛔ 不會是會誤導客人的「綠色已完成」。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function unknownStatusProvider(): array
+    {
+        return [
+            'provider raw status' => ['In progress'],
+            'provider token' => ['Partial'],
+            'empty' => [''],
+            'css injection attempt' => ['success" onload="alert(1)'],
+            'class name' => ['bg-red-500'],
+        ];
+    }
+
+    #[DataProvider('unknownStatusProvider')]
+    public function test_an_unknown_status_never_becomes_success_or_a_class(string $unknown): void
+    {
+        $method = new \ReflectionMethod(PublicOrderPresenter::class, 'tone');
+        $method->setAccessible(true);
+
+        $tone = $method->invoke(null, $unknown);
+
+        // ⛔ 只能是四個封閉 token 之一，且絕不是 success。
+        $this->assertContains($tone, ['success', 'info', 'warning', 'danger']);
+        $this->assertNotSame('success', $tone);
+        $this->assertSame('warning', $tone);
+    }
+
+    /**
+     * ⛔ 藥丸不能只靠顏色傳達狀態。
+     *
+     * 色盲、單色列印與高對比模式都看不出顏色差異；狀態文字必須留在藥丸內。
+     */
+    public function test_the_status_pill_keeps_its_text(): void
+    {
+        $order = $this->orderFor();
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        // 藥丸是一個帶 rounded-full 的 span，且文字就在裡面。
+        $this->assertMatchesRegularExpression(
+            '/<span class="inline-flex items-center rounded-full[^"]*">\s*準備中\s*<\/span>/u',
+            $html,
+            '⛔ 狀態文字必須留在藥丸內。',
+        );
+    }
+
+    /**
+     * ⛔⛔ 公開頁的 class 只能來自 Blade 的封閉 match。
+     *
+     * presenter 給的是語意 token，⛔ 絕不給 class 字串。這條確認 `status_tone`
+     * 的值本身不會出現在 HTML 的 class 屬性裡——若哪天有人改成把 tone 直接
+     * 塞進 class，這裡會抓到。
+     */
+    public function test_the_tone_token_never_reaches_the_html_as_a_class(): void
+    {
+        $order = $this->orderFor();
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Failed,
+        ]);
+
+        $html = (string) $this->lookup([
+            'email' => self::EMAIL,
+            'phone' => self::PHONE,
+        ])->assertOk()->getContent();
+
+        $this->assertStringContainsString('請聯絡客服', $html);
+        // ⛔ 語意 token 不是 class，不該出現在 class 屬性中。
+        $this->assertStringNotContainsString('class="danger', $html);
+        $this->assertStringNotContainsString(' danger"', $html);
+    }
+
+    /** presenter 的 key 清單納入 `status_tone`。 */
+    public function test_the_presenter_exposes_the_status_tone(): void
+    {
+        $order = $this->orderFor();
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame(
+            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url'],
+            array_keys($shaped['items'][0]),
+        );
+        $this->assertSame('warning', $shaped['items'][0]['status_tone']);
     }
 
     /**
