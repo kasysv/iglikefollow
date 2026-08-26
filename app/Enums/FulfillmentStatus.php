@@ -26,8 +26,25 @@ enum FulfillmentStatus: string
     /** 已原子搶下，正在送出；⛔ 其他 worker 不得再送。 */
     case Submitting = 'submitting';
 
-    /** 對方明確接受，並回了 provider order ID。 */
+    /** 對方明確接受，並回了 provider order ID；⛔ 尚未取得第一次 status 結果。 */
     case Submitted = 'submitted';
+
+    /**
+     * ⭐ 供應商的 status API 明確回傳 exact `Pending`——仍在等待處理。
+     *
+     * ⛔⛔ 這是一個**獨立**狀態，⛔ 不是 `Submitted` 的別名，也不是
+     * `Processing`。三者的意思各自不同：
+     *
+     *  - `Submitted`：我們送出成功、拿到 provider order ID，但**還沒問過**
+     *    對方進度。
+     *  - `Pending`：問過了，對方明說「還在排隊」。
+     *  - `Processing`：問過了，對方明說「正在做」。
+     *
+     * ⛔ GPT 前一版曾把 provider 的 `Pending` 映射進既有的 `Submitted`，
+     * 已被 Owner 否決並撤回：那會讓「還沒問過」與「問過且對方說在排隊」
+     * 變成同一件事，後台再也分不出輪詢到底有沒有在動。
+     */
+    case Pending = 'pending';
 
     /** 對方回報處理中。 */
     case Processing = 'processing';
@@ -57,6 +74,8 @@ enum FulfillmentStatus: string
             self::Ready => '待送出',
             self::Submitting => '送出中',
             self::Submitted => '已送出',
+            // ⛔ 顯示為「等待處理中」,⛔ 不翻成已送出或處理中——那是三件不同的事。
+            self::Pending => '等待處理中',
             self::Processing => '處理中',
             self::Completed => '已完成',
             self::Partial => '部分完成',
@@ -70,7 +89,7 @@ enum FulfillmentStatus: string
     {
         return match ($this) {
             self::Completed => 'success',
-            self::Submitted, self::Processing => 'info',
+            self::Submitted, self::Pending, self::Processing => 'info',
             self::Ready, self::Submitting => 'primary',
             self::Partial, self::SubmissionUnknown => 'warning',
             self::Failed, self::Canceled => 'danger',
@@ -160,15 +179,34 @@ enum FulfillmentStatus: string
              * `submission_unknown` 也在其中：已送出的單如果後來連查都查不到、
              * 或本地回寫失敗，把它標成需要人工對帳是誠實且必要的。⛔ 它同樣
              * 是終止狀態，不會因此變得可以重送。
+             *
+             * ⭐ `Pending` 與 `Processing` 之間**雙向**允許：
+             *
+             * 供應商在 `Processing` 之後又明確回 exact `Pending` 是真實會發生
+             * 的（重新排隊）。⛔ 那種情況不得寫成 unrecognised，也不得改叫
+             * `Submitted`——兩者都已有 provider order ID，都是 post-submit 的
+             * 可輪詢狀態，⛔ 絕不會因此重新派單（`isPostSubmit()` 為 true，
+             * 上面的守衛已擋掉回到送出前狀態）。
              */
-            self::Submitted, self::Processing => in_array($target, [
+            self::Submitted, self::Pending, self::Processing => in_array($target, [
+                self::Pending,
                 self::Processing,
                 self::Completed,
                 self::Partial,
                 self::Canceled,
                 self::Failed,
                 self::SubmissionUnknown,
-            ], true) && $target !== $this,
+            ], true) && $target !== $this
+                /*
+                 * ⛔ `Submitted` **不在**上面的清單裡，這是刻意的。
+                 *
+                 * `Submitted` 的意思是「還沒問過對方」——那是一件一旦發生就
+                 * 回不去的事實。從 `Pending`／`Processing` 退回 `Submitted`
+                 * 等於宣稱我們從來沒問過，會讓後台以為輪詢還沒開始。
+                 * ⛔ 而且 `Submitted` 也不是 provider 會回的 token（見
+                 * `syncableTargets()`）。
+                 */
+                && $target !== self::Submitted,
 
             default => false,
         };
@@ -181,7 +219,8 @@ enum FulfillmentStatus: string
      */
     public static function syncableSources(): array
     {
-        return [self::Submitted, self::Processing];
+        // ⭐ `Pending` 也必須可再輪詢：它是「對方說還在排隊」,不是終點。
+        return [self::Submitted, self::Pending, self::Processing];
     }
 
     /**
@@ -198,6 +237,7 @@ enum FulfillmentStatus: string
     {
         return [
             self::Submitted,
+            self::Pending,
             self::Processing,
             self::Completed,
             self::Partial,

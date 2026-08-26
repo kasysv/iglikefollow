@@ -70,6 +70,18 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
      * @var array<string, FulfillmentStatus>
      */
     private const STATUS_MAP = [
+        /*
+         * ⭐ Owner 以第一方 live 資料確認：TheMostPanel 剛開始會回 exact
+         * `Pending`。缺了這一列，那個回應會被 fail-closed 記成
+         * `STATUS_UNRECOGNISED`——那正是 staging 上實際發生的事。
+         *
+         * ⛔ **只加這一個 exact token**：`pending`、`PENDING`、前後有空白的
+         * 變體一律不加，仍維持 unrecognised。
+         *
+         * ⛔ 映射到**獨立**的 `FulfillmentStatus::Pending`，⛔ 不是 `Submitted`
+         * 也不是 `Processing`（GPT 前版把它塞進 `Submitted` 已由 Owner 否決）。
+         */
+        'Pending' => FulfillmentStatus::Pending,
         'In progress' => FulfillmentStatus::Processing,
         'Completed' => FulfillmentStatus::Completed,
         'Partial' => FulfillmentStatus::Partial,

@@ -512,6 +512,86 @@ class OrderAdminTest extends TestCase
     }
 
     /**
+     * ⭐ R1：時間線改用 Filament 原生 badge 與色系。
+     *
+     * ⛔ Owner 目視確認舊版沒有沿用 Filament 視覺語言（只有 plain text 三欄）。
+     *
+     * ⛔ 顏色只能來自 presenter 的**封閉 token**，⛔ 不得把 DB 值、provider
+     * 原文或任意 CSS class 送進 Blade——那是一條把資料庫內容變成 HTML 屬性
+     * 的路。
+     */
+    public function test_the_timeline_uses_filament_badges_with_closed_colors(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $fulfillment = FulfillmentOrder::factory()->submitted('SMM-BADGE-1')->create([
+            'order_item_id' => $item->id,
+            'provider_service_name_snapshot' => '時間線服務名稱',
+        ]);
+        $fulfillment->recordEvent(
+            FulfillmentEventCode::Submitted,
+            from: FulfillmentStatus::Ready,
+            to: FulfillmentStatus::Submitted,
+        );
+
+        $entries = OrderActivityTimeline::for($order->fresh());
+
+        // ⛔ 每一列的 color 只能是六個封閉 Filament token 之一。
+        foreach ($entries as $entry) {
+            $this->assertContains(
+                $entry['color'],
+                ['gray', 'primary', 'info', 'success', 'warning', 'danger'],
+                '⛔ timeline color 必須是封閉的 Filament token。',
+            );
+        }
+
+        $html = Livewire::test(OrderEventsRelationManager::class, [
+            'ownerRecord' => $order->fresh(),
+            'pageClass' => ViewOrder::class,
+        ])->assertOk()->html();
+
+        // ⭐ 確實使用 Filament badge（原生元件會輸出 fi-badge）。
+        $this->assertStringContainsString('fi-badge', $html);
+
+        // ⛔ 手機不得依賴固定最小寬度。
+        $this->assertStringNotContainsString('min-w-[', $html);
+    }
+
+    /** ⭐ R1：`Pending` 在時間線顯示為獨立語意，⛔ 不翻成已送出或處理中。 */
+    public function test_the_timeline_shows_pending_as_its_own_label(): void
+    {
+        $this->actingAs($this->owner());
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $fulfillment = FulfillmentOrder::factory()->submitted('SMM-BADGE-2')->create([
+            'order_item_id' => $item->id,
+        ]);
+        $fulfillment->recordEvent(
+            FulfillmentEventCode::StatusSynced,
+            from: FulfillmentStatus::Submitted,
+            to: FulfillmentStatus::Pending,
+        );
+
+        $entries = collect(OrderActivityTimeline::for($order->fresh()));
+        $pending = $entries->firstWhere('label', 'SMM 平台等待處理中');
+
+        $this->assertNotNull($pending, '⭐ Pending 必須有自己的句子。');
+        $this->assertSame('info', $pending['color']);
+
+        $html = Livewire::test(OrderEventsRelationManager::class, [
+            'ownerRecord' => $order->fresh(),
+            'pageClass' => ViewOrder::class,
+        ])->assertOk()->html();
+
+        $this->assertStringContainsString('SMM 平台等待處理中', $html);
+        // ⛔ 不得把 Pending 說成已進行中。
+        $this->assertStringNotContainsString('SMM 平台已進行中', $html);
+    }
+
+    /**
      * ⭐ R1：三個 relation manager 都掛載，合併時間線是最後一個。
      *
      * ⛔ A1 把 events 那個拿掉了；R1 重新掛回來，因為它才是 Owner 指定的

@@ -79,9 +79,63 @@ final class OrderActivityTimeline
                 'created_at' => $entry['created_at'],
                 'source' => $entry['source'],
                 'label' => $entry['label'],
+                /*
+                 * ⭐ 封閉的 Filament color token。
+                 *
+                 * ⛔ 只可能是 `gray／primary／info／success／warning／danger`
+                 * 六個之一，⛔ 不是 CSS class、⛔ 不是 DB 值、⛔ 不是 provider
+                 * 原文。Blade 只把它交給 `<x-filament::badge :color="...">`。
+                 *
+                 * 讓 presenter 決定**語意**、Blade 決定**外觀**，是為了不讓任何
+                 * 資料庫內容有機會變成 HTML 屬性的一部分。
+                 */
+                'color' => self::color($entry['label']),
                 'smm_service_name' => $entry['smm_service_name'],
             ])
             ->all();
+    }
+
+    /**
+     * The Filament color token for one timeline label.
+     *
+     * ⛔ 依**已經組好的固定中文句子**判斷，⛔ 不看 DB 欄位——那些句子全部
+     * 來自本地 enum 的封閉 match，所以這裡的輸入本身就是封閉集合。
+     *
+     * 語意分工（施工單建議）：
+     *  - `success`：付款成功、已完成
+     *  - `info`：進行中、已送出、等待處理中
+     *  - `warning`：設定阻擋、部分完成、結果不明
+     *  - `danger`：失敗、取消、無法辨識
+     *  - `gray`：建立紀錄等中性事件
+     *
+     * ⛔ `default` 走 `gray` 而不是 `success`：日後新增的事件句子會顯示成
+     * 中性灰，⛔ 不會是一個看起來像「成功了」的綠色徽章。
+     */
+    private static function color(string $label): string
+    {
+        return match (true) {
+            str_contains($label, '已完成'),
+            str_contains($label, '付款成功'),
+            str_contains($label, '開立成功') => 'success',
+
+            str_contains($label, '失敗'),
+            str_contains($label, '取消'),
+            str_contains($label, '拒絕'),
+            str_contains($label, '無法辨識') => 'danger',
+
+            str_contains($label, '部分完成'),
+            str_contains($label, '結果不明'),
+            str_contains($label, '待設定'),
+            str_contains($label, '需人工'),
+            str_contains($label, '對帳') => 'warning',
+
+            str_contains($label, '進行中'),
+            str_contains($label, '等待處理'),
+            str_contains($label, '下單'),
+            str_contains($label, '已送出') => 'info',
+
+            default => 'gray',
+        };
     }
 
     /**
@@ -101,6 +155,8 @@ final class OrderActivityTimeline
 
         if ($event->event_code === FulfillmentEventCode::StatusSynced) {
             return match ($event->to_status) {
+                // ⭐ 獨立顯示，⛔ 不翻成「已送出」或「已進行中」——那是三件不同的事。
+                FulfillmentStatus::Pending => 'SMM 平台等待處理中',
                 FulfillmentStatus::Processing => 'SMM 平台已進行中',
                 FulfillmentStatus::Completed => 'SMM 平台已完成',
                 FulfillmentStatus::Partial => 'SMM 平台部分完成',

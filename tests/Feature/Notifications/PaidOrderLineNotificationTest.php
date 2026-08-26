@@ -20,8 +20,10 @@ use App\Services\Notifications\LinePushClient;
 use App\Services\Notifications\PaidOrderMessage;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Events\JobQueued;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -266,6 +268,70 @@ class PaidOrderLineNotificationTest extends TestCase
         $this->assertSame(PaymentStatus::Succeeded, $order->fresh()->payment_status);
     }
 
+    /**
+     * ⛔⛔ R1：queue dispatch 拋 `Throwable` 時，listener 不得往上拋。
+     *
+     * ⛔ 初版的註解宣稱「listener 裡沒有任何邏輯，就沒有任何東西可以拋例外」
+     * ——**那個推論是錯的**。`dispatch()` 本身就會寫 queue（database driver
+     * 要 INSERT 一列 `jobs`），DB 故障時它會拋 `QueryException`，而那個例外
+     * 會沿著 event dispatcher 往上冒泡，把發票與履約兩條支線一起帶下去。
+     *
+     * ⭐「很薄」不等於「不會拋」。這條測試就是那個反例。
+     */
+    public function test_a_failing_queue_dispatch_never_propagates(): void
+    {
+        $order = $this->paidOrder();
+
+        // ⛔ 讓 queue 真的壞掉：dispatch 時會拋。
+        Queue::shouldReceive('connection')->andThrow(new \RuntimeException('queue is down'));
+
+        $listener = new ScheduleLineOrderNotificationForPaidOrder;
+
+        // ⛔ 不得往上拋。
+        $listener->handle(new OrderPaid($order));
+
+        // ⛔ 訂單仍然 paid。
+        $this->assertTrue($order->fresh()->isPaid());
+    }
+
+    /**
+     * ⛔⛔ 同一件事的**整條 event 路徑**版本：LINE 排不進去時，
+     * 發票與履約兩條支線仍然照常執行。
+     *
+     * ⭐ 這裡只讓 **LINE 那一個 job** 的 dispatch 失敗，其餘照常——若讓整個
+     * queue 都壞掉，三條都不會排，那證明不了任何隔離。
+     */
+    public function test_a_failing_line_dispatch_does_not_stop_the_other_branches(): void
+    {
+        $order = $this->paidOrder();
+
+        $dispatched = [];
+
+        /*
+         * ⛔ 攔截 job dispatch：只有 LINE 那個丟例外，模擬 queue 寫入失敗。
+         */
+        Bus::fake();
+        Event::listen(
+            JobQueued::class,
+            fn () => null,
+        );
+
+        app()->bind(SendPaidOrderLineNotification::class, function () {
+            throw new \RuntimeException('queue write failed');
+        });
+
+        // ⛔ 整個 event 不得因此中斷。
+        OrderPaid::dispatch($order);
+
+        // ⭐ 另外兩條支線照常排隊。
+        Bus::assertDispatched(IssueInvoiceForOrder::class);
+        Bus::assertDispatched(PrepareFulfillmentForPaidOrder::class);
+
+        // ⛔ 訂單仍然 paid。
+        $this->assertTrue($order->fresh()->isPaid());
+        $this->assertSame([], $dispatched);
+    }
+
     /** ⛔ listener 不得自己進 queue（那會變成「排一個工作去排一個工作」）。 */
     public function test_the_listener_is_inert(): void
     {
@@ -321,9 +387,23 @@ class PaidOrderLineNotificationTest extends TestCase
             'line id' => ['@my_line_id'],
             'url' => ['https://line.me/R/ti/g/abc'],
             'wrong prefix' => ['Xf7a1b2c3d4e5f60718293a4b5c6d7e8f'],
-            'uppercase hex' => ['CF7A1B2C3D4E5F60718293A4B5C6D7E8F'],
-            'too short' => ['C1234'],
             'empty' => [''],
+
+            // ⛔ 含空白或控制字元一律拒絕：那不會是 LINE 發出的 ID。
+            'space inside' => ['C my group'],
+            'tab inside' => ["Cabc\tdef"],
+            'trailing space' => ['Cf7a1b2c3d4e5f60718293a4b5c6d7e8f '],
+
+            /*
+             * ⛔ `userId` **有**官方契約，所以照契約嚴格檢查：
+             * 大寫十六進位與長度不符都不合法。
+             *
+             * ⭐ R1：`CF7A…`（大寫）與 `C1234`（短）已從這份清單**移除**——
+             * 見 `validTargetProvider()` 的說明：C／R 沒有官方契約，
+             * 我原本用 userId 的規格去卡它們是把範例當契約。
+             */
+            'user uppercase hex' => ['U8189CF6745FC0D808977BDB0B9F22995'],
+            'user too short' => ['U1234'],
         ];
     }
 
@@ -385,9 +465,14 @@ class PaidOrderLineNotificationTest extends TestCase
     /**
      * ⭐ userId／groupId／roomId 三種前綴都必須被接受。
      *
-     * ⛔ 官方只保證 `userId` 是 `U[0-9a-f]{32}`；`groupId`／`roomId` 的長度與
-     * 字元集**沒有規範**（只有範例）。因此這裡不硬性要求 32 碼——否則某天
-     * LINE 發出一個長度不同的 groupId，Owner 的通知會全部靜默失效。
+     * ⛔⛔ R1 修正：初版要求 C／R 之後必須是 16–64 位**小寫十六進位**。
+     * 那是**把範例當契約**——官方只保證 `userId` 是 `U[0-9a-f]{32}`，
+     * 而 `groupId`／`roomId` 在文件中只被定義為 webhook 回傳的 opaque String，
+     * 從未規範長度或字元集。文件裡的 `Ca56f94637c…` 是範例。
+     *
+     * ⛔ 我們自己發明的規則一旦與 LINE 的實際值不符，Owner 的通知會全部
+     * 靜默失效——而 Owner 最可能用的正是群組。真實收件者的正確性由
+     * 「送測試訊息」確認，那是唯一能真正驗證的方法。
      *
      * @return array<string, array{0: string}>
      */
@@ -398,6 +483,14 @@ class PaidOrderLineNotificationTest extends TestCase
             'group' => ['Cf7a1b2c3d4e5f60718293a4b5c6d7e8f'],
             'room' => ['Ra8dbf4673c1234567890abcdef123456'],
             'shorter group id' => ['C0123456789abcdef'],
+
+            /*
+             * ⭐ 這三個在初版會被**錯誤地拒絕**。它們都是合法形狀的 opaque
+             * ID，只是不符合我們自己發明的「小寫十六進位」規則。
+             */
+            'group with uppercase' => ['CF7A1B2C3D4E5F60718293A4B5C6D7E8F'],
+            'group with dash' => ['Csome-opaque_value'],
+            'short group id' => ['C1234'],
         ];
     }
 
@@ -497,7 +590,10 @@ class PaidOrderLineNotificationTest extends TestCase
     {
         return [
             'ok' => [200, 'sent', false],
-            'rate limited' => [429, 'rate_limited', true],
+            // ⭐ R1：LINE 官方把**所有 4xx（含 429）**列為不可重試。
+            // ⛔ 初版標成可重試，理由是「429 是太快不是不可以」——那與官方規格
+            // 相反，已撤回。仍保留獨立的 `rate_limited` token 供 Owner 分辨。
+            'rate limited' => [429, 'rate_limited', false],
             'server error' => [500, 'server_error', true],
             'bad gateway' => [502, 'server_error', true],
             'unauthorized' => [401, 'rejected', false],

@@ -28,7 +28,10 @@ class SendPaidOrderLineNotification implements ShouldBeUnique, ShouldQueue
     use Queueable;
 
     /**
-     * ⛔ 有限重試：429／5xx／transport 才值得再試一次。
+     * ⛔ 有限重試：**只有** 5xx 與 transport 逾時／連線失敗才值得再試一次。
+     *
+     * ⛔ 429 與其餘 4xx 一律不重試（LINE 官方規格，見
+     * `LineNotificationOutcome::fromStatus()`）。
      *
      * ⛔ 與既有 worker 設定一致（`--tries=3 --timeout=60`、DB queue
      * `retry_after=90`）：在這裡寫一個更大的數字，只會讓 worker 的設定與
@@ -96,11 +99,16 @@ class SendPaidOrderLineNotification implements ShouldBeUnique, ShouldQueue
          */
         if ($outcome->retryable && $this->attempts() < $this->tries) {
             /*
-             * ⛔ 退避後再試，⛔ 不立刻重送。
+             * ⛔ exponential backoff，⛔ 不立刻重送。
              *
-             * 429 代表「太快」；立刻重試只會再撞一次限流。
+             * 可重試的只剩 5xx 與 transport 失敗——兩者都代表對方或網路
+             * 正在出問題，立刻重送只會再撞一次。官方也建議以 exponential
+             * backoff 重試。
+             *
+             * ⛔ 重試沿用**同一個** retry key，所以「其實已經送達」的情況
+             * 不會變成第二則訊息。
              */
-            $this->release(30 * $this->attempts());
+            $this->release(30 * (2 ** ($this->attempts() - 1)));
         }
 
         /*

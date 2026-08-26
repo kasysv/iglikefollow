@@ -77,9 +77,21 @@ final class LineNotificationOutcome
      */
     public static function fromStatus(int $status): self
     {
+        /*
+         * ⛔⛔ 429 **不可自動重試**。
+         *
+         * ⛔ 初版把它標成可重試，理由寫的是「429 是太快，不是不可以」。
+         * 那個推論與 LINE 官方規格相反並已撤回：官方的重試決策表把
+         * **所有 4xx（含 429）** 列為「Don't retry. Retries don't change
+         * the result.」，且這個端點沒有 `Retry-After` header。
+         * https://developers.line.biz/en/docs/messaging-api/retrying-api-request/
+         *
+         * ⭐ 保留獨立的 `rate_limited` token（而不是併進 `rejected`）：
+         * Owner 需要分得出「被限流」與「token／接收 ID 錯」——那是兩種完全
+         * 不同的處置。⛔ 但 `retryable` 仍然是 false。
+         */
         if ($status === 429) {
-            // ⛔ 可重試：這是「太快」，不是「不可以」。
-            return new self('rate_limited', 4, true);
+            return new self('rate_limited', 4, false);
         }
 
         if ($status >= 500) {

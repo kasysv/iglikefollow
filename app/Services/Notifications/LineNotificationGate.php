@@ -23,26 +23,31 @@ use App\Services\Integrations\ProviderEndpoints;
 final class LineNotificationGate
 {
     /**
-     * ⛔ 接收 ID 的形狀。
+     * ⛔ `userId` 的官方契約：`U[0-9a-f]{32}`。
      *
-     * ⭐ 這個 pattern 刻意**比 userId 寬**，理由是查證過官方文件後的事實：
-     *
-     *  - `userId` 官方明文保證是 `U[0-9a-f]{32}`
-     *    （https://developers.line.biz/en/docs/messaging-api/getting-user-ids/）。
-     *  - `groupId`／`roomId` 的長度與字元集 **官方沒有規範**。Messaging API
-     *    reference 只說它們是 String，文件中的例子（`Ca56f94637c…`、
-     *    `Ra8dbf4673c…`）看起來也是小寫十六進位，但那是範例，不是契約。
-     *    官方對 `to` 的唯一要求是「把 webhook 給你的值原樣送回來」。
-     *
-     * ⛔ 因此這裡不硬性要求 32 碼：若照 userId 的規格去卡群組 ID，某天 LINE
-     * 發出一個長度不同的 groupId，Owner 的通知會全部靜默失效，而錯的是我們
-     * 自己發明的規則。
-     *
-     * ⛔ 但也不是「不是空的就好」：仍要求 U／C／R 開頭 ＋ 十六進位字元 ＋
-     * 合理長度下限，⛔ 擋掉貼成 display name、網址或 LINE ID（@xxx）的情況
-     * ——那些是真正常見的貼錯，且會把訂單內容送去未知對象。
+     * ⭐ 這一個**有**官方明文保證，所以照契約嚴格檢查。
+     * https://developers.line.biz/en/docs/messaging-api/getting-user-ids/
      */
-    private const TARGET_PATTERN = '/\A[UCR][0-9a-f]{16,64}\z/';
+    private const USER_PATTERN = '/\A U[0-9a-f]{32} \z/x';
+
+    /**
+     * ⛔⛔ `groupId`／`roomId` 只做**最小**邊界檢查。
+     *
+     * ⭐ R1 修正：初版要求 C／R 之後必須是 16–64 位小寫十六進位。
+     * **那是把範例當成契約**——官方只把 groupId／roomId 定義為 webhook 回傳的
+     * opaque String，從未規範長度或字元集；文件裡的 `Ca56f94637c…` 是範例。
+     *
+     * ⛔ 我們自己發明的規則一旦與 LINE 的實際值不符，Owner 的通知會**全部
+     * 靜默失效**，而那個錯在我們身上。真實收件者的正確性由 Owner 按
+     * 「送測試訊息」確認——那是唯一能真正驗證的方法。
+     *
+     * ⛔ 但仍必須擋掉真正常見的貼錯：display name、`@LINE ID`、URL、空字串、
+     * 含空白或控制字元的值。那些會把整張訂單的內容送去未知對象。
+     *
+     * ⛔ 上限沿用 DB 欄位長度（`identifier` 是 string(255)）：超過的值本來
+     * 就存不進去，讓它在這裡就停下來比在寫入時炸掉清楚。
+     */
+    private const OPAQUE_PATTERN = '/\A [CR] [^\s\x00-\x1f]{1,254} \z/xu';
 
     /** Owner 開關（不管環境）。後台顯示用。 */
     public static function enabledByOwner(): bool
@@ -133,8 +138,22 @@ final class LineNotificationGate
         return self::targetIsValid($row->identifier) ? $row : null;
     }
 
+    /**
+     * ⛔ `U` 走官方契約；`C`／`R` 只做最小邊界檢查（見上方常數註解）。
+     *
+     * ⛔ 其他開頭一律拒絕：`@my_id`、`https://line.me/...`、display name
+     * 都不是接收 ID。
+     */
     public static function targetIsValid(?string $target): bool
     {
-        return is_string($target) && preg_match(self::TARGET_PATTERN, $target) === 1;
+        if (! is_string($target) || $target === '') {
+            return false;
+        }
+
+        if (str_starts_with($target, 'U')) {
+            return preg_match(self::USER_PATTERN, $target) === 1;
+        }
+
+        return preg_match(self::OPAQUE_PATTERN, $target) === 1;
     }
 }

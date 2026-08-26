@@ -266,6 +266,8 @@ final class PublicOrderPresenter
             FulfillmentStatus::Ready,
             FulfillmentStatus::Submitting,
             FulfillmentStatus::Submitted,
+            // ⛔ 對客人來說「排隊中」與「處理中」都是進行中;⛔ 不暴露 SMM 原文。
+            FulfillmentStatus::Pending,
             FulfillmentStatus::Processing => '進行中',
 
             /*

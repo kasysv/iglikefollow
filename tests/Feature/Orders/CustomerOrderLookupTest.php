@@ -951,6 +951,8 @@ class CustomerOrderLookupTest extends TestCase
             'completed' => [FulfillmentStatus::Completed, '已完成'],
             'processing' => [FulfillmentStatus::Processing, '進行中'],
             'submitted' => [FulfillmentStatus::Submitted, '進行中'],
+            // ⭐ 對客人來說「排隊中」也是進行中;⛔ 不暴露 SMM 原文 `Pending`。
+            'pending' => [FulfillmentStatus::Pending, '進行中'],
             'partial' => [FulfillmentStatus::Partial, '請聯絡客服'],
             'canceled' => [FulfillmentStatus::Canceled, '請聯絡客服'],
             'failed' => [FulfillmentStatus::Failed, '請聯絡客服'],
@@ -1791,6 +1793,8 @@ class CustomerOrderLookupTest extends TestCase
 
         $submittedOrLater = in_array($status, [
             FulfillmentStatus::Submitted,
+            // ⛔ `Pending` 也是 post-submit：DB 的 identifier guard 要求它有單號。
+            FulfillmentStatus::Pending,
             FulfillmentStatus::Processing,
             FulfillmentStatus::Completed,
             FulfillmentStatus::Partial,
@@ -1905,6 +1909,8 @@ class CustomerOrderLookupTest extends TestCase
             'ready' => [FulfillmentStatus::Ready, '進行中'],
             'submitting' => [FulfillmentStatus::Submitting, '進行中'],
             'submitted' => [FulfillmentStatus::Submitted, '進行中'],
+            // ⭐ 對客人來說「排隊中」也是進行中;⛔ 不暴露 SMM 原文 `Pending`。
+            'pending' => [FulfillmentStatus::Pending, '進行中'],
             'processing' => [FulfillmentStatus::Processing, '進行中'],
             'completed' => [FulfillmentStatus::Completed, '已完成'],
             'partial' => [FulfillmentStatus::Partial, '請聯絡客服'],
@@ -1938,6 +1944,8 @@ class CustomerOrderLookupTest extends TestCase
          */
         $submittedOrLater = in_array($status, [
             FulfillmentStatus::Submitted,
+            // ⛔ `Pending` 也是 post-submit：DB 的 identifier guard 要求它有單號。
+            FulfillmentStatus::Pending,
             FulfillmentStatus::Processing,
             FulfillmentStatus::Completed,
             FulfillmentStatus::Partial,
