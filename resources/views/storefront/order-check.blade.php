@@ -72,8 +72,19 @@
                 <p class="mt-2 text-sm text-black/55">請輸入完整手機號碼；台灣手機可使用 09、+886 或 00886 格式。</p>
             </div>
 
+            {{--
+                ⛔ 底色用 `bg-ink`，⛔ 不是 `bg-black`。
+
+                本站主題沒有定義 `--color-black`，而 Tailwind 的 `.bg-black`
+                編出來是 `background-color: var(--color-black)`——變數不存在時
+                背景等於沒有，只剩 `text-white` 的白字落在淺色底上，按鈕整個
+                看不見。站上其他實心按鈕（首頁 CTA、header）用的都是 `bg-ink`。
+
+                ⛔ `bg-black/5` 這類帶透明度的寫法不受影響（編譯方式不同），
+                所以本檔其他地方維持原樣。
+            --}}
             <button type="submit"
-                    class="inline-flex min-h-11 items-center rounded-lg bg-black px-5 py-2.5 text-base font-semibold text-white">
+                    class="inline-flex min-h-11 items-center rounded-lg bg-ink px-5 py-2.5 text-base font-semibold text-white">
                 查詢訂單
             </button>
         </form>

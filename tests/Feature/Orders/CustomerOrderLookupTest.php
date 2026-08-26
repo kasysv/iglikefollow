@@ -1577,6 +1577,33 @@ class CustomerOrderLookupTest extends TestCase
     }
 
     /**
+     * ⛔ 送出按鈕必須有實際底色，⛔ 不得是看不見的白字。
+     *
+     * 本站主題沒有定義 `--color-black`，而 Tailwind 的 `.bg-black` 編出來是
+     * `background-color: var(--color-black)`——變數不存在時背景等於沒有，
+     * 只剩 `text-white` 的白字落在淺色底上，整顆按鈕在畫面上消失。
+     *
+     * ⛔ 實心按鈕一律用 `bg-ink`（站上其他 CTA 都是）。
+     * ⛔ `bg-black/5` 這類帶透明度的寫法不受影響，因此只檢查實心底色。
+     */
+    public function test_the_submit_button_has_a_visible_background(): void
+    {
+        $html = (string) $this->get('/order-check')->assertOk()->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '/<button type="submit"[^>]*class="[^"]*\bbg-ink\b[^"]*"/u',
+            $html,
+            '⛔ 送出按鈕必須用 bg-ink。',
+        );
+
+        $this->assertDoesNotMatchRegularExpression(
+            '/<button type="submit"[^>]*class="[^"]*\bbg-black\b[^"]*"/u',
+            $html,
+            '⛔ bg-black 在本站主題下沒有底色，白字會整個看不見。',
+        );
+    }
+
+    /**
      * ⭐ Owner 指定的處理說明句，顯示在**每張卡片內的最底**。
      *
      * ⛔ 只在有結果時出現。查無時說「訂單已自動安排處理」是矛盾的——
