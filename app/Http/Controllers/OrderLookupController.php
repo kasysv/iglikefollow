@@ -13,7 +13,15 @@ use Illuminate\Http\Response;
  *
  * ⭐ Owner 規則：訂單編號、Email、手機**任選兩項**。三項都填時三項都要相符。
  *
- * ⛔ POST only，結果**直接 render**，⛔ 不 redirect。
+ * ⭐ 獨立工具頁 `/order-check`：`GET` 顯示空表單，`POST` 在**同一個 URL**
+ * 直接 render 結果。
+ *
+ * ⛔ 類別名稱保留 `OrderLookupController`。URL 換了，但這個類別做的事沒變，
+ * 而它與 `FindOrdersForCustomer`／`PublicOrderPresenter`／HMAC domain 的
+ * `order-lookup` 命名一致——為了跟 URL 對齊而連鎖改名，只會讓那個**不可改動**
+ * 的密碼學 domain 常數看起來像是漏改的。
+ *
+ * ⛔ 結果**直接 render**，⛔ 不 redirect。
  *
  * redirect 會把查詢條件推進 URL 或 session flash——Email 與手機一旦進了 URL，
  * 就會留在瀏覽器歷史、referrer header 與沿途每一個 proxy log 裡。這是本輪
@@ -24,7 +32,29 @@ use Illuminate\Http\Response;
  */
 class OrderLookupController extends Controller
 {
-    public function __invoke(Request $request, FindOrdersForCustomer $finder): Response
+    /**
+     * The empty form.
+     *
+     * ⭐ Owner 指定的獨立工具頁 `/order-check`。
+     *
+     * ⛔ GET 也必須 noindex。這一頁本身沒有客人資料，但它是一個「輸入 Email
+     * 與手機」的入口——讓它進搜尋結果只會讓人以為那是官方帳號查詢頁而被釣魚
+     * 模仿，對本站也沒有任何流量價值。route 的 `NeverIndex` middleware 與這裡
+     * 的 header 兩層都設。
+     */
+    public function show(): Response
+    {
+        return response()
+            ->view('storefront.order-check', [
+                'results' => [],
+                // ⛔ 初次進站不是「查無」——那會讓還沒查的人以為自己查過了。
+                'notFound' => false,
+                'submitted' => false,
+            ])
+            ->header('X-Robots-Tag', 'noindex, nofollow');
+    }
+
+    public function lookup(Request $request, FindOrdersForCustomer $finder): Response
     {
         /*
          * ⛔ 基本形狀驗證只用來擋明顯無效的輸入,⛔ 不回報「哪一項錯」。
@@ -54,13 +84,14 @@ class OrderLookupController extends Controller
         $results = $orders->map(fn (Order $order): array => PublicOrderPresenter::for($order))->all();
 
         return response()
-            ->view('storefront.order-lookup', [
+            ->view('storefront.order-check', [
                 'results' => $results,
                 /*
                  * ⛔ 通用訊息:查無、條件不符、少於兩項——全部同一句。
                  * 分開的訊息可以被用來逐一確認某個 Email 是否存在。
                  */
                 'notFound' => $results === [],
+                'submitted' => true,
             ])
             /*
              * ⛔ 這一頁永遠不得被索引,也不得被任何快取層保存。

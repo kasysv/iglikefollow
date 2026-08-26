@@ -80,7 +80,7 @@ class CustomerOrderLookupTest extends TestCase
 
     private function lookup(array $payload)
     {
-        return $this->post('/order-lookup', $payload);
+        return $this->post('/order-check', $payload);
     }
 
     // ==================================== 1. 三種二項組合
@@ -805,10 +805,61 @@ class CustomerOrderLookupTest extends TestCase
 
     // ==================================== 6. Route／header／CSRF
 
-    /** ⛔ 只接受 POST：GET 會把條件放進 URL。 */
-    public function test_the_lookup_route_rejects_get(): void
+    /**
+     * ⭐ 獨立工具頁：`GET /order-check` 顯示空表單。
+     *
+     * ⛔ 這不是把查詢條件改成 GET——查詢仍然只走 POST（見下一條）。
+     * GET 只回一張空表單，⛔ 不接受也不處理任何 query string 條件。
+     */
+    public function test_the_order_check_page_shows_an_empty_form_on_get(): void
     {
-        $this->get('/order-lookup')->assertStatus(405);
+        $order = $this->orderFor();
+
+        $response = $this->get('/order-check');
+
+        $response->assertOk();
+        $response->assertSee('訂單查詢');
+        $response->assertSee('輸入訂單編號、Email、手機號碼其中兩項，即可查看目前處理進度。');
+        // 表單存在於初始 HTML。
+        $response->assertSee('name="reference"', false);
+        $response->assertSee('name="email"', false);
+        $response->assertSee('name="phone"', false);
+
+        // ⛔ 還沒查就不該出現「查無」或任何結果。
+        $response->assertDontSee('查不到符合的訂單');
+        $response->assertDontSee($order->reference, false);
+    }
+
+    /**
+     * ⛔ GET 帶 query string 不得變成一次查詢。
+     *
+     * ⛔ 若 GET 也會查，Email 與手機就會進 URL、瀏覽器歷史與 referrer——
+     * 那正是這一頁刻意用 POST 的原因。
+     */
+    public function test_get_with_query_string_never_performs_a_lookup(): void
+    {
+        $order = $this->orderFor();
+
+        $response = $this->get('/order-check?reference='.$order->reference.'&email='.self::EMAIL);
+
+        $response->assertOk();
+        $response->assertDontSee($order->reference, false);
+        $response->assertDontSee('查詢結果');
+    }
+
+    /** ⛔ 舊的 `/order-lookup` 直接 404，⛔ 不做 301／302。 */
+    public function test_the_old_lookup_path_is_gone(): void
+    {
+        $this->get('/order-lookup')->assertNotFound();
+        $this->post('/order-lookup', ['reference' => 'IGL-ABCDEFGHIJKL'])->assertNotFound();
+    }
+
+    /** ⛔ route list 不得再有舊的公開 path。 */
+    public function test_no_route_serves_the_old_public_path(): void
+    {
+        $uris = collect(app('router')->getRoutes())->map(fn ($r) => $r->uri())->all();
+
+        $this->assertNotContains('order-lookup', $uris);
     }
 
     public function test_the_result_page_is_never_indexable_or_cacheable(): void
@@ -844,11 +895,12 @@ class CustomerOrderLookupTest extends TestCase
     public function test_the_lookup_route_enforces_csrf_throttle_and_noindex(): void
     {
         $route = collect(app('router')->getRoutes())
-            ->first(fn ($r) => $r->uri() === 'order-lookup');
+            ->first(fn ($r) => $r->uri() === 'order-check'
+                && in_array('POST', $r->methods(), true));
 
-        $this->assertNotNull($route, '找不到 order-lookup route');
+        $this->assertNotNull($route, '找不到 order-check 的 POST route');
 
-        // ⛔ POST only。
+        // ⛔ 查詢本身仍然 POST only。
         $this->assertSame(['POST'], array_values(array_diff($route->methods(), ['HEAD'])));
 
         $middleware = $route->gatherMiddleware();
@@ -1285,10 +1337,15 @@ class CustomerOrderLookupTest extends TestCase
         $this->assertStringContainsString('grid-cols-2', $html);
     }
 
-    // ==================================== 9. 首頁 SEO 不變
+    // ==================================== 9. 首頁移除查詢區塊，SEO 不變
 
-    /** ⛔ 查詢區塊必須在**初始 HTML**，且首頁既有 SEO 元素不變。 */
-    public function test_the_home_page_keeps_its_seo_and_gains_the_lookup_section(): void
+    /**
+     * ⭐ Owner 指定：首頁不再放訂單查詢表單。
+     *
+     * ⛔ 這條測試現在斷言的方向與前一輪**相反**——前一輪要求表單必須在首頁
+     * 初始 HTML，本輪要求完整移除。這是 Owner 的產品決定改變，不是回歸。
+     */
+    public function test_the_home_page_no_longer_contains_the_lookup_form(): void
     {
         $response = $this->get('/');
 
@@ -1296,15 +1353,123 @@ class CustomerOrderLookupTest extends TestCase
 
         $html = (string) $response->getContent();
 
-        // 新區塊存在於初始 HTML（不是 JS 產生）。
-        $this->assertStringContainsString('id="order-lookup"', $html);
-        $this->assertStringContainsString('訂單查詢', $html);
-        $this->assertStringContainsString(route('order-lookup'), $html);
+        // ⛔ 舊區塊、舊 action 與表單欄位都必須消失。
+        $this->assertStringNotContainsString('id="order-lookup"', $html);
+        $this->assertStringNotContainsString('order-lookup', $html);
+        $this->assertStringNotContainsString('name="reference"', $html);
+        $this->assertStringNotContainsString('查詢訂單', $html);
 
         // ⛔ 首頁仍只有一個 H1。
         $this->assertSame(1, substr_count($html, '<h1'), '⛔ 首頁必須維持單一 H1。');
+    }
 
-        // ⛔ 查詢區塊用 H2，不搶 H1。
-        $this->assertMatchesRegularExpression('/<h2[^>]*>訂單查詢<\/h2>/u', $html);
+    /**
+     * ⭐ 入口改由 header 提供，且必須是**真實連結**。
+     *
+     * ⛔ 不得是 JS-only navigation：這一頁雖然 noindex，客人仍可能收藏它，
+     * 也可能在沒有 JS 的環境開啟。
+     */
+    public function test_the_header_links_to_the_dedicated_page(): void
+    {
+        $html = (string) $this->get('/')->assertOk()->getContent();
+
+        // 真實 href 存在於初始 HTML。
+        $this->assertStringContainsString('href="'.route('order-check').'"', $html);
+
+        // 桌面完整文字與手機短文字都在（同一份 HTML，靠 CSS 切換）。
+        $this->assertStringContainsString('訂單查詢', $html);
+        $this->assertStringContainsString('查訂單', $html);
+
+        // ⛔ 既有導覽入口不得被擠掉。
+        $this->assertStringContainsString('常見問題', $html);
+        $this->assertStringContainsString('選擇服務', $html);
+    }
+
+    /** ⛔ 手機 header 的四個元素都必須存在且不換行。 */
+    public function test_the_mobile_header_keeps_every_destination(): void
+    {
+        $html = (string) $this->get('/')->assertOk()->getContent();
+
+        foreach (['nav-faq', 'nav-order-check', 'nav-cta'] as $probe) {
+            $this->assertStringContainsString('data-probe="'.$probe.'"', $html);
+        }
+
+        // ⛔ 不得換行：換行會把 header 撐高並破壞對齊。
+        $this->assertStringContainsString('whitespace-nowrap', $html);
+    }
+
+    /**
+     * ⛔ 手機 header 現在有四個元素，最窄斷點必須另外收縮。
+     *
+     * ⛔ 這是**結構**檢查：確認 <400px 的收縮 class 存在，且既有的 44px 觸控
+     * 高度與不換行沒有被犧牲掉。⛔ 它不是視覺驗收——實機 320／390px 仍標記
+     * NOT VERIFIED。
+     */
+    public function test_the_narrowest_breakpoint_tightens_the_header(): void
+    {
+        $layout = (string) file_get_contents(resource_path('views/layouts/app.blade.php'));
+
+        // wordmark 在 <400px 再收一階。
+        $this->assertStringContainsString('w-24 max-w-full min-[400px]:w-32 sm:w-52', $layout);
+
+        // 外框 padding／間距同樣分階。
+        $this->assertStringContainsString('min-[400px]:px-4', $layout);
+
+        // ⛔ 觸控高度與不換行不得因為擠空間而被犧牲。
+        $this->assertSame(3, substr_count($layout, 'min-h-11 items-center whitespace-nowrap'));
+
+        // ⛔ 不得改成 JS-only。
+        $this->assertStringNotContainsString('onclick', $layout);
+    }
+
+    /** 工具頁本身：單一 H1、指定文案、noindex。 */
+    public function test_the_dedicated_page_has_the_specified_copy_and_is_noindex(): void
+    {
+        $response = $this->get('/order-check');
+
+        $response->assertOk();
+
+        $html = (string) $response->getContent();
+
+        $this->assertSame(1, substr_count($html, '<h1'), '⛔ 必須維持單一 H1。');
+        $this->assertMatchesRegularExpression('/<h1[^>]*>\s*訂單查詢\s*<\/h1>/u', $html);
+        $this->assertStringContainsString('訂單查詢｜IGLIKEFOLLOW', $html);
+
+        // GET 也必須 noindex（header ＋ meta 兩層）。
+        $robots = (string) $response->headers->get('X-Robots-Tag');
+        $this->assertStringContainsString('noindex', $robots);
+        $this->assertStringContainsString('nofollow', $robots);
+        $response->assertSee('noindex, nofollow', false);
+    }
+
+    /**
+     * ⛔ 這一頁的 noindex 不得只依賴全站的 `AddRobotsHeader`。
+     *
+     * ⛔ 為什麼需要這條看起來像重複實作的測試：測試環境 `ALLOW_INDEXING`
+     * 是關的，於是**全站** middleware 已經替每一頁設好 `X-Robots-Tag`。
+     * 那讓「這一頁自己的 noindex」在行為上完全觀測不到——我實際做過突變測試，
+     * 把 route 的 `NeverIndex` 與 controller 的 header 兩層同時拿掉，測試
+     * 仍然全綠。
+     *
+     * ⛔ 但正式站一旦開放索引（`ALLOW_INDEXING=true`），全站那層就會停止
+     * 輸出 noindex；屆時只剩這一頁自己的兩層擋著。⛔ 這一頁是「輸入 Email
+     * 與手機」的入口，絕不能因為站台開放索引就跟著被收錄。
+     *
+     * 因此直接釘住 route 上的 `NeverIndex`，⛔ 不依賴環境相依的行為觀測。
+     */
+    public function test_the_page_carries_its_own_noindex_independent_of_the_site_wide_default(): void
+    {
+        $routes = collect(app('router')->getRoutes())
+            ->filter(fn ($r) => $r->uri() === 'order-check');
+
+        $this->assertCount(2, $routes, '⛔ 應有 GET 與 POST 兩條。');
+
+        foreach ($routes as $route) {
+            $this->assertContains(
+                NeverIndex::class,
+                $route->gatherMiddleware(),
+                '⛔ GET 與 POST 都必須自帶 NeverIndex，不得只靠全站預設。',
+            );
+        }
     }
 }

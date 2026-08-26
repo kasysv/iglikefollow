@@ -29,9 +29,34 @@ Route::get('/faq', [StorefrontController::class, 'faq'])->name('faq');
  * ⛔ 嚴格 throttle：兩項門檻擋得住隨機猜測，但擋不住有人拿一份 Email 名單
  * 慢慢試。10 次／分鐘讓那件事變得不划算。
  */
-Route::post('/order-lookup', OrderLookupController::class)
+/*
+ * ⭐ Owner 指定：獨立工具頁 `/order-check`（取代首頁的內嵌區塊）。
+ *
+ * ⛔ 舊的 `/order-lookup` **直接移除**，⛔ 不做 301／302、alias 或 canonical。
+ * 它從未 push／deploy，外面沒有任何連結指向它——為一個從未公開過的路徑建立
+ * 轉址，只會憑空增加一條要永久維護的 URL。
+ *
+ * ⛔⛔ 但 HMAC domain 字串裡的 `order-lookup` 是**內部密碼學 domain**，
+ * 不是公開 URL：改動它會讓既有的所有 lookup hash 全部失效，客人再也查不到
+ * 自己的訂單。⛔ 不得因為這次改 URL 而順手改那個常數。
+ */
+Route::get('/order-check', [OrderLookupController::class, 'show'])
+    ->middleware(NeverIndex::class)
+    ->name('order-check');
+
+/*
+ * ⛔ 結果仍在**同一個 URL** 直接 render，⛔ 不 redirect。
+ *
+ * redirect 會把查詢條件推進 URL 或 session flash——Email 與手機一旦進了 URL，
+ * 就會留在瀏覽器歷史、referrer header 與沿途每一個 proxy log 裡。
+ *
+ * ⛔ 嚴格 throttle 只掛在 POST：兩項門檻擋得住隨機猜測，但擋不住有人拿一份
+ * Email 名單慢慢試。10 次／分鐘讓那件事變得不划算。GET 只是表單，不需要
+ * 同一個限制。
+ */
+Route::post('/order-check', [OrderLookupController::class, 'lookup'])
     ->middleware(['throttle:10,1', NeverIndex::class])
-    ->name('order-lookup');
+    ->name('order-check.lookup');
 
 Route::get('/services/{platform}', [StorefrontController::class, 'platform'])
     ->name('platform');

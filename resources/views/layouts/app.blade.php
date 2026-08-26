@@ -25,7 +25,8 @@
             「常見問題」;改為 <640px 收起方形 mark、wordmark 降到 w-32,
             並縮小 gap／padding。⛔ 不刪任何連結、不刪 alt、不改成 JS-only。
         --}}
-        <div class="mx-auto flex min-h-20 max-w-[1220px] items-center justify-between gap-3 px-4 sm:gap-6 sm:px-8">
+        {{-- ⛔ <400px 外框 padding 與品牌／導覽間距各收一階,爭取水平空間。 --}}
+        <div class="mx-auto flex min-h-20 max-w-[1220px] items-center justify-between gap-1.5 px-2.5 min-[400px]:gap-3 min-[400px]:px-4 sm:gap-6 sm:px-8">
             {{-- Logo 是圖片，公司名稱仍須以可存取名稱保留，⛔ 不可只剩一張沒有名字的圖。 --}}
             <a href="{{ route('home') }}" aria-label="{{ $siteName }} 首頁"
                data-probe="brand" class="flex min-w-0 shrink items-center gap-2 sm:gap-3">
@@ -33,10 +34,20 @@
                      ⛔ 手機空間不足時先讓它退場,保留帶 alt 的 wordmark。 --}}
                 <img src="{{ asset('images/iglikefollow-mark.png') }}" alt=""
                      class="hidden h-11 w-11 shrink-0 rounded-xl sm:block sm:h-12 sm:w-12" width="361" height="361">
+                {{--
+                    ⛔ <400px 再收一階到 w-24。
+
+                    這一列現在有四個元素;既有註解已經記錄過 wordmark 溢出壓到
+                    「常見問題」的教訓,新增「查訂單」之後 320px 會再次不夠。
+                    ⛔ 解法是縮 logo,不是刪連結——⛔ 品牌 alt 仍完整保留。
+                --}}
                 <img src="{{ asset('images/iglikefollow-logo.png') }}" alt="{{ $siteName }}"
-                     class="h-auto w-32 max-w-full sm:w-52" width="715" height="143">
+                     class="h-auto w-24 max-w-full min-[400px]:w-32 sm:w-52" width="715" height="143">
             </a>
-            @php $onFaq = request()->routeIs('faq'); @endphp
+            @php
+                $onFaq = request()->routeIs('faq');
+                $onOrderCheck = request()->routeIs('order-check*');
+            @endphp
             <nav aria-label="主要導覽" class="hidden items-center gap-7 text-sm font-semibold md:flex">
                 @foreach ($navPlatforms as $navPlatform)
                     <a href="{{ route('platform', $navPlatform->slug) }}" class="hover:opacity-60">{{ $navPlatform->name }}</a>
@@ -45,17 +56,41 @@
                 <a href="{{ route('faq') }}"
                    @if ($onFaq) aria-current="page" @endif
                    class="hover:opacity-60 {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
+                {{--
+                    ⭐ Owner 指定的訂單查詢入口。桌面用完整文字「訂單查詢」。
+
+                    ⛔ 真實 `<a href>`，⛔ 不是 JS-only navigation——這一頁雖然
+                    noindex，但客人可能會收藏它，也可能在沒有 JS 的環境開啟。
+                --}}
+                <a href="{{ route('order-check') }}"
+                   @if ($onOrderCheck) aria-current="page" @endif
+                   data-probe="nav-order-check"
+                   class="hover:opacity-60 {{ $onOrderCheck ? 'underline underline-offset-4' : '' }}">訂單查詢</a>
                 <a href="{{ route('home') }}#platforms" class="rounded-full bg-ink px-5 py-3 text-white">選擇服務</a>
             </nav>
-            {{-- Mobile:同一組目的地;min-h-11(44px)符合 tap target,⛔ 文字不換行。 --}}
-            <div class="flex shrink-0 items-center gap-1.5 md:hidden">
+            {{--
+                Mobile:同一組目的地;min-h-11(44px)符合 tap target,⛔ 文字不換行。
+
+                ⛔ 這一列現在有**四**個元素(品牌／常見問題／查訂單／選擇服務)。
+                既有註解記錄過 390px 曾經溢出的教訓,因此:
+
+                 - 訂單查詢在手機用較短的「查訂單」(Owner 已批准的替代文字);
+                 - gap 與水平 padding 再收一階,<640px 更緊;
+                 - ⛔ 仍然不刪任何連結、不改成 JS-only、不讓文字換行。
+            --}}
+            <div class="flex shrink-0 items-center gap-0.5 sm:gap-1.5 md:hidden">
                 <a href="{{ route('faq') }}"
                    @if ($onFaq) aria-current="page" @endif
                    data-probe="nav-faq"
-                   class="flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm font-semibold {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
+                   class="flex min-h-11 items-center whitespace-nowrap px-1 text-sm font-semibold sm:px-1.5 {{ $onFaq ? 'underline underline-offset-4' : '' }}">常見問題</a>
+                <a href="{{ route('order-check') }}"
+                   @if ($onOrderCheck) aria-current="page" @endif
+                   data-probe="nav-order-check"
+                   class="flex min-h-11 items-center whitespace-nowrap px-1 text-sm font-semibold sm:px-1.5 {{ $onOrderCheck ? 'underline underline-offset-4' : '' }}">查訂單</a>
+                {{-- ⛔ CTA 的圓角 padding 在最窄處也收一階,維持 44px 觸控高度。 --}}
                 <a href="{{ route('home') }}#platforms"
                    data-probe="nav-cta"
-                   class="flex min-h-11 items-center whitespace-nowrap rounded-full bg-ink px-3.5 text-sm font-bold text-white">選擇服務</a>
+                   class="flex min-h-11 items-center whitespace-nowrap rounded-full bg-ink px-2.5 text-sm font-bold text-white min-[400px]:px-3 sm:px-3.5">選擇服務</a>
             </div>
         </div>
     </header>

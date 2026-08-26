@@ -300,25 +300,45 @@ class M2dStorefrontVisualHierarchyTest extends TestCase
     {
         $html = $this->get('/')->assertOk()->getContent();
 
-        // 三個必要元素都有 probe hook,且都是真實連結。
+        // 四個必要元素都有 probe hook,且都是真實連結。
+        // ⭐ `nav-order-check` 是 Owner 本輪新增的獨立訂單查詢入口。
         $this->assertStringContainsString('data-probe="brand"', $html);
         $this->assertStringContainsString('data-probe="nav-faq"', $html);
+        $this->assertStringContainsString('data-probe="nav-order-check"', $html);
         $this->assertStringContainsString('data-probe="nav-cta"', $html);
         $this->assertStringContainsString('href="'.route('faq').'"', $html);
+        $this->assertStringContainsString('href="'.route('order-check').'"', $html);
         $this->assertStringContainsString('#platforms', $html);
 
         // ⛔ 品牌名稱仍以 alt 提供,不得只剩沒有名字的圖。
         $this->assertMatchesRegularExpression('/<img[^>]*iglikefollow-logo\.png[^>]*alt="IGLIKEFOLLOW"/u', $html);
 
-        // 手機 wordmark 縮到 w-32,桌機仍是 w-52(⛔ 原本 w-40 會溢出並壓到「常見問題」)。
+        /*
+         * 手機 wordmark 縮到 w-32,桌機仍是 w-52
+         * (⛔ 原本 w-40 會溢出並壓到「常見問題」)。
+         *
+         * ⭐ 本輪新增「查訂單」後,<400px 再收一階到 w-24——⛔ 縮 logo,
+         * 不刪連結;品牌 alt 仍完整保留(見上面的 regex)。
+         */
         $layout = (string) file_get_contents(resource_path('views/layouts/app.blade.php'));
-        $this->assertStringContainsString('w-32 max-w-full sm:w-52', $layout);
+        $this->assertStringContainsString('w-24 max-w-full min-[400px]:w-32 sm:w-52', $layout);
 
         // 方形 mark 在 <640px 收起,sm 以上才出現。
         $this->assertStringContainsString('hidden h-11 w-11 shrink-0 rounded-xl sm:block', $layout);
 
-        // 兩個 mobile 連結維持 44px 觸控高度且不換行。
-        $this->assertSame(2, substr_count($layout, 'min-h-11 items-center whitespace-nowrap'));
+        /*
+         * ⭐ 三個 mobile 連結都必須維持 44px 觸控高度且不換行。
+         *
+         * ⛔ 這個數字從 2 改成 3，是因為 Owner 本輪新增了「查訂單」入口——
+         * ⛔ 不是把原本的保證放寬。每一個連結仍然逐一受同一條規則約束。
+         *
+         * ⛔ 手機用較短的「查訂單」而非「訂單查詢」：這一列在 390px 已經很緊，
+         * 既有註解記錄過 wordmark 溢出壓到「常見問題」的教訓。
+         */
+        $this->assertSame(3, substr_count($layout, 'min-h-11 items-center whitespace-nowrap'));
+
+        // ⛔ 手機用短文字,桌面才用完整「訂單查詢」。
+        $this->assertStringContainsString('>查訂單</a>', $layout);
 
         // ⛔ 不得改成 JS-only。
         $this->assertStringNotContainsString('onclick', $layout);
