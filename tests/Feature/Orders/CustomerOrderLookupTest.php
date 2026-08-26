@@ -355,6 +355,15 @@ class CustomerOrderLookupTest extends TestCase
             'malformed phone' => [['phone' => 'not-a-phone']],
             'array phone' => [['phone' => ['0912345678']]],
             'array email' => [['email' => ['buyer@example.test']]],
+
+            // ⭐ R2：通過 checkout 邊界檢查的非法第三欄同樣必須 no-match。
+            'invalid international phone' => [['phone' => '+01234567']],
+            'zero prefixed international' => [['phone' => '0001234567']],
+            'over long phone' => [['phone' => '090012345678901234567']],
+            'too short phone' => [['phone' => '09123']],
+            'illegal phone character' => [['phone' => '09*2345678']],
+            'invalid email' => [['email' => 'not-an-email']],
+            'over long email' => [['email' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sub.example-domain.test']],
         ];
     }
 
@@ -423,6 +432,170 @@ class CustomerOrderLookupTest extends TestCase
             'reference' => $reference,
             'email' => self::EMAIL,
         ])->assertOk()->assertDontSee($order->reference);
+    }
+
+    // ==================================== 2c. R2：checkout 輸入邊界
+
+    /**
+     * ⛔⭐ R2 的核心反證：無效的**明確國際格式**不得降級成 `RAW:`。
+     *
+     * ⛔ R1 的 bug：`+01234567` 形狀不合格後掉進最後的 `RAW:` 分支，變成
+     * `RAW:01234567`——而本地輸入 `01234567` 也是 `RAW:01234567`。兩者 hash
+     * 相同，於是一個**無效**的國際號碼會撞上一個**有效**的本地號碼。
+     *
+     * ⛔ 這不只是「多接受了一個爛輸入」：它讓兩串語意不同的號碼變成同一個
+     * 查詢鍵，也就是讓甲有機會查到乙的訂單。
+     */
+    public function test_an_invalid_international_prefix_does_not_collide_with_a_local_number(): void
+    {
+        $this->assertNull(
+            ContactLookupHash::normalizePhone('+01234567'),
+            '⛔ 明確國際前綴 ＋ 不合格形狀必須是 null，不得降級。',
+        );
+
+        $this->assertNotSame(
+            ContactLookupHash::normalizePhone('01234567'),
+            ContactLookupHash::normalizePhone('+01234567'),
+        );
+
+        // hash 層同樣不得相等（其中一邊為 null）。
+        $this->assertNull(ContactLookupHash::forPhone('+01234567'));
+        $this->assertNotNull(ContactLookupHash::forPhone('01234567'));
+    }
+
+    /**
+     * ⛔ 帶明確國際前綴但無效者一律 null，⛔ 不得掉進 `RAW:`。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function invalidExplicitInternationalProvider(): array
+    {
+        return [
+            'plus zero' => ['+01234567'],
+            'double zero then zero' => ['0001234567'],
+            'plus too short' => ['+123456'],
+            'plus too long' => ['+1234567890123456'],
+            'double zero too short' => ['00123456'],
+        ];
+    }
+
+    #[DataProvider('invalidExplicitInternationalProvider')]
+    public function test_an_invalid_explicit_international_number_is_rejected(string $typed): void
+    {
+        $normalized = ContactLookupHash::normalizePhone($typed);
+
+        $this->assertNull($normalized, '⛔ 無效的明確國際號碼必須是 null。');
+    }
+
+    /**
+     * ⛔ 手機必須符合 checkout 的字元與長度邊界（6–20、僅 `0-9 + - ( ) 空白`）。
+     *
+     * ⭐ 邊界必須與 `CheckoutRequest` 一致：下單時存不進去的值，查詢時就不該
+     * 被當成有效輸入。查詢比下單寬鬆等於開了一條下單擋得住、查詢擋不住的路。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function outOfBoundsPhoneProvider(): array
+    {
+        return [
+            'five characters' => ['09123'],
+            'twenty one digits' => ['090012345678901234567'],
+            'twenty one characters' => ['((((((0912345678)))))'],
+            'asterisk' => ['09*2345678'],
+            'letters' => ['0912ABC678'],
+            'tab is not allowed' => ["0912\t345678"],
+        ];
+    }
+
+    #[DataProvider('outOfBoundsPhoneProvider')]
+    public function test_a_phone_outside_the_checkout_boundary_is_rejected(string $typed): void
+    {
+        $this->assertNull(ContactLookupHash::normalizePhone($typed));
+    }
+
+    /** ⛔ 6 與 20 是**包含**邊界，21 才拒絕。 */
+    public function test_the_phone_length_boundary_is_inclusive(): void
+    {
+        $this->assertNotNull(ContactLookupHash::normalizePhone('091234'));       // 6
+        $this->assertNotNull(ContactLookupHash::normalizePhone('(((((0912345678)))))')); // 20
+        $this->assertNull(ContactLookupHash::normalizePhone('09123'));           // 5
+        $this->assertNull(ContactLookupHash::normalizePhone('((((((0912345678)))))')); // 21
+    }
+
+    /**
+     * ⛔ Email 必須符合 checkout 的 `email` 語意與 `max:80`。
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function invalidEmailProvider(): array
+    {
+        return [
+            'no at sign' => ['not-an-email'],
+            'no domain' => ['buyer@'],
+            'no local part' => ['@example.test'],
+            'space inside' => ['buy er@example.test'],
+            'eighty one characters' => ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sub.example-domain.test'],
+        ];
+    }
+
+    #[DataProvider('invalidEmailProvider')]
+    public function test_an_invalid_email_is_rejected(string $typed): void
+    {
+        $this->assertNull(ContactLookupHash::normalizeEmail($typed));
+        $this->assertNull(ContactLookupHash::forEmail($typed));
+    }
+
+    /** ⛔ 80 字元剛好可以，81 才拒絕。 */
+    public function test_the_email_length_boundary_is_inclusive(): void
+    {
+        $domain = '@sub.example-domain.test'; // 24 字元
+
+        $eighty = str_repeat('a', 80 - strlen($domain)).$domain;
+        $eightyOne = str_repeat('a', 81 - strlen($domain)).$domain;
+
+        $this->assertSame(80, strlen($eighty));
+        $this->assertNotNull(ContactLookupHash::normalizeEmail($eighty));
+        $this->assertNull(ContactLookupHash::normalizeEmail($eightyOne));
+    }
+
+    /**
+     * ⛔ R1 的正面案例不得回歸。
+     *
+     * ⭐ 這一條存在的理由：R2 收緊了驗證，最容易犯的錯就是收過頭，把 Owner
+     * 明確要求要等價的三種台灣寫法或合法國際號碼也一起擋掉。
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function stillValidPhoneProvider(): array
+    {
+        return [
+            'tw local' => ['0912345678', 'TW:0912345678'],
+            'tw plus 886' => ['+886912345678', 'TW:0912345678'],
+            'tw zero zero 886' => ['00886912345678', 'TW:0912345678'],
+            'tw with dashes' => ['0912-345-678', 'TW:0912345678'],
+            'us plus' => ['+14155552671', 'INT:+14155552671'],
+            'us zero zero' => ['0014155552671', 'INT:+14155552671'],
+            'bare 886 stays raw' => ['886912345678', 'RAW:886912345678'],
+            'local landline stays raw' => ['021234567', 'RAW:021234567'],
+        ];
+    }
+
+    #[DataProvider('stillValidPhoneProvider')]
+    public function test_valid_numbers_still_normalize_as_before(string $typed, string $expected): void
+    {
+        $this->assertSame($expected, ContactLookupHash::normalizePhone($typed));
+    }
+
+    /** ⛔ 收緊驗證後，端對端查詢仍必須查得到。 */
+    public function test_the_lookup_still_finds_an_order_after_the_tightened_validation(): void
+    {
+        $order = $this->orderFor();
+
+        foreach (['0912345678', '+886912345678', '00886912345678'] as $typed) {
+            $this->lookup(['email' => self::EMAIL, 'phone' => $typed])
+                ->assertOk()
+                ->assertSee($order->reference, false);
+        }
     }
 
     // ==================================== 3. 多訂單／多商品

@@ -49,8 +49,20 @@
         </ol>
     </nav>
 
-    {{-- Hero：非對稱雙欄，右側為自建 CSS/SVG 抽象元素 --}}
-    <section class="mx-auto max-w-[1320px] px-5 py-10 sm:px-8 lg:grid lg:grid-cols-[1.15fr_0.85fr] lg:items-center lg:gap-14 lg:py-14">
+    {{--
+        Hero：有真實圖片才用非對稱雙欄；沒有就是單欄。
+
+        ⭐ R2（Owner 指定）：沒有真實 `hero_image_path` 時的右側抽象 SVG 假圖
+        已**完整刪除**，⛔ 不是 CSS 隱藏、⛔ 也不換另一張 placeholder。
+
+        ⛔ 雙欄 class 必須跟著條件走。只刪 SVG 而留下 `lg:grid-cols-[…]`，
+        桌面會空出一個 0.85fr 的死欄位，文字被擠在左半邊——那是「假圖沒了但
+        版面壞了」，不是 Owner 要的結果。
+    --}}
+    <section @class([
+        'mx-auto max-w-[1320px] px-5 py-10 sm:px-8 lg:py-14',
+        'lg:grid lg:grid-cols-[1.15fr_0.85fr] lg:items-center lg:gap-14' => (bool) $platform->hero_image_path,
+    ])>
         <div>
             {{-- M2-D-A:Hero 只放一次 28px 裝飾性 Logo,⛔ 不在每張服務卡重複。 --}}
             <p class="flex items-center gap-2">
@@ -60,14 +72,28 @@
             <h1 class="mt-4 text-[clamp(2.1rem,3.6vw,3.4rem)] font-bold leading-[1.08] tracking-[-0.045em]">
                 {{ $platform->h1 ?: $platform->name . ' 社群成長服務' }}
             </h1>
-            <p class="mt-5 max-w-xl text-base leading-8 text-black/70 sm:text-lg">
+            {{--
+                ⭐ 無圖時放寬到 `max-w-3xl`（約 65–75 字元），⛔ 不是放到整列寬。
+
+                單欄之後若沿用 `max-w-xl`，文字會縮在整列的左三分之一，看起來
+                像右邊還有東西沒載入；但放到滿版又會讓行寬超過可讀範圍。
+            --}}
+            <p @class([
+                'mt-5 text-base leading-8 text-black/70 sm:text-lg',
+                'max-w-xl' => (bool) $platform->hero_image_path,
+                'max-w-3xl' => ! $platform->hero_image_path,
+            ])>
                 {{ $platform->tagline }}
             </p>
 
             {{-- 「詳細介紹」屬於平台頁最上方的內容，接在一句話介紹之後。
                  ⛔ 原本只輸出在頁面最下方（約 79% 處），管理者填了會找不到。 --}}
             @if (filled($platform->intro))
-                <p class="mt-4 max-w-xl whitespace-pre-line text-base leading-8 text-black/70">
+                <p @class([
+                    'mt-4 whitespace-pre-line text-base leading-8 text-black/70',
+                    'max-w-xl' => (bool) $platform->hero_image_path,
+                    'max-w-3xl' => ! $platform->hero_image_path,
+                ])>
                     {{ $platform->intro }}
                 </p>
             @endif
@@ -87,31 +113,8 @@
                      alt="{{ $platform->hero_image_alt }}"
                      class="h-auto w-full rounded-[1.75rem]" loading="lazy">
             </div>
-        @else
-            {{-- 自建抽象視覺：純 SVG，不使用任何競品或平台官方素材 --}}
-            <div class="mt-10 lg:mt-0" aria-hidden="true">
-                <svg viewBox="0 0 420 300" class="h-auto w-full max-w-[460px]" role="presentation" focusable="false">
-                    <defs>
-                        <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stop-color="#10110f" stop-opacity="0.09"/>
-                            <stop offset="100%" stop-color="#165b45" stop-opacity="0.16"/>
-                        </linearGradient>
-                    </defs>
-                    <rect x="14" y="26" width="392" height="248" rx="28" fill="url(#g1)"/>
-                    <rect x="46" y="58" width="150" height="12" rx="6" fill="#10110f" opacity="0.30"/>
-                    <rect x="46" y="82" width="96" height="10" rx="5" fill="#10110f" opacity="0.16"/>
-                    <circle cx="322" cy="96" r="42" fill="none" stroke="#165b45" stroke-width="2.5" opacity="0.5"/>
-                    <circle cx="322" cy="96" r="26" fill="#165b45" opacity="0.14"/>
-                    <rect x="46" y="132" width="118" height="104" rx="18" fill="#ffffff" opacity="0.85"/>
-                    <rect x="176" y="132" width="118" height="104" rx="18" fill="#ffffff" opacity="0.6"/>
-                    <rect x="306" y="132" width="68" height="104" rx="18" fill="#ffffff" opacity="0.38"/>
-                    <rect x="62" y="152" width="60" height="9" rx="4.5" fill="#10110f" opacity="0.28"/>
-                    <rect x="62" y="170" width="82" height="9" rx="4.5" fill="#10110f" opacity="0.14"/>
-                    <path d="M62 214 L92 196 L118 206 L146 180" fill="none" stroke="#165b45" stroke-width="3"
-                          stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
-                </svg>
-            </div>
         @endif
+        {{-- ⛔ 沒有真實圖片時這裡不輸出任何東西——連空的容器都沒有。 --}}
     </section>
 
     @if ($isAvailable)

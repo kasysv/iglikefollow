@@ -39,6 +39,21 @@ final class ContactLookupHash
     private const PHONE_DOMAIN = 'iglikefollow.order-lookup.phone.v2';
 
     /**
+     * ⛔ 與 `CheckoutRequest` 完全一致的輸入邊界。
+     *
+     * `customer_email => ['required', 'email', 'max:80']`
+     * `customer_phone => ['nullable', 'string', 'max:20', 'regex:/^[0-9+\-() ]{6,20}$/']`
+     *
+     * ⭐ 兩邊必須一致：下單時**存不進去**的值，查詢時就不該被當成有效輸入。
+     * 查詢比下單寬鬆的話，等於開了一條下單流程擋得住、查詢流程擋不住的路。
+     */
+    private const EMAIL_MAX_LENGTH = 80;
+
+    private const PHONE_MIN_LENGTH = 6;
+
+    private const PHONE_MAX_LENGTH = 20;
+
+    /**
      * The lookup hash for an email address, or null when there is nothing to hash.
      *
      * ⛔ 正規化只做 trim ＋ 轉小寫：Email 的 local part 理論上區分大小寫，
@@ -66,7 +81,21 @@ final class ContactLookupHash
         return $normalized === null ? null : self::hash(self::PHONE_DOMAIN, $normalized);
     }
 
-    /** ⛔ trim ＋ 小寫；空字串視為沒有值。 */
+    /**
+     * ⛔ 與 checkout 相同的邊界：`email` 語意 ＋ 最長 80。
+     *
+     * ⭐ R2：加上 shape 與長度驗證。
+     *
+     * ⛔ 沒有這道驗證時，`not-an-email` 會被原樣算成 HMAC——一個絕不可能存在於
+     * `orders` 的值。它永遠查不到東西，所以看起來「沒壞」，但那是把不可能的輸入
+     * 一路帶到 DB 查詢才失敗，而不是在邊界擋掉。
+     *
+     * ⛔ 邊界必須與 `CheckoutRequest`（`email`、`max:80`）一致：下單時存不進去
+     * 的值，查詢時就不該被當成有效輸入。兩邊寬緊不同會讓「查得到什麼」與
+     * 「存得進什麼」出現落差。
+     *
+     * ⛔ 長度先於 `filter_var` 檢查：超長字串不必送進 validator。
+     */
     public static function normalizeEmail(?string $email): ?string
     {
         if (! is_string($email)) {
@@ -75,7 +104,16 @@ final class ContactLookupHash
 
         $email = mb_strtolower(trim($email));
 
-        return $email === '' ? null : $email;
+        if ($email === '' || mb_strlen($email) > self::EMAIL_MAX_LENGTH) {
+            return null;
+        }
+
+        // ⛔ 與 Laravel `email` rule 同樣採 `FILTER_VALIDATE_EMAIL`。
+        if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            return null;
+        }
+
+        return $email;
     }
 
     /**
@@ -107,8 +145,22 @@ final class ContactLookupHash
 
         $trimmed = trim($phone);
 
-        // ⛔ 與 CheckoutRequest 的 regex 允許集合一致：`+ - ( ) 空白`。
-        $digits = preg_replace('/[+\-() \t]/', '', $trimmed) ?? '';
+        /*
+         * ⭐ R2：先套用與 checkout 完全相同的輸入邊界，再談語意。
+         *
+         * ⛔ 字元集合只有數字與 `+ - ( ) 空白`——⛔ 不含 tab。R1 的
+         * `preg_replace` 多刪了 `\t`，比 checkout 寬；那代表存不進 DB 的值
+         * 在查詢端卻被接受。兩邊的允許集合必須逐字元相同。
+         *
+         * ⛔ 長度 6–20 以**原輸入**計算，與 checkout 的 regex 一致，
+         * ⛔ 不是移除格式字元後才算——否則 `(((((0912345678)))))` 這種
+         * 20 字以上的輸入會在查詢端通過、在下單端被拒。
+         */
+        if (preg_match('/\A[0-9+\-() ]{'.self::PHONE_MIN_LENGTH.','.self::PHONE_MAX_LENGTH.'}\z/', $trimmed) !== 1) {
+            return null;
+        }
+
+        $digits = preg_replace('/[+\-() ]/', '', $trimmed) ?? '';
 
         if ($digits === '' || preg_match('/\A[0-9]+\z/', $digits) !== 1) {
             return null;
@@ -147,22 +199,35 @@ final class ContactLookupHash
         }
 
         /*
-         * 其他明確國際號碼：`INT:+<digits>`。
+         * ⭐ R2 的關鍵修正：**明確國際前綴一旦出現，就只有兩種結局——
+         * 有效的 TW／INT，或 null。⛔ 絕不降級成 `RAW:`。**
          *
-         * ⛔ 長度限制 7–15 位（E.164 上限 15）；首碼非 0——國碼不會以 0 開頭，
-         * `+0…` 或 `000…` 代表這串數字不是我們認得的國際號碼。
+         * ⛔ R1 的 bug：`+01234567` 形狀不合格後掉到最後一行，變成
+         * `RAW:01234567`——而本地輸入 `01234567` 也是 `RAW:01234567`。
+         * 兩者 hash 相同，於是一個**無效**的國際號碼可以撞上一個**有效**的
+         * 本地號碼，讓甲查到乙的訂單。
+         *
+         * ⛔ 這正是降級的危險：使用者明確表示了「這是國際號碼」（打了 `+`
+         * 或 `00`），我們卻在看不懂時把那個意圖丟掉、改用另一套語意重新
+         * 解釋同一串數字。看不懂就該拒絕，不是換個方式猜。
          */
-        if ($international !== null
-            && preg_match('/\A[1-9][0-9]{6,14}\z/', $international) === 1
-        ) {
-            return 'INT:+'.$international;
+        if ($international !== null) {
+            /*
+             * ⛔ 7–15 位（E.164 上限 15）；首碼非 0——國碼不會以 0 開頭，
+             * 因此 `+0…`／`000…` 不是我們認得的國際號碼。
+             */
+            if (preg_match('/\A[1-9][0-9]{6,14}\z/', $international) === 1) {
+                return 'INT:+'.$international;
+            }
+
+            return null;
         }
 
         /*
-         * ⛔ 其餘一律 `RAW:` 精確比對。
+         * ⛔ 只有**沒有**明確國際前綴時才走 `RAW:` 精確比對。
          *
-         * 包含：裸 `886…`、市話、不完整號碼、超長數字、以及帶了國際前綴但
-         * 形狀不合格的值。⛔ 這裡不猜任何東西——精確相同才算相同。
+         * 包含：裸 `886…`、市話、外國本地號碼。⛔ 不猜國家、不補國碼——
+         * 精確相同才算相同。長度／字元邊界在函式開頭已經套過。
          */
         return 'RAW:'.$digits;
     }
