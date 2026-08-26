@@ -1443,6 +1443,51 @@ class CustomerOrderLookupTest extends TestCase
     }
 
     /**
+     * ⭐ R1：手機提示必須與實際的等價行為一致。
+     *
+     * ⛔ 舊句「請與下單時填寫的格式一致」與已接受的功能矛盾——
+     * `09XXXXXXXX`／`+8869XXXXXXXX`／`008869XXXXXXXX` 早已被封閉正規化為
+     * 同一個值，客人根本不需要打出跟下單時相同的格式。
+     *
+     * ⛔ 錯誤的提示比沒有提示更糟：它會讓查不到的人以為原因是格式不同，
+     * 於是反覆換格式重試，而真正的原因完全沒被指出來。
+     *
+     * ⛔ 這條同時釘住「新句存在」與「舊句不存在」。只驗證新句的話，
+     * 兩句並存也會通過——那等於讓提示自相矛盾。
+     */
+    public function test_the_phone_hint_matches_the_actual_equivalence_behaviour(): void
+    {
+        $response = $this->get('/order-check');
+
+        $response->assertOk();
+        $response->assertSee('請輸入完整手機號碼；台灣手機可使用 09、+886 或 00886 格式。');
+        $response->assertDontSee('請與下單時填寫的格式一致。');
+
+        // ⛔ POST 後的同一頁也必須是新句（表單永遠顯示）。
+        $this->lookup(['email' => self::EMAIL])
+            ->assertOk()
+            ->assertSee('請輸入完整手機號碼；台灣手機可使用 09、+886 或 00886 格式。')
+            ->assertDontSee('請與下單時填寫的格式一致。');
+    }
+
+    /**
+     * ⛔ 提示裡列出的三種格式必須真的都能命中同一筆訂單。
+     *
+     * ⭐ 這條把「文案」與「行為」綁在一起：若日後有人改了 parser 卻沒改文案
+     * （或反過來），這裡會失敗。⛔ 一個沒有行為背書的承諾就是謊言。
+     */
+    public function test_every_format_promised_by_the_hint_actually_works(): void
+    {
+        $order = $this->orderFor();
+
+        foreach (['0912345678', '+886912345678', '00886912345678'] as $promised) {
+            $this->lookup(['email' => self::EMAIL, 'phone' => $promised])
+                ->assertOk()
+                ->assertSee($order->reference, false);
+        }
+    }
+
+    /**
      * ⛔ 這一頁的 noindex 不得只依賴全站的 `AddRobotsHeader`。
      *
      * ⛔ 為什麼需要這條看起來像重複實作的測試：測試環境 `ALLOW_INDEXING`

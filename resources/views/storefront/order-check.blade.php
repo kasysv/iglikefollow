@@ -58,7 +58,18 @@
                 <label for="lookup-phone" class="block text-sm font-medium text-black">手機號碼</label>
                 <input type="tel" id="lookup-phone" name="phone" autocomplete="tel"
                        class="mt-2 block min-h-11 w-full rounded-lg border border-black/15 px-3 py-2 text-base">
-                <p class="mt-2 text-sm text-black/55">請與下單時填寫的格式一致。</p>
+                {{--
+                    ⛔ 舊句是「請與下單時填寫的格式一致」——它與實際行為矛盾。
+
+                    `ContactLookupHash::normalizePhone()` 已把同一支台灣手機的
+                    `09XXXXXXXX`／`+8869XXXXXXXX`／`008869XXXXXXXX` 封閉正規化
+                    為同一個值，客人**不需要**打出跟下單時一模一樣的格式。
+
+                    ⛔ 錯誤的提示比沒有提示更糟：它會讓查不到的人以為原因是
+                    格式不同，於是反覆換格式重試，而真正的原因（例如少打一碼、
+                    用了另一支門號）完全沒被指出來。
+                --}}
+                <p class="mt-2 text-sm text-black/55">請輸入完整手機號碼；台灣手機可使用 09、+886 或 00886 格式。</p>
             </div>
 
             <button type="submit"
