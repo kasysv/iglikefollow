@@ -1577,9 +1577,9 @@ class CustomerOrderLookupTest extends TestCase
     }
 
     /**
-     * ⭐ Owner 指定的處理說明句，顯示在卡片下方。
+     * ⭐ Owner 指定的處理說明句，顯示在**每張卡片內的最底**。
      *
-     * ⛔ 只在**有結果**時出現。查無時說「訂單已自動安排處理」是矛盾的——
+     * ⛔ 只在有結果時出現。查無時說「訂單已自動安排處理」是矛盾的——
      * 客人什麼都沒查到，卻被告知系統已在處理某張他看不到的訂單。
      */
     public function test_the_processing_note_appears_only_with_results(): void
@@ -1591,16 +1591,126 @@ class CustomerOrderLookupTest extends TestCase
             ->assertSee($order->reference, false)
             ->assertSee('訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。');
 
-        // ⛔ 查無：不得出現這句。
+        // ⛔ 查無：兩句說明都不得出現。
         $this->lookup(['email' => 'nobody@example.test', 'phone' => '0900000000'])
             ->assertOk()
             ->assertSee('查不到符合的訂單')
-            ->assertDontSee('訂單已自動安排處理');
+            ->assertDontSee('訂單已自動安排處理')
+            ->assertDontSee('需要人工確認');
 
         // ⛔ 尚未查詢的空表單頁也不得出現。
         $this->get('/order-check')
             ->assertOk()
-            ->assertDontSee('訂單已自動安排處理');
+            ->assertDontSee('訂單已自動安排處理')
+            ->assertDontSee('需要人工確認');
+    }
+
+    /**
+     * ⛔⛔ 兩句說明**互斥**，絕不同時出現在同一張卡片。
+     *
+     * 「請聯絡客服」代表這張單卡住了、需要人介入；而「已自動安排處理、
+     * 請耐心等候」是在叫客人不要來找我們。兩句一起出現等於同時說
+     * 「來找我們」和「別來找我們」——客人只會更困惑。
+     *
+     * @return array<string, array{0: FulfillmentStatus, 1: bool}>
+     */
+    public static function noteByStatusProvider(): array
+    {
+        return [
+            // 正常進行中：顯示「耐心等候」。
+            'ready' => [FulfillmentStatus::Ready, false],
+            'submitted' => [FulfillmentStatus::Submitted, false],
+            'processing' => [FulfillmentStatus::Processing, false],
+            'completed' => [FulfillmentStatus::Completed, false],
+
+            // ⛔ 需要人介入的五種：顯示客服說明，⛔ 不得叫他耐心等候。
+            'partial' => [FulfillmentStatus::Partial, true],
+            'canceled' => [FulfillmentStatus::Canceled, true],
+            'failed' => [FulfillmentStatus::Failed, true],
+            'submission unknown' => [FulfillmentStatus::SubmissionUnknown, true],
+            'configuration pending' => [FulfillmentStatus::ConfigurationPending, true],
+        ];
+    }
+
+    #[DataProvider('noteByStatusProvider')]
+    public function test_the_two_notes_are_mutually_exclusive(
+        FulfillmentStatus $status,
+        bool $needsSupport,
+    ): void {
+        $order = $this->orderFor();
+
+        $submittedOrLater = in_array($status, [
+            FulfillmentStatus::Submitted,
+            FulfillmentStatus::Processing,
+            FulfillmentStatus::Completed,
+            FulfillmentStatus::Partial,
+        ], true);
+
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => $status,
+            'provider_order_id' => $submittedOrLater ? '99120' : null,
+            'submitted_at' => $submittedOrLater ? now() : null,
+        ]);
+
+        $response = $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])->assertOk();
+
+        if ($needsSupport) {
+            $response->assertSee('此訂單需要人工確認，請與我們聯繫。');
+            $response->assertDontSee('訂單已自動安排處理');
+        } else {
+            $response->assertSee('訂單已自動安排處理');
+            $response->assertDontSee('需要人工確認');
+        }
+    }
+
+    /**
+     * ⛔ 一張訂單有多個商品時，**只要有一個**卡住就顯示客服說明。
+     *
+     * ⛔ 若只看第一個商品，一張「第一項正常、第二項卡住」的訂單會被整張
+     * 標成「請耐心等候」——那位客人會一直等一個永遠不會好的項目。
+     */
+    public function test_one_stuck_item_makes_the_whole_card_say_contact_support(): void
+    {
+        $order = $this->orderFor();
+
+        // 第二個商品項目。
+        $second = $order->items()->create([
+            'platform_name' => 'Instagram',
+            'service_name' => 'Instagram 觀看',
+            'variant_label' => '一般觀看',
+            'sku' => 'ig-views-standard',
+            'unit_price_mills' => 3900,
+            'quantity' => 500,
+            'quantity_unit' => '個',
+            'amount' => 195,
+            'target_kind' => 'account',
+            'target_value' => 'second_target',
+        ]);
+
+        // 第一項正常進行中。
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Processing,
+            'provider_order_id' => '99121',
+            'submitted_at' => now(),
+        ]);
+
+        // ⛔ 第二項卡住。
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $second->id,
+            'status' => FulfillmentStatus::Failed,
+        ]);
+
+        $response = $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])->assertOk();
+
+        // 兩個狀態都看得到。
+        $response->assertSee('進行中');
+        $response->assertSee('請聯絡客服');
+
+        // ⛔ 整張卡片的說明必須是客服，不得是「耐心等候」。
+        $response->assertSee('此訂單需要人工確認，請與我們聯繫。');
+        $response->assertDontSee('訂單已自動安排處理');
     }
 
     /** 結果頁使用 Owner 指定的「訂單時間」標籤，⛔ 不用舊的「下單時間」。 */

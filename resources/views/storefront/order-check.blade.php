@@ -94,6 +94,19 @@
 
                     <div class="mt-6 space-y-6">
                         @foreach ($results as $order)
+                            @php
+                                /*
+                                 * ⭐ 這張卡片裡**只要有任何一個商品**是「請聯絡客服」，
+                                 * 整張卡就顯示客服說明，而不是「耐心等候」。
+                                 *
+                                 * ⛔ 一張訂單可能有多個商品。若只看第一個，一張
+                                 * 「第一項正常、第二項卡住」的訂單會被整張標成
+                                 * 「已自動安排處理，請耐心等候」——那位客人會一直等
+                                 * 一個永遠不會好的項目。⛔ 判斷必須看全部。
+                                 */
+                                $needsSupport = collect($order['items'])
+                                    ->contains(fn (array $item): bool => $item['status'] === '請聯絡客服');
+                            @endphp
                             <article class="rounded-xl border border-black/10 p-5">
                                 {{--
                                     卡片 header：左側訂單編號＋訂單時間，右上付款藥丸。
@@ -176,25 +189,29 @@
                                         </li>
                                     @endforeach
                                 </ul>
+                                {{--
+                                    ⭐ Owner 指定：說明句放在**每張卡片內的最底**。
+
+                                    ⛔ 兩句**互斥**，⛔ 不同時出現：
+                                    「請聯絡客服」代表這張單卡住了、需要人介入，
+                                    而「已自動安排處理、請耐心等候」是叫客人不要來找我們
+                                    ——兩句一起出現等於同時說「來找我們」和「別來找我們」。
+
+                                    ⛔ 放在卡片內而不是頁面底部：一次查詢可能回傳多張
+                                    訂單，其中一張卡住、其他正常。放在頁面底部的話，
+                                    客人無法分辨那句話指的是哪一張。
+                                --}}
+                                <p class="mt-4 border-t border-black/5 pt-4 text-sm leading-6 text-black/60">
+                                    @if ($needsSupport)
+                                        此訂單需要人工確認，請與我們聯繫。
+                                    @else
+                                        訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。
+                                    @endif
+                                </p>
                             </article>
                         @endforeach
                     </div>
-
-                    {{--
-                        ⭐ Owner 指定的說明句，放在**卡片下方**。
-
-                        ⛔ 放在 `@else`（有結果）分支內，⛔ 不放在查無分支：
-                        「訂單已自動安排處理」對一個什麼都沒查到的人是矛盾的
-                        ——他會以為系統確認了某張他看不到的訂單。
-                    --}}
-                    <p class="mt-6 text-sm leading-6 text-black/60">
-                        訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。
-                    </p>
                 @endif
-
-                <p class="mt-8 text-sm leading-6 text-black/60">
-                    狀態顯示「請聯絡客服」時，代表這筆需要人工確認，請與我們聯繫。
-                </p>
             </div>
         @endif
     </section>
