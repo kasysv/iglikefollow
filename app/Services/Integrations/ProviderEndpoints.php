@@ -43,6 +43,19 @@ class ProviderEndpoints
     public const THEMOSTPANEL_DISPATCH = 'https://themostpanel.com/api/v2';
 
     /**
+     * LINE Messaging API 的 Push Message 端點。
+     *
+     * ⛔ 固定在版本控制中，⛔ 後台、DB 與 env 都不可改。這個請求會帶著
+     * Channel Access Token 送出——一個可被設定改寫的 URL，等於把金鑰送去
+     * 任何人指定的主機。
+     *
+     * ⛔ 與 `LINE_PAY_API` 是**兩個不同的服務**，只是名字都有 LINE。
+     *
+     * 官方：https://developers.line.biz/en/reference/messaging-api/#send-push-message
+     */
+    public const LINE_PUSH_MESSAGE = 'https://api.line.me/v2/bot/message/push';
+
+    /**
      * 可以把付款中的客人導去的主機。
      *
      * ⛔ 這是 allowlist,因為這個網址來自 HTTP 回應,而我們要把一個正在付款的
@@ -106,6 +119,21 @@ class ProviderEndpoints
         return self::exact(
             (string) config('integrations.endpoints.themostpanel.production'),
             self::THEMOSTPANEL_DISPATCH,
+        );
+    }
+
+    /**
+     * LINE 推播端點；⛔ 不符即 null，呼叫端必須 fail closed。
+     *
+     * ⛔ 只有 production 一列：LINE Messaging API 沒有本專案要用的 sandbox，
+     * ⛔ 也不依 APP_ENV 拼接 config key——一個新環境名稱不該憑空成為一個
+     * 沒人 review 過的端點來源。
+     */
+    public static function linePushMessage(): ?string
+    {
+        return self::exact(
+            (string) config('integrations.endpoints.line_order_notification.production'),
+            self::LINE_PUSH_MESSAGE,
         );
     }
 

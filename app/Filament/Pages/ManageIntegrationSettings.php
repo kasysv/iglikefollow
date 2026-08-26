@@ -6,6 +6,7 @@ use App\Actions\Fulfillment\SyncTheMostPanelServiceCatalogFromOwner;
 use App\Actions\Integrations\RevealIntegrationSecret;
 use App\Actions\Integrations\ToggleIntegrationChannel;
 use App\Actions\Integrations\UpdateIntegrationCredentials;
+use App\Actions\Notifications\SendLineTestMessage;
 use App\Enums\IntegrationEnvironment;
 use App\Enums\IntegrationProvider;
 use App\Filament\Resources\ProviderServices\ProviderServiceResource;
@@ -15,6 +16,7 @@ use App\Services\Fulfillment\FulfillmentDispatchGate;
 use App\Services\Fulfillment\TheMostPanelCurlCapability;
 use App\Services\Integrations\LiveIntegration;
 use App\Services\Integrations\ProviderEndpoints;
+use App\Services\Notifications\LineNotificationGate;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
@@ -328,6 +330,58 @@ class ManageIntegrationSettings extends Page
             'client_error', 'empty_body' => 'SMM 平台目前無法完成查詢，請稍後再試。',
             default => '同步未完成，舊服務清單未變更。',
         };
+    }
+
+    /**
+     * Send one fixed LINE test message.
+     *
+     * ⭐ 這顆按鈕**不受自動通知開關限制**——那正是它存在的理由：Owner 必須
+     * 能在開啟自動通知**之前**確認 token 與接收 ID 填對了。少了它，唯一的
+     * 驗證方式就是拿下一張真實訂單當測試。
+     *
+     * ⛔ 但環境、端點、credential 完整度與接收 ID 形狀一項都不放寬，
+     * 且本機／testing 一律 fail closed（見 `LineNotificationGate`）。
+     *
+     * ⛔ 需二次確認：這會真的送出一則訊息。
+     */
+    public function sendLineTestMessageAction(): Action
+    {
+        return Action::make('sendLineTestMessage')
+            ->label('送測試訊息')
+            ->icon(Heroicon::OutlinedPaperAirplane)
+            ->color('primary')
+            ->requiresConfirmation()
+            ->modalHeading('送出一則 LINE 測試訊息？')
+            ->modalDescription('這會用目前儲存的 Channel Access Token 與接收 ID 送出一則固定的測試訊息。不受「新訂單自動通知」開關影響。')
+            ->modalSubmitActionLabel('確認送出')
+            ->action(function (SendLineTestMessage $send): void {
+                abort_unless(static::canAccess(), 403);
+
+                $outcome = $send->handle();
+                $message = SendLineTestMessage::message($outcome);
+
+                $notification = Notification::make()
+                    ->title($outcome->successful() ? '測試訊息已送出' : '測試訊息未送出')
+                    ->body($message);
+
+                // ⛔ 只顯示白話訊息，⛔ 不回顯 token、target 或原始 response。
+                $outcome->successful() ? $notification->success() : $notification->danger();
+
+                $notification->send();
+            });
+    }
+
+    /** 後台顯示：LINE 通知目前的設定狀態（不含任何 secret 值）。 */
+    public function lineNotificationState(): array
+    {
+        $row = LiveIntegration::row(IntegrationProvider::LineOrderNotification);
+
+        return [
+            'configured' => $row?->isFullyConfigured() ?? false,
+            'target_valid' => LineNotificationGate::targetIsValid($row?->identifier),
+            'enabled' => LineNotificationGate::enabledByOwner(),
+            'outbound' => LiveIntegration::outboundAllowed(),
+        ];
     }
 
     protected function getFormActions(): array

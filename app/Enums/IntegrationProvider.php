@@ -20,6 +20,15 @@ enum IntegrationProvider: string
     case EcpayInvoice = 'ecpay_invoice';
     case TheMostPanel = 'themostpanel';
 
+    /*
+     * ⭐ 新訂單的 LINE 通知。
+     *
+     * ⛔ 與 `LinePay` **完全分開**，⛔ 不共用任何 credential。兩者都叫「LINE」
+     * 但是兩個不同的產品、不同的主控台、不同的金鑰：LINE Pay 是金流，
+     * 這個是 Messaging API 的推播。混用會讓一次改動同時影響收款與通知。
+     */
+    case LineOrderNotification = 'line_order_notification';
+
     public function label(): string
     {
         return match ($this) {
@@ -27,6 +36,7 @@ enum IntegrationProvider: string
             self::LinePay => 'LINE Pay',
             self::EcpayInvoice => '綠界電子發票',
             self::TheMostPanel => 'TheMostPanel 履約',
+            self::LineOrderNotification => 'LINE 新訂單通知',
         };
     }
 
@@ -36,6 +46,13 @@ enum IntegrationProvider: string
         return match ($this) {
             self::EcpayPayment, self::EcpayInvoice => 'MerchantID',
             self::LinePay => 'Channel ID',
+            /*
+             * ⛔ 接收 ID 是**公開識別碼**，不是 secret：它是 U／C／R 開頭的
+             * userId／groupId／roomId。放在 identifier 欄位（明文）而不是
+             * credentials，因為 Owner 需要看得到自己填了哪一個對象——
+             * 一個看不見的收件人設定，填錯了也不會有人發現。
+             */
+            self::LineOrderNotification => '接收 ID',
             self::TheMostPanel => null,
         };
     }
@@ -54,6 +71,14 @@ enum IntegrationProvider: string
         return match ($this) {
             self::EcpayPayment, self::EcpayInvoice => ['HashKey', 'HashIV'],
             self::LinePay => ['ChannelSecret'],
+            /*
+             * ⛔ **只存 Channel Access Token**。
+             *
+             * Push Message 只需要這一個；Channel Secret 只在 webhook 驗簽時
+             * 才有用途，而本輪不新增 webhook。⛔ 存一個現在用不到的 secret，
+             * 只是多一個會外洩的東西。
+             */
+            self::LineOrderNotification => ['ChannelAccessToken'],
             self::TheMostPanel => ['ApiKey'],
         };
     }
@@ -63,6 +88,7 @@ enum IntegrationProvider: string
     {
         return match ($key) {
             'ChannelSecret' => 'Channel Secret',
+            'ChannelAccessToken' => 'Channel Access Token',
             'ApiKey' => 'API Key',
             default => $key,
         };
@@ -80,7 +106,11 @@ enum IntegrationProvider: string
     public function environments(): array
     {
         return match ($this) {
-            self::TheMostPanel => [IntegrationEnvironment::Production],
+            /*
+             * ⛔ LINE Messaging API 沒有本專案要用的 sandbox。提供一個假的
+             * sandbox 等於發明一個不存在的安全測試環境，遲早有人拿它送真實訊息。
+             */
+            self::TheMostPanel, self::LineOrderNotification => [IntegrationEnvironment::Production],
             default => [IntegrationEnvironment::Sandbox, IntegrationEnvironment::Production],
         };
     }

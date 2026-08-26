@@ -34,6 +34,51 @@
         </div>
     </div>
 
+    {{--
+        LINE 新訂單通知的測試入口。
+
+        ⭐ 「送測試訊息」刻意**不受自動通知開關限制**：Owner 必須能在開啟
+        自動通知**之前**確認 token 與接收 ID 填對了。少了它，唯一的驗證方式
+        就是拿下一張真實訂單當測試。
+
+        ⛔ 這裡只顯示狀態，⛔ 不顯示 token、接收 ID 或任何 secret 值。
+    --}}
+    @php($line = $this->lineNotificationState())
+
+    <div class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <p class="font-bold text-gray-950 dark:text-white">LINE 新訂單通知</p>
+                <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    設定狀態：
+                    <span class="font-bold text-gray-950 dark:text-white">
+                        {{ $line['configured'] && $line['target_valid'] ? '已填寫' : '尚未完成' }}
+                    </span>
+                    ・自動通知：
+                    <span class="font-bold text-gray-950 dark:text-white">
+                        {{ $line['enabled'] ? '已開啟' : '已關閉' }}
+                    </span>
+                </p>
+
+                @if (! $line['target_valid'] && $line['configured'])
+                    <p class="mt-1 text-sm text-danger-600 dark:text-danger-400">
+                        接收 ID 格式不正確，請確認是 U／C／R 開頭的 ID。
+                    </p>
+                @endif
+
+                @unless ($line['outbound'])
+                    <p class="mt-1 text-sm text-warning-600 dark:text-warning-400">
+                        目前環境不會實際送出訊息。
+                    </p>
+                @endunless
+            </div>
+
+            <div wire:loading.attr="aria-busy">
+                {{ $this->sendLineTestMessageAction }}
+            </div>
+        </div>
+    </div>
+
     {{-- 通道狀態與開關。⛔ 「已設定」「Owner 已啟用」「現在真的會動」是
          三件不同的事，分開顯示，才不會出現畫面說在收款/派單、實際上沒有的情況。
 

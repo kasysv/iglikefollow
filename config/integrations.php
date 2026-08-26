@@ -67,6 +67,18 @@ return [
         'themostpanel' => [
             'production' => 'https://themostpanel.com/api/v2',
         ],
+
+        /*
+         | LINE Messaging API 的 Push Message 端點(新訂單通知)。
+         |
+         | ⛔ 只有 production 一列:LINE Messaging API 沒有本專案要用的 sandbox。
+         | ⛔ 與 `line_pay` 是兩個不同的服務,只是名字都有 LINE。
+         | ⛔ 不從 env 讀:這個請求會帶著 Channel Access Token 出去,
+         |   一個可被 .env 改寫的 URL 等於把金鑰送去任何人指定的主機。
+         */
+        'line_order_notification' => [
+            'production' => 'https://api.line.me/v2/bot/message/push',
+        ],
     ],
 
     /*
