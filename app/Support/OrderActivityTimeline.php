@@ -173,6 +173,23 @@ final class OrderActivityTimeline
      */
     private static function fulfillmentLabel(FulfillmentEvent $event): string
     {
+        /*
+         * ⭐ Owner 建立的更換履約。
+         *
+         * ⛔ 只放**固定本地文字 ＋ 第幾次**，⛔ 不放新 target、provider 原文
+         * 或任何 ID：這一行與公開頁共用同一份安全標準。
+         *
+         * ⛔ 顯示「第 N 次更換」而不是 sequence 本身：sequence 2 是**第 1 次**
+         * 更換。直接印 sequence 會讓人以為換過兩次。
+         */
+        if ($event->event_code === FulfillmentEventCode::ReplacementCreated) {
+            $sequence = $event->fulfillmentOrder?->sequence_no;
+
+            return $sequence === null
+                ? 'Owner 已建立更換履約'
+                : 'Owner 已建立第 '.((int) $sequence - 1).' 次更換履約';
+        }
+
         if ($event->event_code === FulfillmentEventCode::Submitted) {
             return '已在 SMM 平台下單';
         }

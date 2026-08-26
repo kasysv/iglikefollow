@@ -18,6 +18,7 @@ use App\Models\Order;
 use App\Models\OrderEvent;
 use App\Models\PaymentAttempt;
 use App\Models\User;
+use App\Policies\FulfillmentOrderPolicy;
 use App\Support\OrderActivityTimeline;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -230,10 +231,33 @@ class OrderAdminTest extends TestCase
         $order = $this->order();
 
         $this->assertTrue((new PaymentAttemptsRelationManager)->isReadOnly());
-        // ⛔ 三個 relation manager 全部唯讀。合併時間線更是連 table 都沒有——
-        // 它用自訂 view 純呈現，⛔ 沒有任何寫入路徑可言。
-        $this->assertTrue((new FulfillmentOrdersRelationManager)->isReadOnly());
+        // ⛔ 合併時間線連 table 都沒有——自訂 view 純呈現，沒有寫入路徑可言。
         $this->assertTrue((new OrderEventsRelationManager)->isReadOnly());
+
+        /*
+         * ⛔⛔ 履約 relation manager 的 `isReadOnly()` 現在是 false，
+         * 但**既有列仍然完全不可修改**。
+         *
+         * ⭐ 為什麼要改：Filament 的 `isReadOnly()` 會把**所有**變更性
+         * affordance 一併收掉，包含 Owner 唯一被批准的「更換連結」——而那個
+         * 動作不改寫任何既有列，它建立**新的一批**。
+         *
+         * ⛔ 真正的保證在 policy：create／update／delete 全部 false，
+         * 只有 `replace` 對 Owner 開放。這裡逐項驗證，⛔ 而不是靠一個會把
+         * 好動作與壞動作一起關掉的旗標。
+         */
+        $owner = $this->owner();
+        $policy = new FulfillmentOrderPolicy;
+        $fulfillment = FulfillmentOrder::factory()->submitted('READONLY-1')->create();
+
+        $this->assertFalse($policy->create($owner));
+        $this->assertFalse($policy->update($owner, $fulfillment));
+        $this->assertFalse($policy->delete($owner, $fulfillment));
+        $this->assertFalse($policy->forceDelete($owner, $fulfillment));
+
+        // ⭐ 唯一開放的寫入是建立新批次，且只給 Owner。
+        $this->assertTrue($policy->replace($owner, $fulfillment));
+        $this->assertFalse($policy->replace($this->editor(), $fulfillment));
 
         $this->assertContains(
             PaymentAttemptsRelationManager::class,

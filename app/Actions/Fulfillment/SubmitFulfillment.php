@@ -197,22 +197,29 @@ class SubmitFulfillment
     }
 
     /**
-     * ⛔ Reads the target from the encrypted order snapshot, at the last moment.
+     * ⛔ Reads the target from the encrypted snapshot, at the last moment.
      *
      * It is passed straight to the gateway and never stored anywhere else.
+     *
+     * ⭐ 改用 model 的 `effectiveTarget()`／`effectiveQuantity()`：
+     *
+     *  - 第 1 批仍讀**不可變的** `order_items` 快照（行為完全不變）；
+     *  - 更換批次讀**自己這一列**的 encrypted override。
+     *
+     * ⛔ 這裡絕不改寫 `order_items`：那是客人下單當下同意的內容。
      */
     private function buildSubmission(FulfillmentOrder $fulfillment): ?FulfillmentSubmission
     {
         $item = $fulfillment->orderItem;
         $serviceId = $fulfillment->provider_service_id_snapshot;
-        $target = (string) ($item?->target_value ?? '');
-        $quantity = (int) ($item?->quantity ?? 0);
+        $target = $fulfillment->effectiveTarget();
+        $quantity = $fulfillment->effectiveQuantity();
 
         if ($item === null || $serviceId === null || $target === '' || $quantity <= 0) {
             return null;
         }
 
-        return new FulfillmentSubmission($serviceId, $target, $quantity);
+        return new FulfillmentSubmission($serviceId, $target, $quantity, $fulfillment->sequence_no);
     }
 
     private function recordSubmitted(

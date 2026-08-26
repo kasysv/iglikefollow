@@ -1534,7 +1534,7 @@ class CustomerOrderLookupTest extends TestCase
         );
 
         $this->assertSame(
-            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url'],
+            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url', 'replacements'],
             array_keys($shaped['items'][0]),
         );
 
@@ -1727,7 +1727,7 @@ class CustomerOrderLookupTest extends TestCase
         $shaped = PublicOrderPresenter::for($order->fresh());
 
         $this->assertSame(
-            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url'],
+            ['platform', 'service', 'variant', 'quantity', 'status', 'status_tone', 'remains', 'target', 'target_url', 'replacements'],
             array_keys($shaped['items'][0]),
         );
         $this->assertSame('warning', $shaped['items'][0]['status_tone']);

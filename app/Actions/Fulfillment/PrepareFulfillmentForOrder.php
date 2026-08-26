@@ -56,8 +56,22 @@ class PrepareFulfillmentForOrder
         $mapping = $this->mappingFor($item);
 
         return DB::transaction(function () use ($item, $mapping) {
+            /*
+             * ⛔ 只找**第 1 批**（sequence 1）。
+             *
+             * ⭐ 這個 action 回答的問題是「這個商品項目的**初始**履約建立過
+             * 了嗎」。更換批次（sequence ≥ 2）是 Owner 事後另外建立的，
+             * ⛔ 與這裡無關——用 `where('order_item_id', ...)` 撈任何一列，
+             * 在有更換批次時會撈到鏈尾那一筆並把它當成「初始列已存在」回傳，
+             * 語意就錯了。
+             *
+             * ⛔ 防重複派單的保證沒有被放寬：DB 的 unique
+             * `(order_item_id, sequence_no)` 讓 sequence 1 只可能有一筆，
+             * 與原本的單欄 unique 在初始派單上完全等價。
+             */
             $existing = FulfillmentOrder::query()
                 ->where('order_item_id', $item->id)
+                ->where('sequence_no', 1)
                 ->lockForUpdate()
                 ->first();
 

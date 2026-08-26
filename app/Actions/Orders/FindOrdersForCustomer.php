@@ -80,7 +80,11 @@ class FindOrdersForCustomer
         $reference = $normalizedReference;
 
         // ⛔ eager load：避免公開頁對每個商品項目各查一次履約列。
-        $query = Order::query()->with(['items.fulfillmentOrder']);
+        /*
+         * ⭐ 一個商品項目可能有一條履約批次鏈（Owner 建立的更換）。
+         * 公開頁需要**鏈尾**決定目前狀態,以及**整條鏈**顯示更換紀錄。
+         */
+        $query = Order::query()->with(['items.fulfillmentOrders']);
 
         /*
          * ⭐ Owner 要求：等待付款的訂單**完全不要**出現在查詢結果。

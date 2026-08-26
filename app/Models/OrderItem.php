@@ -6,6 +6,7 @@ use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
@@ -39,10 +40,42 @@ class OrderItem extends Model
         return $this->belongsTo(ServiceVariant::class);
     }
 
-    /** 這個商品項目的履約紀錄；⛔ 最多一筆，由 unique index 保證。 */
-    public function fulfillmentOrder(): HasOne
+    /**
+     * 這個商品項目的**所有**履約批次，依 sequence 排序。
+     *
+     * ⭐ Owner 可以在自行於 SMM PANEL 取消舊單後，於本站建立更換履約，
+     * 因此一個商品項目可以有一條批次鏈：第 1 批（原始）→ 第 2 批 → …
+     *
+     * ⛔ 這裡由 `hasOne` 改成 `hasMany`。原本的「最多一筆」由 `order_item_id`
+     * 單欄 unique 保證；現在改為 unique `(order_item_id, sequence_no)`——
+     * **初始批次（sequence 1）仍然只可能有一筆**，那道防重複派單的最終防線
+     * ⛔ 沒有被放寬。
+     */
+    public function fulfillmentOrders(): HasMany
     {
-        return $this->hasOne(FulfillmentOrder::class);
+        return $this->hasMany(FulfillmentOrder::class)->orderBy('sequence_no');
+    }
+
+    /**
+     * 第 1 批（原始履約）。
+     *
+     * ⛔ 用 `sequence_no = 1` 而不是「最舊的一筆」：sequence 是這條鏈的定義
+     * 欄位，⛔ 而 id／created_at 只是碰巧同序。
+     */
+    public function initialFulfillmentOrder(): HasOne
+    {
+        return $this->hasOne(FulfillmentOrder::class)->where('sequence_no', 1);
+    }
+
+    /**
+     * 目前生效的那一批（鏈尾）。
+     *
+     * ⭐ 這是「這個商品項目現在的履約狀態」的唯一來源：公開頁與後台摘要都讀它，
+     * ⛔ 而不是隨便拿一筆。
+     */
+    public function latestFulfillmentOrder(): HasOne
+    {
+        return $this->hasOne(FulfillmentOrder::class)->ofMany('sequence_no', 'max');
     }
 
     /**

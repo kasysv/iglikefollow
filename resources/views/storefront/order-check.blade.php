@@ -225,6 +225,70 @@
                                                     <dd class="text-black">{{ $item['remains'] }}</dd>
                                                 </div>
                                             </dl>
+
+                                            {{--
+                                                ⭐ 更換紀錄。
+
+                                                ⛔ presenter 只給封閉 allowlist 的欄位：
+                                                更換時間、第幾次、新連結、實際數量、公開狀態與剩餘。
+                                                ⛔ 沒有 provider order ID／service ID／service name、
+                                                raw status、SMM／TheMostPanel 字樣或操作者。
+
+                                                ⛔ 所有 target 都經 Blade escape；只有 presenter
+                                                判定為合法 http(s) 的值才做成連結。
+                                            --}}
+                                            @if (! empty($item['replacements']))
+                                                <div class="mt-4 border-t border-black/5 pt-3">
+                                                    <p class="text-sm font-medium text-black/70">更換紀錄</p>
+
+                                                    <ul class="mt-2 space-y-3">
+                                                        @foreach ($item['replacements'] as $replacement)
+                                                            <li class="rounded-lg bg-black/[0.03] p-3">
+                                                                <p class="text-sm text-black/55">
+                                                                    第 {{ $replacement['sequence'] - 1 }} 次更換 ・
+                                                                    {{ $replacement['replaced_at'] }}
+                                                                </p>
+
+                                                                @if ($replacement['target_url'] !== null)
+                                                                    <a href="{{ $replacement['target_url'] }}"
+                                                                       target="_blank" rel="noopener noreferrer"
+                                                                       class="mt-1 block text-sm break-all text-trust underline underline-offset-2">{{ $replacement['target'] }}</a>
+                                                                @else
+                                                                    <p class="mt-1 text-sm break-all text-black">{{ $replacement['target'] }}</p>
+                                                                @endif
+
+                                                                <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+                                                                    <div>
+                                                                        <dt class="text-black/55">送出數量</dt>
+                                                                        <dd class="text-black">{{ number_format($replacement['quantity']) }}</dd>
+                                                                    </div>
+                                                                    <div>
+                                                                        <dt class="text-black/55">狀態</dt>
+                                                                        <dd>
+                                                                            {{-- ⛔ 與上方同一個封閉 match。 --}}
+                                                                            @php
+                                                                                $replacementTone = match ($replacement['status_tone']) {
+                                                                                    'success' => 'bg-trust/12 text-trust',
+                                                                                    'info' => 'bg-[#1d4ed8]/10 text-[#1d4ed8]',
+                                                                                    'danger' => 'bg-accent/10 text-accent',
+                                                                                    default => 'bg-[#a16207]/12 text-[#a16207]',
+                                                                                };
+                                                                            @endphp
+                                                                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-semibold {{ $replacementTone }}">
+                                                                                {{ $replacement['status'] }}
+                                                                            </span>
+                                                                        </dd>
+                                                                    </div>
+                                                                    <div>
+                                                                        <dt class="text-black/55">剩餘</dt>
+                                                                        <dd class="text-black">{{ $replacement['remains'] }}</dd>
+                                                                    </div>
+                                                                </dl>
+                                                            </li>
+                                                        @endforeach
+                                                    </ul>
+                                                </div>
+                                            @endif
                                         </li>
                                     @endforeach
                                 </ul>

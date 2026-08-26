@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * One order item's journey through a provider.
@@ -39,6 +40,14 @@ class FulfillmentOrder extends Model
         'provider_remains' => 'integer',
         // ⭐ 起始值：與 remains 同規則，null／0 語意相同。
         'provider_start_count' => 'integer',
+        'sequence_no' => 'integer',
+        'quantity_override' => 'integer',
+        'suggested_quantity_snapshot' => 'integer',
+        /*
+         * ⛔⛔ 更換連結是客人的交付目標,與 `order_items.target_value` 同等敏感。
+         * ⛔ 必須加密落盤——DB 外流時它不該是明文。
+         */
+        'target_value_override' => 'encrypted',
         'submitted_at' => 'datetime',
         'last_synced_at' => 'datetime',
     ];
@@ -46,6 +55,67 @@ class FulfillmentOrder extends Model
     public function orderItem(): BelongsTo
     {
         return $this->belongsTo(OrderItem::class);
+    }
+
+    /** 這一批取代的上一批；⛔ 第 1 批為 null。 */
+    public function replaces(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'replaces_fulfillment_order_id');
+    }
+
+    /**
+     * 取代這一批的下一批；⛔ 最多一個（由 unique index 保證）。
+     *
+     * ⭐ 「已被更換」＝ `replacement()` 存在。這是判斷一批是否仍為鏈尾的唯一
+     * 依據，⛔ 不看 status——Owner 可以在任何 status 下更換。
+     */
+    public function replacement(): HasOne
+    {
+        return $this->hasOne(self::class, 'replaces_fulfillment_order_id');
+    }
+
+    /** 建立這筆更換的 Owner；⛔ 第 1 批為 null。 */
+    public function replacementCreator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'replacement_created_by_user_id');
+    }
+
+    /** 這一批是不是 Owner 建立的更換履約。 */
+    public function isReplacement(): bool
+    {
+        return (int) $this->sequence_no > 1;
+    }
+
+    /**
+     * The delivery target this batch is actually sent with.
+     *
+     * ⛔⛔ 第 1 批讀**不可變的** `order_items` 快照；更換批次讀**自己這一列**
+     * 的 encrypted override。
+     *
+     * ⛔ 更換時絕不改寫 `order_items.target_value`：那是客人下單當下同意的
+     * 內容，是訂單的事實。改寫它會讓歷史看起來像客人從一開始就填了新連結。
+     */
+    public function effectiveTarget(): string
+    {
+        if ($this->isReplacement()) {
+            return (string) $this->target_value_override;
+        }
+
+        return (string) ($this->orderItem?->target_value ?? '');
+    }
+
+    /**
+     * The quantity this batch is actually sent with.
+     *
+     * ⛔ 同上：更換批次用 Owner 實際輸入的數量，⛔ 不是原訂購量。
+     */
+    public function effectiveQuantity(): int
+    {
+        if ($this->isReplacement()) {
+            return (int) $this->quantity_override;
+        }
+
+        return (int) ($this->orderItem?->quantity ?? 0);
     }
 
     public function mapping(): BelongsTo

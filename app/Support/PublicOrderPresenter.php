@@ -7,6 +7,7 @@ use App\Enums\OrderStatus;
 use App\Models\FulfillmentOrder;
 use App\Models\Order;
 use App\Models\OrderItem;
+use Illuminate\Support\Collection;
 
 /**
  * What a customer may see about their own order — an allowlist, not a filter.
@@ -98,10 +99,15 @@ final class PublicOrderPresenter
         /*
          * ⛔ 履約列可能不存在（尚未付款、或付款後還沒建立）。
          *
-         * `OrderItem::fulfillmentOrder()` 是 HasOne——一個商品項目至多一筆
-         * 履約列。⛔ 不存在時是 null，呼叫端必須處理，不得假設有值。
+         * ⭐ 一個商品項目可能有一條批次鏈（Owner 建立的更換履約）。
+         * **目前的公開狀態與剩餘數量一律取鏈尾那一批**——那是現在真正在跑的
+         * 那一筆。⛔ 取第 1 批會讓客人看到一個已經被更換掉的舊狀態
+         * （例如「請聯絡客服」），而實際上新的一批正在進行中。
+         *
+         * ⛔ 不存在時是 null，呼叫端必須處理，不得假設有值。
          */
-        $fulfillment = $item->fulfillmentOrder;
+        $batches = $item->fulfillmentOrders;
+        $fulfillment = $batches->last();
 
         $target = self::target($item);
         $status = self::status($order, $fulfillment);
@@ -111,6 +117,13 @@ final class PublicOrderPresenter
             'platform' => (string) $item->platform_name,
             'service' => (string) $item->service_name,
             'variant' => (string) $item->variant_label,
+            /*
+             * ⛔ 這裡仍是**原訂購數量**，⛔ 不是最新批次的數量。
+             *
+             * 客人買的就是這個數量，那是訂單的事實；更換批次的實際送出量另外
+             * 顯示在下方的「更換紀錄」裡。把這一欄改成鏈尾的數量，會讓客人
+             * 以為自己當初買的份數變了。
+             */
             'quantity' => (int) $item->quantity,
             'status' => $status,
             'status_tone' => self::tone($status),
@@ -121,10 +134,57 @@ final class PublicOrderPresenter
              *
              * ⛔ 這是客人自己填的值,不是 provider 資料——顯示它不會洩漏我們
              * 用哪一家供應商。它只在三選二驗證通過後才會被輸出。
+             *
+             * ⛔ 同樣維持**原下單 target**：更換後的新連結另外列在更換紀錄。
              */
             'target' => $target,
             'target_url' => self::targetUrl($target),
+
+            /*
+             * ⭐ 更換紀錄：封閉 allowlist，只有 Owner 批准的欄位。
+             *
+             * ⛔ 絕不含 provider order ID／service ID／service name、raw status
+             * token、SMM／TheMostPanel 字樣、操作者或任何內部原因。
+             */
+            'replacements' => self::replacements($order, $batches),
         ];
+    }
+
+    /**
+     * The public record of each replacement batch.
+     *
+     * ⛔ 只輸出第 2 批以後（第 1 批是原始履約，不是「更換」）。
+     *
+     * ⛔ 每一欄都是刻意挑過的：更換時間、第幾次、新連結（與安全連結）、
+     * 實際數量、公開狀態與剩餘。⛔ 沒有任何一欄來自 provider。
+     *
+     * @param  Collection<int, FulfillmentOrder>  $batches
+     * @return list<array<string, mixed>>
+     */
+    private static function replacements(Order $order, $batches): array
+    {
+        return $batches
+            ->filter(fn (FulfillmentOrder $batch): bool => $batch->isReplacement())
+            ->map(function (FulfillmentOrder $batch) use ($order): array {
+                $status = self::status($order, $batch);
+                $target = $batch->effectiveTarget();
+
+                return [
+                    // ⛔ 時區與訂單時間同一規則。
+                    'replaced_at' => $batch->created_at
+                        ?->copy()->setTimezone((string) config('app.timezone'))
+                        ->format('Y-m-d H:i') ?? '',
+                    'sequence' => (int) $batch->sequence_no,
+                    'target' => $target,
+                    'target_url' => self::targetUrl($target),
+                    'quantity' => $batch->effectiveQuantity(),
+                    'status' => $status,
+                    'status_tone' => self::tone($status),
+                    'remains' => self::remains($batch, $status),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /**

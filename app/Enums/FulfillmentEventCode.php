@@ -22,6 +22,14 @@ enum FulfillmentEventCode: string
     case StatusSynced = 'STATUS_SYNCED';
     case StatusUnrecognised = 'STATUS_UNRECOGNISED';
 
+    /**
+     * ⭐ Owner 在本站建立了一筆更換履約（新批次）。
+     *
+     * ⛔ 這筆事件寫在**新的 child 列**上，⛔ 不寫在 parent 上：parent 是
+     * append-only 的歷史，它之後仍要繼續同步真正的 status 與 final Remains。
+     */
+    case ReplacementCreated = 'REPLACEMENT_CREATED';
+
     public function label(): string
     {
         return match ($this) {
@@ -34,6 +42,7 @@ enum FulfillmentEventCode: string
             self::SubmissionUnknown => '送出結果不明，待人工對帳',
             self::StatusSynced => '同步供應商狀態',
             self::StatusUnrecognised => '供應商狀態無法辨識，維持原狀',
+            self::ReplacementCreated => 'Owner 建立更換履約',
         };
     }
 
