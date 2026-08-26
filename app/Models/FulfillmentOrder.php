@@ -37,6 +37,8 @@ class FulfillmentOrder extends Model
          * 「對方回報 0」（已補完）的區別。
          */
         'provider_remains' => 'integer',
+        // ⭐ 起始值：與 remains 同規則，null／0 語意相同。
+        'provider_start_count' => 'integer',
         'submitted_at' => 'datetime',
         'last_synced_at' => 'datetime',
     ];
@@ -172,6 +174,20 @@ class FulfillmentOrder extends Model
         return $this->provider_remains === null
             ? '尚未取得'
             : number_format($this->provider_remains);
+    }
+
+    /**
+     * The provider's starting count, as text for the admin.
+     *
+     * ⛔ 與 `displayRemains()` 完全相同的規則：`0` 必須顯示為 `0`（開始前本來
+     * 就是 0），⛔ 不得被 placeholder 吞掉；`null` 才是「尚未取得」。
+     * 這就是為什麼用 `=== null` 而不是 `filled()`／truthy 判斷。
+     */
+    public function displayStartCount(): string
+    {
+        return $this->provider_start_count === null
+            ? '尚未取得'
+            : number_format($this->provider_start_count);
     }
 
     /**

@@ -42,6 +42,11 @@ class ViewFulfillmentOrder extends ViewRecord
                     ->state(fn ($record): string => $record->displayProviderStatus())
                     ->color(fn ($record) => $record->status->color()),
 
+                // ⭐ 起始值：與剩餘同規則（null＝尚未取得、0＝確實是 0）。
+                TextEntry::make('provider_start_count')
+                    ->label('起始值')
+                    ->state(fn ($record): string => $record->displayStartCount()),
+
                 TextEntry::make('provider_remains')
                     ->label('剩餘數量（Remains）')
                     ->state(fn ($record): string => $record->displayRemains()),

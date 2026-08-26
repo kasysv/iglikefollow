@@ -153,6 +153,10 @@ class SyncFulfillmentState
             $fields['provider_remains'] = $result->remains;
         }
 
+        if ($result->startCount !== null) {
+            $fields['provider_start_count'] = $result->startCount;
+        }
+
         return $fields;
     }
 

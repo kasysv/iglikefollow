@@ -67,6 +67,15 @@ final class OrderActivityTimeline
             ])
             ->values()
             ->map(fn (array $entry): array => [
+                /*
+                 * ⭐ 穩定且唯一的 key：`order:{id}` 或 `fulfillment:{id}`。
+                 *
+                 * 下方的時間線表格需要逐列 key。⛔ 不能用陣列索引——那會隨新
+                 * 事件插入而整批位移，列狀態就會跳到別列；也不能單用 `id`，
+                 * 因為兩個來源表的自增 id 會撞號。加上來源前綴之後，同一筆
+                 * 事件在任何時候都對應同一個 key。
+                 */
+                'key' => $entry['source'].':'.$entry['id'],
                 'created_at' => $entry['created_at'],
                 'source' => $entry['source'],
                 'label' => $entry['label'],

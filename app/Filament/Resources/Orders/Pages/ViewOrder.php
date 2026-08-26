@@ -186,9 +186,24 @@ class ViewOrder extends ViewRecord
                     RepeatableEntry::make('fulfillment_progress')
                         ->hiddenLabel()
                         ->state(fn (Order $record) => $record->fulfillmentOrders()->with('orderItem')->get())
+                        /*
+                         * ⭐ 欄序由 Owner 指定，⛔ 逐項固定，不得重排：
+                         *
+                         *   已送出時間 → SMM 訂單編號 → SMM 服務名稱 → 起始值
+                         *   → 數量 → 狀態 → 剩餘 → 最後同步時間
+                         *
+                         * 這個順序是客服排查時的閱讀動線：先確認「送出了沒、
+                         * 對方單號多少」，再看「買的是什麼、從多少開始、買多少」，
+                         * 最後才是「現在如何、還剩多少、什麼時候問的」。
+                         */
                         ->schema([
+                            TextEntry::make('submitted_at')->label('已送出時間')->dateTime('Y-m-d H:i:s')
+                                ->placeholder('—'),
+                            TextEntry::make('provider_order_id')->label('SMM 訂單編號')->placeholder('尚未送出'),
                             TextEntry::make('smm_service_name')->label('SMM 服務名稱')
                                 ->state(fn ($record) => $record->displayServiceName()),
+                            TextEntry::make('provider_start_count')->label('起始值')
+                                ->state(fn ($record): string => $record->displayStartCount()),
                             TextEntry::make('orderItem.quantity')->label('數量')
                                 ->formatStateUsing(fn ($state) => number_format((int) $state)),
                             /*
@@ -199,17 +214,14 @@ class ViewOrder extends ViewRecord
                              * 一個字串。⛔ 顏色不改由原文推導——那等於用未經
                              * 狀態機驗證的文字控制呈現。
                              */
-                            TextEntry::make('provider_status')->label('SMM 狀態')->badge()
+                            TextEntry::make('provider_status')->label('狀態')->badge()
                                 ->state(fn ($record): string => $record->displayProviderStatus())
                                 ->color(fn ($record) => $record->status->color()),
-                            TextEntry::make('provider_remains')->label('剩餘數量（Remains）')
+                            TextEntry::make('provider_remains')->label('剩餘')
                                 ->state(fn ($record): string => $record->displayRemains()),
-                            TextEntry::make('provider_order_id')->label('SMM 訂單編號')->placeholder('尚未送出'),
-                            TextEntry::make('submitted_at')->label('已送出時間')->dateTime('Y-m-d H:i:s')
-                                ->placeholder('—'),
                             TextEntry::make('last_synced_at')->label('最後同步時間')->dateTime('Y-m-d H:i:s')
                                 ->placeholder('—'),
-                        ])->columns(3),
+                        ])->columns(4),
                 ])
                 ->visible(fn (Order $record): bool => $record->fulfillmentOrders()->with('orderItem')->get()->isNotEmpty()),
 
@@ -334,7 +346,23 @@ class ViewOrder extends ViewRecord
              * 只讀 `order_events`／`fulfillment_events`,不另外寫入任何一筆
              * DB event——這裡是呈現層,不是第三個 event 來源。
              */
-            Section::make('訂單時間表')
+            /*
+             * ⭐ 唯一的「訂單時間線」——訂單事件與履約事件合併在這一個區塊。
+             *
+             * ⛔ 舊版是「主畫面『訂單時間表』（已合併）」＋「下方『訂單時間線』
+             * relation manager（只有 order_events）」兩份並存。同一頁兩條時間
+             * 線，客服會不確定哪一個才是完整的，而兩處各自演進就會開始不一致。
+             * Owner 要求併成一個，因此 relation manager 已不再掛載
+             * （見 `OrderResource::getRelations()`），這裡是唯一呈現位置。
+             *
+             * ⛔ 唯讀 presenter：`OrderActivityTimeline` 只讀 `order_events`
+             * 與 `fulfillment_events` 兩張 append-only 表，⛔ 不新增第三個事件
+             * 來源、不在開頁時寫入、不呼叫任何 provider。
+             *
+             * ⛔ 每列帶穩定唯一 key（`order:{id}`／`fulfillment:{id}`），
+             * 排序固定為 `created_at → id → source`。
+             */
+            Section::make('訂單時間線')
                 ->description('依時間合併顯示訂單事件與履約進度。')
                 ->schema([
                     RepeatableEntry::make('activity_timeline')
@@ -342,7 +370,7 @@ class ViewOrder extends ViewRecord
                         ->state(fn (Order $record): array => OrderActivityTimeline::for($record))
                         ->schema([
                             TextEntry::make('created_at')->label('時間')->dateTime('Y-m-d H:i:s'),
-                            TextEntry::make('label')->label('事件'),
+                            TextEntry::make('label')->label('事件')->weight('bold'),
                             TextEntry::make('smm_service_name')->label('SMM 服務')->placeholder('—'),
                         ])->columns(3),
                 ]),

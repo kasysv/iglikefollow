@@ -9,13 +9,15 @@ use App\Enums\PaymentStatus;
 use App\Filament\Resources\Orders\OrderResource;
 use App\Filament\Resources\Orders\Pages\ListOrders;
 use App\Filament\Resources\Orders\Pages\ViewOrder;
-use App\Filament\Resources\Orders\RelationManagers\OrderEventsRelationManager;
+use App\Filament\Resources\Orders\RelationManagers\FulfillmentOrdersRelationManager;
 use App\Filament\Resources\Orders\RelationManagers\PaymentAttemptsRelationManager;
 use App\Models\FulfillmentOrder;
 use App\Models\Invoice;
 use App\Models\Order;
+use App\Models\OrderEvent;
 use App\Models\PaymentAttempt;
 use App\Models\User;
+use App\Support\OrderActivityTimeline;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -227,7 +229,9 @@ class OrderAdminTest extends TestCase
         $order = $this->order();
 
         $this->assertTrue((new PaymentAttemptsRelationManager)->isReadOnly());
-        $this->assertTrue((new OrderEventsRelationManager)->isReadOnly());
+        // ⛔ 履約 relation manager 同樣唯讀；events 那個已併入主畫面時間線，
+        // 不再掛載（見 test_the_order_events_relation_manager_is_no_longer_mounted）。
+        $this->assertTrue((new FulfillmentOrdersRelationManager)->isReadOnly());
 
         $this->assertContains(
             PaymentAttemptsRelationManager::class,
@@ -465,12 +469,84 @@ class OrderAdminTest extends TestCase
             to: FulfillmentStatus::Processing,
         );
 
+        /*
+         * ⭐ A1：合併時間線的唯一呈現位置改為下方的「訂單時間線」
+         * RelationManager，主畫面不再有重複的「訂單時間表」Section。
+         *
+         * ⛔ 主畫面必須**不再**出現舊 Section 的標題——同一份合併資料在一頁
+         * 出現兩次，客服會不確定哪一個才是完整的。
+         */
         $html = Livewire::test(ViewOrder::class, ['record' => $order->reference])->assertOk()->html();
 
-        $this->assertStringContainsString('訂單時間表', $html);
+        // ⛔ 舊的重複區塊標題必須消失，只留下唯一的「訂單時間線」。
+        $this->assertStringNotContainsString('訂單時間表', $html, '⛔ 不得再有第二條時間線。');
+        $this->assertStringContainsString('訂單時間線', $html);
+
+        // 合併資料本身仍完整。
         $this->assertStringContainsString('已在 SMM 平台下單', $html);
         $this->assertStringContainsString('SMM 平台已進行中', $html);
         $this->assertStringContainsString('時間表服務名稱', $html);
+    }
+
+    /** ⛔ 只掛載兩個 relation manager；events 那個已併入主畫面時間線。 */
+    public function test_the_order_events_relation_manager_is_no_longer_mounted(): void
+    {
+        $this->assertSame(
+            [
+                PaymentAttemptsRelationManager::class,
+                FulfillmentOrdersRelationManager::class,
+            ],
+            OrderResource::getRelations(),
+        );
+    }
+
+    /**
+     * ⭐ A1：合併時間線每列都有穩定唯一 key。
+     *
+     * ⛔ 不能用陣列索引——新事件插入時整批位移，列狀態會跳到別列；也不能單用
+     * `id`，因為 `order_events` 與 `fulfillment_events` 的自增 id 會撞號。
+     */
+    public function test_the_merged_timeline_gives_every_row_a_stable_unique_key(): void
+    {
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $fulfillment = FulfillmentOrder::factory()->submitted('SMM-KEY-1')->create([
+            'order_item_id' => $item->id,
+        ]);
+        $fulfillment->recordEvent(
+            FulfillmentEventCode::Submitted,
+            from: FulfillmentStatus::Ready,
+            to: FulfillmentStatus::Submitted,
+        );
+
+        $entries = OrderActivityTimeline::for($order->fresh());
+        $keys = array_column($entries, 'key');
+
+        $this->assertNotEmpty($keys);
+        $this->assertCount(count($keys), array_unique($keys), '⛔ key 必須唯一。');
+
+        foreach ($keys as $key) {
+            $this->assertMatchesRegularExpression('/\A(order|fulfillment):[0-9]+\z/', $key);
+        }
+
+        // ⛔ 兩次讀取必須得到完全相同的順序與 key（穩定排序）。
+        $this->assertSame($keys, array_column(OrderActivityTimeline::for($order->fresh()), 'key'));
+
+        /*
+         * ⛔ 兩個來源都必須能出現在同一條時間線上。
+         *
+         * `$this->order()` 本身不寫 order_events（訂單是 factory 直接建立的），
+         * 所以這裡明確補一筆，才驗證得到「合併」而不是「只剩履約事件」。
+         */
+        $order->events()->create([
+            'type' => OrderEvent::TYPE_ORDER_CREATED,
+            'summary' => '結帳驗證通過，訂單建立為待付款。',
+        ]);
+
+        $sources = array_unique(array_column(OrderActivityTimeline::for($order->fresh()), 'source'));
+        sort($sources);
+        $this->assertSame(['fulfillment', 'order'], $sources);
     }
 
     // ------------------------------------------------------------ M4C-ORDER-OPERATIONS-A：補開發票按鈕

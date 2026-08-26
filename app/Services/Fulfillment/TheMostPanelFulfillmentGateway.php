@@ -385,36 +385,42 @@ class TheMostPanelFulfillmentGateway implements FulfillmentGateway
         return FulfillmentSyncResult::status(
             $status,
             $decoded->status,
-            $this->readRemains($decoded),
+            $this->readCount($decoded, 'remains'),
+            $this->readCount($decoded, 'start_count'),
         );
     }
 
     /**
-     * The provider's `remains` figure, or null when it is not a value we accept.
+     * A non-negative count field (`remains`, `start_count`), or null.
      *
-     * ⭐ Owner 要求這個數字能在後台跨頁面看到,所以它會被落盤。既然要落盤,
+     * ⭐ Owner 要求這些數字能在後台跨頁面看到,所以它們會被落盤。既然要落盤,
      * 就必須先確定它是什麼。
+     *
+     * ⛔ 兩個欄位共用**完全相同**的規則,刻意不各寫一份——兩份規則就是兩份會
+     * 各自漂移的規則,而其中任何一份放寬都會讓一個未驗證的數字進入稅務／
+     * 營運紀錄旁邊的欄位。
      *
      * ⛔ 只接受非負整數,或 canonical 的非負十進位 digit string:
      *
      *  - ⛔ 拒絕 bool:`is_int(true)` 為 false,但寬鬆路徑常放行它。
      *  - ⛔ 拒絕 float:`1.0` 代表對方的 JSON 結構與我們以為的不同。
-     *  - ⛔ 拒絕負數:remains 不可能是負的;負值代表我們誤解了這個欄位。
+     *  - ⛔ 拒絕負數:這兩個欄位都不可能是負的;負值代表我們誤解了它。
      *  - ⛔ 拒絕前後空白、`+5`、`1e3`、`0x10`、空字串、array、object。
      *  - ⛔ 拒絕超出 PHP 整數安全範圍的值:存進去會失真。
      *
      * ⛔ 回 null 代表「這次沒拿到合法的值」,呼叫端必須**保留上一次已保存的
      * 值**,不得清空——一個畸形回應不該讓後台失去先前正確的資訊。
      *
-     * ⛔ `0` 是完全合法的:它代表全部補完。它與 null 是兩件不同的事。
+     * ⛔ `0` 是完全合法的:`remains=0` 代表全部補完,`start_count=0` 代表開始
+     * 前本來就是 0。它與 null 是兩件不同的事。
      */
-    private function readRemains(stdClass $decoded): ?int
+    private function readCount(stdClass $decoded, string $field): ?int
     {
-        if (! property_exists($decoded, 'remains')) {
+        if (! property_exists($decoded, $field)) {
             return null;
         }
 
-        $value = $decoded->remains;
+        $value = $decoded->{$field};
 
         if (is_bool($value) || is_float($value)) {
             return null;

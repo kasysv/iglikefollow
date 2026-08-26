@@ -35,18 +35,28 @@ final class FulfillmentSyncResult
          * ⛔ `0` 與 `null` 是兩件不同的事：前者是「補完了」，後者是「還不知道」。
          */
         public readonly ?int $remains = null,
+        /**
+         * ⭐ provider 回報的起始值（這張單開始前的既有數量）。
+         *
+         * ⛔ 與 `remains` 完全相同的規則：已由 gateway 驗證為非負整數；
+         * `null` 代表「這次沒拿到合法的值」，呼叫端必須保留上一次已保存的值，
+         * ⛔ 不得清空。`0` 與 `null` 是兩件不同的事。
+         */
+        public readonly ?int $startCount = null,
     ) {}
 
     /**
      * @param  string|null  $providerStatusToken  gateway allowlist 中的 exact token
      * @param  int|null  $remains  已驗證的非負整數，或 null
+     * @param  int|null  $startCount  已驗證的非負整數，或 null
      */
     public static function status(
         FulfillmentStatus $status,
         ?string $providerStatusToken = null,
         ?int $remains = null,
+        ?int $startCount = null,
     ): self {
-        return new self($status, $providerStatusToken, $remains);
+        return new self($status, $providerStatusToken, $remains, $startCount);
     }
 
     /**

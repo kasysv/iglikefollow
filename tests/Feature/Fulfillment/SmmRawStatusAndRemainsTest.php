@@ -550,8 +550,12 @@ class SmmRawStatusAndRemainsTest extends TestCase
 
             $this->assertStringContainsString('In progress', (string) $html, "{$label} 應顯示 provider 原文");
             $this->assertStringContainsString('1,250', (string) $html, "{$label} 應顯示 Remains");
-            // ⛔ 不得顯示本站翻譯的「處理中」取代原文。
-            $this->assertStringContainsString('剩餘數量', (string) $html, "{$label} 應有 Remains 欄位標籤");
+            /*
+             * ⛔ 欄位標籤：訂單頁依 Owner 指定的欄序改為「剩餘」，
+             * 履約列表／詳情維持「剩餘數量（Remains）」。兩者都以「剩餘」開頭，
+             * 所以這裡斷言共同前綴即可，不因命名差異誤判。
+             */
+            $this->assertStringContainsString('剩餘', (string) $html, "{$label} 應有 Remains 欄位標籤");
         }
 
         // ⛔ 打開後台頁面沒有產生任何 provider request。
@@ -585,6 +589,178 @@ class SmmRawStatusAndRemainsTest extends TestCase
 
         $this->assertStringContainsString('fulfillment:queue-status-sync', (string) $console);
         $this->assertStringContainsString('everyTenMinutes', (string) $console);
+    }
+
+    // ==================================== 6b. start_count（A1）
+
+    /**
+     * ⭐ `start_count` 與 `remains` 共用完全相同的驗證規則。
+     *
+     * ⛔ 兩份規則就是兩份會各自漂移的規則，而其中任何一份放寬都會讓未驗證的
+     * 數字進入後台顯示。這裡逐項確認兩者行為一致。
+     *
+     * @return array<string, array{0: mixed, 1: ?int}>
+     */
+    public static function startCountProvider(): array
+    {
+        return [
+            // 合法。
+            'zero int' => [0, 0],
+            'zero string' => ['0', 0],
+            'positive int' => [4200, 4200],
+            'canonical digit string' => ['4200', 4200],
+            // ⛔ 不合法：一律回 null，保留舊值。
+            'negative' => [-1, null],
+            'negative string' => ['-5', null],
+            'float' => [12.5, null],
+            'bool' => [true, null],
+            'array' => [[100], null],
+            'empty string' => ['', null],
+            'padded' => [' 100', null],
+            'plus sign' => ['+100', null],
+            'sci notation' => ['1e3', null],
+            'leading zero' => ['0100', null],
+            'non numeric' => ['many', null],
+            'overflow' => ['99999999999999999999', null],
+        ];
+    }
+
+    #[DataProvider('startCountProvider')]
+    public function test_start_count_follows_the_same_rules_as_remains(mixed $wire, ?int $expected): void
+    {
+        // 先存一個已知良好的值，才驗證得了「不合法時保留舊值」。
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['status' => 'In progress', 'start_count' => 999])
+            ->push(['status' => 'In progress', 'start_count' => $wire]);
+
+        $row = $this->submittedRow();
+        $this->sync($row);
+        $this->assertSame(999, $row->fresh()->provider_start_count);
+
+        $synced = $this->sync($row);
+
+        $this->assertSame(
+            $expected ?? 999,
+            $synced->provider_start_count,
+            '⛔ 不合法的 start_count 不得清掉舊值：'.var_export($wire, true),
+        );
+    }
+
+    /** ⛔ `0` 顯示為 `0`；`null` 顯示「尚未取得」。 */
+    public function test_start_count_zero_and_null_display_correctly(): void
+    {
+        $row = $this->submittedRow();
+
+        // 尚未同步。
+        $this->assertNull($row->provider_start_count);
+        $this->assertSame('尚未取得', $row->displayStartCount());
+
+        Http::fake([self::ENDPOINT => Http::response(['status' => 'In progress', 'start_count' => 0])]);
+        $synced = $this->sync($row);
+
+        $this->assertSame(0, $synced->provider_start_count);
+        $this->assertSame('0', $synced->displayStartCount());
+        $this->assertNotSame('尚未取得', $synced->displayStartCount());
+    }
+
+    /** 缺少 `start_count` 欄位時保留舊值。 */
+    public function test_a_missing_start_count_keeps_the_previous_value(): void
+    {
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['status' => 'In progress', 'start_count' => 88])
+            ->push(['status' => 'Partial']);
+
+        $row = $this->submittedRow();
+        $this->sync($row);
+        $synced = $this->sync($row);
+
+        $this->assertSame(FulfillmentStatus::Partial, $synced->status);
+        $this->assertSame(88, $synced->provider_start_count);
+    }
+
+    /** ⛔ unrecognised 回應不得覆蓋既有 start_count。 */
+    public function test_an_unrecognised_response_keeps_the_previous_start_count(): void
+    {
+        Http::fakeSequence(self::ENDPOINT)
+            ->push(['status' => 'In progress', 'start_count' => 500, 'remains' => 100])
+            ->push(['status' => 'Some Future State', 'start_count' => 7, 'remains' => 7]);
+
+        $row = $this->submittedRow();
+        $this->sync($row);
+        $synced = $this->sync($row);
+
+        $this->assertSame(500, $synced->provider_start_count);
+        $this->assertSame(100, $synced->provider_remains);
+    }
+
+    /** ⛔ terminal 之後不再輪詢，最後一次的 start_count 保留。 */
+    public function test_a_terminal_row_keeps_its_final_start_count(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([
+            'status' => 'Completed', 'start_count' => 1000, 'remains' => 0,
+        ])]);
+
+        $row = $this->submittedRow();
+        $synced = $this->sync($row);
+
+        $this->assertSame(FulfillmentStatus::Completed, $synced->status);
+        $this->assertSame(1000, $synced->provider_start_count);
+
+        $sent = count(Http::recorded());
+        $again = $this->sync($synced);
+
+        $this->assertSame($sent, count(Http::recorded()), '⛔ terminal 不再輪詢。');
+        $this->assertSame(1000, $again->provider_start_count);
+    }
+
+    /**
+     * ⭐ Owner 指定的八欄順序，⛔ 逐項固定。
+     *
+     * 已送出時間 → SMM 訂單編號 → SMM 服務名稱 → 起始值 → 數量 → 狀態
+     * → 剩餘 → 最後同步時間
+     */
+    public function test_the_order_page_shows_the_eight_columns_in_the_specified_order(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response([
+            'status' => 'In progress', 'start_count' => 4200, 'remains' => 1250,
+        ])]);
+
+        $row = $this->submittedRow();
+        $this->sync($row);
+        $row = $row->fresh();
+
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+        $reference = $row->orderItem->order->reference;
+
+        $full = (string) $this->actingAs($owner)->get("/admin/orders/{$reference}")->getContent();
+
+        /*
+         * ⛔ 只在「SMM 履約進度」區塊內比對位置。
+         *
+         * 「數量」「狀態」等字樣在商品快照、交易流程等其他區塊也會出現，
+         * 用整頁的 first-occurrence 位置會比到別的區塊，得到假的順序結論。
+         */
+        $sectionStart = strpos($full, 'SMM 履約進度');
+        $this->assertNotFalse($sectionStart, '找不到 SMM 履約進度區塊');
+
+        $sectionEnd = strpos($full, '訂單時間線', $sectionStart);
+        $html = substr($full, $sectionStart, ($sectionEnd ?: strlen($full)) - $sectionStart);
+
+        $labels = ['已送出時間', 'SMM 訂單編號', 'SMM 服務名稱', '起始值', '數量', '狀態', '剩餘', '最後同步時間'];
+
+        $previous = -1;
+
+        foreach ($labels as $label) {
+            $position = strpos($html, $label);
+
+            $this->assertNotFalse($position, "缺少欄位：{$label}");
+            $this->assertGreaterThan($previous, $position, "欄序不符：{$label} 出現位置早於前一欄");
+            $previous = $position;
+        }
+
+        // 值本身也要顯示。
+        $this->assertStringContainsString('4,200', $html);
+        $this->assertStringContainsString('1,250', $html);
     }
 
     // ==================================== 7. migration rollback guard
