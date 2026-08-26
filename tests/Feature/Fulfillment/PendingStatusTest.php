@@ -212,6 +212,90 @@ class PendingStatusTest extends TestCase
         }
     }
 
+    // ==================================== 2b. 跨 driver 的 constraint drop 語法
+
+    /**
+     * ⛔⛔ 每個 driver 必須選到它**真正支援**的 DROP 語法。
+     *
+     * ⭐ R2 修正一個真實缺陷：R1 把所有非 PostgreSQL 的 driver 都送往
+     * `ALTER TABLE … DROP CHECK`——那是 MySQL 語法。MariaDB 官方用
+     * `DROP CONSTRAINT`。R1 明明把 `mariadb` 列在支援清單裡卻沒有分支，
+     * 在 MariaDB 上舊 constraint 會留著，接著 `ADD CONSTRAINT` 因同名而失敗
+     * ——staging migrate 直接掛掉。
+     *
+     * ⛔ 這條測試只驗證**語法選擇**（純字串邏輯），⛔ 不宣稱在真實 MySQL 或
+     * MariaDB 上跑過——本機只有 SQLite。runtime 仍為 NOT VERIFIED，
+     * 已如實寫進結果文件。
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function dropSyntaxProvider(): array
+    {
+        return [
+            // MySQL 8.0.16+ 的 CHECK constraint 用 DROP CHECK。
+            'mysql' => ['mysql', 'DROP CHECK'],
+            // ⛔ MariaDB 官方語法是 DROP CONSTRAINT。
+            'mariadb' => ['mariadb', 'DROP CONSTRAINT'],
+            'pgsql' => ['pgsql', 'DROP CONSTRAINT'],
+        ];
+    }
+
+    #[DataProvider('dropSyntaxProvider')]
+    public function test_each_driver_selects_its_supported_drop_syntax(
+        string $driver,
+        string $expected,
+    ): void {
+        /*
+         * ⛔ 直接讀 migration 原始碼中的 `match` 分支——⛔ 不是重新實作一份
+         * 判斷邏輯（那只會測到我自己抄的第二份，兩份還會各自漂移）。
+         */
+        $source = file_get_contents(database_path(
+            'migrations/2026_08_27_100000_rebuild_fulfillment_guards_for_pending_status.php'
+        ));
+
+        $this->assertMatchesRegularExpression(
+            "/'{$driver}'[^=\n]*=>[^\n]*{$expected}/u",
+            $source,
+            "⛔ driver `{$driver}` 必須使用 `{$expected}`。",
+        );
+    }
+
+    /** ⛔ 不得再以泛用 `catch (Throwable)` 吞掉 DDL 錯誤。 */
+    public function test_ddl_errors_are_no_longer_swallowed(): void
+    {
+        $source = file_get_contents(database_path(
+            'migrations/2026_08_27_100000_rebuild_fulfillment_guards_for_pending_status.php'
+        ));
+
+        /*
+         * ⛔ R1 用 `try { DB::statement($sql); } catch (Throwable) {}` 把權限、
+         * 鎖等待、連線中斷與語法錯誤全部當成「沒關係」。一支會靜靜跳過保護、
+         * 卻回報成功的 migration，比直接失敗危險得多。
+         */
+        $this->assertStringNotContainsString('} catch (Throwable) {', $source);
+
+        // ⭐ 改為先精確查詢 constraint 是否存在。
+        $this->assertStringContainsString('information_schema', $source);
+        $this->assertStringContainsString('checkConstraintExists', $source);
+    }
+
+    /** ⛔ 表名與 constraint 名只能來自封閉 allowlist。 */
+    public function test_only_allowlisted_constraints_can_be_dropped(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_08_27_100000_rebuild_fulfillment_guards_for_pending_status.php'
+        );
+
+        $method = new \ReflectionMethod($migration, 'dropCheck');
+        $method->setAccessible(true);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/不在 allowlist 內/u');
+
+        // ⛔ 任意表名／constraint 名必須被拒絕，⛔ 不得拼進 DDL。
+        $method->invoke($migration, 'users', 'users_values_check');
+    }
+
     // ==================================== 3. exact token 比對
 
     /**

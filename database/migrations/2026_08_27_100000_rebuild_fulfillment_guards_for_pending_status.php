@@ -366,22 +366,115 @@ return new class extends Migration
     /**
      * ⛔ MySQL／PG 的 CHECK 必須先移除才能重建；名稱不存在時不得整支失敗。
      */
+    /**
+     * ⛔ 這兩張表是**唯一**允許被這支 migration 動到的表。
+     *
+     * ⛔ 表名與 constraint 名一律只來自程式內的封閉 allowlist，⛔ 絕不接受
+     * request、DB 或設定檔的任意值——它們會被直接拼進 DDL，那是 SQL injection
+     * 最直接的一條路，而 DDL 沒有 prepared statement 可以綁定識別字。
+     *
+     * @var array<string, string>
+     */
+    private const CHECK_CONSTRAINTS = [
+        'fulfillment_orders' => 'fulfillment_orders_values_check',
+        'fulfillment_events' => 'fulfillment_events_values_check',
+    ];
+
+    /**
+     * Drop one CHECK constraint, using the syntax that driver actually supports.
+     *
+     * ⛔⛔ R2 修正兩個真實缺陷：
+     *
+     * **1. MariaDB 用錯語法。** R1 把所有非 PostgreSQL 的 driver 都送往
+     * `ALTER TABLE … DROP CHECK`——那是 MySQL 語法。MariaDB 官方用
+     * `DROP CONSTRAINT [IF EXISTS]`。R1 明明把 `mariadb` 列在支援清單裡卻
+     * 沒有分支，在 MariaDB 上舊 constraint 會留著，接著 `ADD CONSTRAINT`
+     * 就會因同名而失敗——staging migrate 直接掛掉。
+     *
+     * **2. `catch (Throwable)` 吞掉了所有 DDL 錯誤。** 權限不足、鎖等待逾時、
+     * 連線中斷、語法錯誤全部被當成「沒關係」。⛔ 一支會靜靜跳過保護、
+     * 卻回報成功的 migration，比直接失敗危險得多。
+     *
+     * 現在改為：**先精確查詢 constraint 是否存在，再執行對應語法**；
+     * ⛔ 查詢或 drop 失敗一律讓 migration 中止。
+     */
     private function dropCheck(string $table, string $name): void
     {
-        $sql = DB::getDriverName() === 'pgsql'
-            ? "ALTER TABLE {$table} DROP CONSTRAINT IF EXISTS {$name}"
-            : "ALTER TABLE {$table} DROP CHECK {$name}";
-
-        try {
-            DB::statement($sql);
-        } catch (Throwable) {
-            /*
-             * ⛔ 刻意吞掉：MySQL 沒有 `DROP CHECK IF EXISTS`，而這支 migration
-             * 必須能在「guard 已存在」與「guard 不存在」兩種資料庫上都跑完。
-             * ⛔ 這裡不會遮蔽真正的問題——重建失敗會在下一行的 ADD CONSTRAINT
-             * 直接拋出。
-             */
+        // ⛔ allowlist：名稱必須完全等於我們自己宣告的那一組。
+        if ((self::CHECK_CONSTRAINTS[$table] ?? null) !== $name) {
+            throw new RuntimeException("⛔ 不在 allowlist 內的 constraint：{$table}.{$name}");
         }
+
+        if (! $this->checkConstraintExists($table, $name)) {
+            /*
+             * 不存在就不用 drop——這正是 R1 用 catch 想處理的情況，
+             * ⭐ 但現在是**確認過**它不存在，而不是「試著 drop，錯了就算了」。
+             */
+            return;
+        }
+
+        $driver = DB::getDriverName();
+
+        $sql = match ($driver) {
+            /*
+             * ⛔ PostgreSQL 與 MariaDB：`DROP CONSTRAINT`。
+             * MariaDB 的 `DROP CHECK` 不是官方語法。
+             */
+            'pgsql', 'mariadb' => "ALTER TABLE {$table} DROP CONSTRAINT {$name}",
+
+            /*
+             * ⛔ MySQL：`DROP CHECK`（8.0.16+ 支援 CHECK constraint 的語法）。
+             * ⛔ 不混用未證實的語法——MySQL 的 `DROP CONSTRAINT` 直到 8.0.19
+             * 才存在，寫過去會在較舊的 8.0.x 直接語法錯誤。
+             */
+            'mysql' => "ALTER TABLE {$table} DROP CHECK {$name}",
+
+            default => throw new RuntimeException(
+                "⛔ 未支援的資料庫 driver：{$driver}，無法移除 CHECK constraint。"
+            ),
+        };
+
+        // ⛔ 不 catch：權限、鎖、語法錯誤都必須讓 migration 停下來。
+        DB::statement($sql);
+    }
+
+    /**
+     * Does this CHECK constraint currently exist?
+     *
+     * ⛔ 用 `information_schema.TABLE_CONSTRAINTS` 精確查詢，⛔ 不靠「試著
+     * drop 看看會不會錯」——後者無法分辨「不存在」與「沒有權限」。
+     *
+     * ⛔ 這裡用 bindings 傳值（它們是**資料**，不是識別字），
+     * 與上面直接拼進 DDL 的表名／constraint 名不同——那兩個已由 allowlist 保證。
+     */
+    private function checkConstraintExists(string $table, string $name): bool
+    {
+        $driver = DB::getDriverName();
+
+        if ($driver === 'pgsql') {
+            return DB::table('information_schema.table_constraints')
+                ->where('table_name', $table)
+                ->where('constraint_name', $name)
+                ->where('constraint_type', 'CHECK')
+                ->exists();
+        }
+
+        /*
+         * MySQL／MariaDB：⛔ 必須限定在**目前的 schema**。
+         *
+         * `information_schema` 是跨資料庫的：同一台伺服器上另一個資料庫若剛好
+         * 有同名的表與 constraint，不限定 schema 就會查到別人的，然後對本地
+         * 這張表發出一個它其實不需要的 DROP。
+         *
+         * ⛔ 用 `whereRaw` 比較兩個 SQL 識別字，⛔ 不是把 `DATABASE()` 當成
+         * 一個字串值綁進 binding——那樣會變成在比對字面字串 "DATABASE()"。
+         */
+        return DB::table('information_schema.TABLE_CONSTRAINTS')
+            ->whereRaw('CONSTRAINT_SCHEMA = DATABASE()')
+            ->where('TABLE_NAME', $table)
+            ->where('CONSTRAINT_NAME', $name)
+            ->where('CONSTRAINT_TYPE', 'CHECK')
+            ->exists();
     }
 
     /** @param  list<string>  $values */

@@ -1573,9 +1573,41 @@ class CustomerOrderLookupTest extends TestCase
 
         foreach ([self::EMAIL, self::PHONE, 'SMM-SECRET-9911', 'PROVIDER SERVICE NAME',
             'In progress', 'TheMostPanel', 'SMM',
+            /*
+             * ⭐⭐ R2：後台改為顯示 exact `Pending`（Owner：「PENDING 就是
+             * PENDING」），⛔ 但公開頁**不得**跟著暴露 provider 原文。
+             *
+             * 這兩件事的判準不同：後台那一欄是給客服跟 SMM 後台逐字對照用的；
+             * 公開頁是給客人看的，它只該知道「進行中」。
+             */
+            'Pending',
         ] as $secret) {
             $this->assertStringNotContainsString($secret, $html, "⛔ 公開頁不得出現 {$secret}。");
         }
+    }
+
+    /**
+     * ⭐⭐ R2：`Pending` 的履約列在公開頁仍顯示「進行中」。
+     *
+     * ⛔ 後台顯示 exact token 是一個**只適用後台**的決定。這條測試確保那個
+     * 改動沒有順著資料流溢到公開頁——它們共用同一個 enum，很容易一起改到。
+     */
+    public function test_a_pending_fulfillment_still_reads_as_in_progress_publicly(): void
+    {
+        $order = $this->orderFor();
+
+        FulfillmentOrder::factory()->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Pending,
+            'provider_order_id' => '99130',
+            'submitted_at' => now(),
+        ]);
+
+        $response = $this->lookup(['email' => self::EMAIL, 'phone' => self::PHONE])->assertOk();
+
+        $response->assertSee('進行中');
+        // ⛔ provider 原文絕不出現在公開頁。
+        $response->assertDontSee('Pending');
     }
 
     // ==================================== 2f. 公開狀態藥丸

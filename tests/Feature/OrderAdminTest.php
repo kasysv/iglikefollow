@@ -576,9 +576,10 @@ class OrderAdminTest extends TestCase
         );
 
         $entries = collect(OrderActivityTimeline::for($order->fresh()));
-        $pending = $entries->firstWhere('label', 'SMM 平台等待處理中');
+        $pending = $entries->firstWhere('label', OrderActivityTimeline::PENDING_LABEL);
 
         $this->assertNotNull($pending, '⭐ Pending 必須有自己的句子。');
+        // ⛔ 顏色仍是封閉的 `info`。
         $this->assertSame('info', $pending['color']);
 
         $html = Livewire::test(OrderEventsRelationManager::class, [
@@ -586,9 +587,31 @@ class OrderAdminTest extends TestCase
             'pageClass' => ViewOrder::class,
         ])->assertOk()->html();
 
-        $this->assertStringContainsString('SMM 平台等待處理中', $html);
-        // ⛔ 不得把 Pending 說成已進行中。
+        /*
+         * ⭐⭐ R2：時間線顯示固定本地前綴 ＋ **exact token**。
+         *
+         * Owner 原話：「PENDING 就是 PENDING，為什麼硬要塞給他」。
+         * R1 寫成「SMM 平台等待處理中」——雖然沒有映射成 Submitted，
+         * 但那仍是把 provider 的狀態改寫成本站文案。後台這一欄是給客服拿去
+         * 跟 SMM 後台逐字對照用的。
+         */
+        $this->assertStringContainsString('SMM 平台狀態：Pending', $html);
+
+        // ⛔ 三種翻譯過的說法都不得出現。
+        $this->assertStringNotContainsString('等待處理中', $html);
         $this->assertStringNotContainsString('SMM 平台已進行中', $html);
+        $this->assertStringNotContainsString('SMM 平台已送出', $html);
+    }
+
+    /** ⭐ R2：後台的履約狀態 label 對此 case 顯示 exact `Pending`。 */
+    public function test_the_admin_status_label_is_the_exact_provider_token(): void
+    {
+        $this->assertSame('Pending', FulfillmentStatus::Pending->label());
+
+        // ⛔ 不得再是任何翻譯過的說法。
+        foreach (['等待處理中', '已送出', '處理中'] as $translated) {
+            $this->assertNotSame($translated, FulfillmentStatus::Pending->label());
+        }
     }
 
     /**

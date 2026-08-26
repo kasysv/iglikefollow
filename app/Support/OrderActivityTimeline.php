@@ -28,6 +28,14 @@ use Illuminate\Support\Carbon;
  */
 final class OrderActivityTimeline
 {
+    /**
+     * ⭐ Pending 事件的固定顯示句：本地前綴 ＋ exact provider token。
+     *
+     * ⛔ 定義只有一份：label 與 color 兩處都讀它。兩邊各寫一份字面值，
+     * 某天只改一處就會出現一個顯示正確、顏色卻掉回灰色的事件。
+     */
+    public const PENDING_LABEL = 'SMM 平台狀態：Pending';
+
     /** @return list<array{created_at: Carbon, source: string, label: string, smm_service_name: ?string}> */
     public static function for(Order $order): array
     {
@@ -103,7 +111,7 @@ final class OrderActivityTimeline
      *
      * 語意分工（施工單建議）：
      *  - `success`：付款成功、已完成
-     *  - `info`：進行中、已送出、等待處理中
+     *  - `info`：進行中、已送出、Pending
      *  - `warning`：設定阻擋、部分完成、結果不明
      *  - `danger`：失敗、取消、無法辨識
      *  - `gray`：建立紀錄等中性事件
@@ -113,6 +121,22 @@ final class OrderActivityTimeline
      */
     private static function color(string $label): string
     {
+        /*
+         * ⭐⭐ Pending 這一句**先於**所有 `str_contains` 判斷，且用**全等**比對。
+         *
+         * ⛔ 兩個理由：
+         *
+         *  1. 它的內容是 `SMM 平台狀態：Pending`——沒有任何一個中文關鍵字會
+         *     命中，若不特別處理就會掉進 `default` 變成灰色。施工單指定 `info`。
+         *  2. ⛔ 用**全等**而不是 `str_contains`：這一句是我們自己組出來的固定
+         *     字面值，全等比對確保「只有這一句」會拿到這個顏色。若哪天有人讓
+         *     provider 的任意字串流進 label，它不會因為剛好含有 `Pending`
+         *     就取得一個 CSS token。
+         */
+        if ($label === self::PENDING_LABEL) {
+            return 'info';
+        }
+
         return match (true) {
             str_contains($label, '已完成'),
             str_contains($label, '付款成功'),
@@ -129,8 +153,8 @@ final class OrderActivityTimeline
             str_contains($label, '需人工'),
             str_contains($label, '對帳') => 'warning',
 
+            // ⛔ 移除了 `等待處理`：那句已不存在（Pending 改為不翻譯，見上方全等比對）。
             str_contains($label, '進行中'),
-            str_contains($label, '等待處理'),
             str_contains($label, '下單'),
             str_contains($label, '已送出') => 'info',
 
@@ -155,8 +179,18 @@ final class OrderActivityTimeline
 
         if ($event->event_code === FulfillmentEventCode::StatusSynced) {
             return match ($event->to_status) {
-                // ⭐ 獨立顯示，⛔ 不翻成「已送出」或「已進行中」——那是三件不同的事。
-                FulfillmentStatus::Pending => 'SMM 平台等待處理中',
+                /*
+                 * ⭐⭐ 固定本地前綴 ＋ exact token，⛔ 不翻譯。
+                 *
+                 * Owner：「PENDING 就是 PENDING」。前綴（`SMM 平台狀態：`）是
+                 * 我們自己的固定字串，讓這一列讀得懂；冒號後面逐字保留
+                 * provider 的 token，客服才能拿去跟 SMM 後台對照。
+                 *
+                 * ⛔ 這裡的 `Pending` 是**寫死的字面值**，⛔ 不是把 DB 或
+                 * provider 回應的任意字串接進來——後者會讓對方的回應內容直接
+                 * 出現在我們的畫面上。
+                 */
+                FulfillmentStatus::Pending => self::PENDING_LABEL,
                 FulfillmentStatus::Processing => 'SMM 平台已進行中',
                 FulfillmentStatus::Completed => 'SMM 平台已完成',
                 FulfillmentStatus::Partial => 'SMM 平台部分完成',

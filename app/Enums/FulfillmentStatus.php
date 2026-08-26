@@ -74,8 +74,20 @@ enum FulfillmentStatus: string
             self::Ready => '待送出',
             self::Submitting => '送出中',
             self::Submitted => '已送出',
-            // ⛔ 顯示為「等待處理中」,⛔ 不翻成已送出或處理中——那是三件不同的事。
-            self::Pending => '等待處理中',
+            /*
+             * ⭐⭐ 後台顯示 exact `Pending`，⛔ **不翻譯**。
+             *
+             * Owner 原話：「PENDING 就是 PENDING，為什麼硬要塞給他」。
+             *
+             * ⛔ R1 曾寫成「等待處理中」——雖然沒有再映射成 `Submitted`，
+             * 但那仍然是把 provider 的狀態改寫成本站文案。後台這一欄是給客服
+             * 拿去跟 SMM 後台**逐字對照**用的：翻譯過的字串對不上對方畫面上的
+             * 任何東西，等於把一個可對照的事實變成一個要再翻譯回去的猜謎。
+             *
+             * ⛔ 這只適用**後台**。公開 `/order-check` 仍映射為「進行中」——
+             * 那是客戶語意，⛔ 不得向客人暴露供應商原文。
+             */
+            self::Pending => 'Pending',
             self::Processing => '處理中',
             self::Completed => '已完成',
             self::Partial => '部分完成',
