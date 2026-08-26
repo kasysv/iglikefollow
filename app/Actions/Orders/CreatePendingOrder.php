@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\OrderEvent;
 use App\Models\PaymentAttempt;
 use App\Models\ServiceVariant;
+use App\Support\ContactLookupHash;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -60,6 +61,17 @@ class CreatePendingOrder
                 'currency' => $variant->currency ?: 'TWD',
                 'customer_email' => $contact['customer_email'],
                 'customer_phone' => $contact['customer_phone'] ?? null,
+                /*
+                 * ⭐ 免會員訂單查詢用的 keyed lookup hash。
+                 *
+                 * ⛔ 與訂單在**同一個 transaction** 內寫入：分開寫會出現一段
+                 * 「訂單已存在但查不到」的時間窗，而客人付完款的第一件事往往
+                 * 就是去查訂單。
+                 *
+                 * ⛔ 沒有手機時 phone hash 為 null（手機是選填欄位）。
+                 */
+                'customer_email_lookup_hash' => ContactLookupHash::forEmail($contact['customer_email']),
+                'customer_phone_lookup_hash' => ContactLookupHash::forPhone($contact['customer_phone'] ?? null),
                 'invoice_kind' => $contact['invoice_kind'],
                 'personal_invoice_mode' => $contact['personal_invoice_mode'] ?? null,
                 'carrier_number' => $contact['carrier_number'] ?? null,

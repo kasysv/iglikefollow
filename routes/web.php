@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\MockCheckoutController;
+use App\Http\Controllers\OrderLookupController;
 use App\Http\Controllers\StorefrontController;
 use App\Http\Middleware\NeverIndex;
 use App\Support\IndexingPolicy;
@@ -14,6 +15,23 @@ Route::get('/', [StorefrontController::class, 'home'])->name('home');
  * ⛔ 主導覽連結一律指向這個乾淨路徑,不用 query／fragment 當主形式。
  */
 Route::get('/faq', [StorefrontController::class, 'faq'])->name('faq');
+
+/*
+ * 免會員訂單查詢結果。
+ *
+ * ⛔ POST only：查詢條件含 Email 與手機，⛔ 絕不能進 URL、query string 或
+ * redirect location——那會留在瀏覽器歷史、referrer header 與沿途每一個
+ * proxy log 裡。結果直接 render，不 redirect。
+ *
+ * ⛔ `NeverIndex`：這一頁含客人的訂單內容，永遠不得被索引；controller 另外
+ * 設 `Cache-Control: private, no-store`，連瀏覽器本機都不落磁碟。
+ *
+ * ⛔ 嚴格 throttle：兩項門檻擋得住隨機猜測，但擋不住有人拿一份 Email 名單
+ * 慢慢試。10 次／分鐘讓那件事變得不划算。
+ */
+Route::post('/order-lookup', OrderLookupController::class)
+    ->middleware(['throttle:10,1', NeverIndex::class])
+    ->name('order-lookup');
 
 Route::get('/services/{platform}', [StorefrontController::class, 'platform'])
     ->name('platform');

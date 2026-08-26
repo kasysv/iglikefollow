@@ -296,7 +296,15 @@ class OrderAdminTest extends TestCase
         $invoice = Invoice::factory()->create([
             'order_id' => $order->id,
             'invoice_number' => 'ED99887766',
-            'random_code' => '4321',
+            /*
+             * ⛔ 這個值會被當成「不得出現在 Editor HTML」的 sentinel 逐字搜尋。
+             *
+             * 原本是 `4321`——四位數字太容易與頁面上其他數字（例如履約的
+             * 起始值／剩餘數量、金額千分位）巧合相符，讓這個安全測試偶發
+             * 誤報。改用一個不可能自然出現的字串，測的仍是同一件事，但
+             * 不再受其他區塊的數字影響。
+             */
+            'random_code' => 'RND-EDITOR-ONLY-SENTINEL',
             'provider_reference' => 'EDITOR-SAFE-REF-11223',
         ]);
 

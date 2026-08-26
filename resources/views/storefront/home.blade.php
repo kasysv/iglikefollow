@@ -173,5 +173,53 @@
             </div>
         </section>
     @endif
+
+    {{--
+        免會員訂單查詢。
+
+        ⛔ 存在於**初始 HTML**（不是 JS 產生），因為 Owner 要求客人一進首頁
+        就看得到；同時這代表爬蟲也看得到這個區塊——所以它只是一個表單，
+        ⛔ 不含任何交易關鍵字文案，也不改變首頁既有的 Title／Description／
+        H1／canonical／FAQ owner 分工。
+
+        ⛔ POST：Email 與手機絕不能進 URL、query string 或 referrer。
+    --}}
+    <section id="order-lookup" class="border-t border-black/10 bg-white">
+        <div class="mx-auto w-full max-w-3xl px-4 py-16 sm:px-6">
+            <h2 class="text-3xl font-bold tracking-[-0.03em]">訂單查詢</h2>
+            <p class="mt-3 text-base leading-7 text-black/70">
+                不需要註冊。請填寫訂單編號、Email、手機號碼其中<strong>任兩項</strong>即可查詢進度。
+            </p>
+
+            <form method="POST" action="{{ route('order-lookup') }}" class="mt-8 space-y-5">
+                @csrf
+
+                <div>
+                    <label for="lookup-reference" class="block text-sm font-medium text-black">訂單編號</label>
+                    <input type="text" id="lookup-reference" name="reference" autocomplete="off"
+                           placeholder="IGL-XXXXXXXXXXXX"
+                           class="mt-2 block min-h-11 w-full rounded-lg border border-black/15 px-3 py-2 text-base">
+                </div>
+
+                <div>
+                    <label for="lookup-email" class="block text-sm font-medium text-black">Email</label>
+                    <input type="email" id="lookup-email" name="email" autocomplete="email"
+                           class="mt-2 block min-h-11 w-full rounded-lg border border-black/15 px-3 py-2 text-base">
+                </div>
+
+                <div>
+                    <label for="lookup-phone" class="block text-sm font-medium text-black">手機號碼</label>
+                    <input type="tel" id="lookup-phone" name="phone" autocomplete="tel"
+                           class="mt-2 block min-h-11 w-full rounded-lg border border-black/15 px-3 py-2 text-base">
+                    <p class="mt-2 text-sm text-black/55">請與下單時填寫的格式一致。</p>
+                </div>
+
+                <button type="submit"
+                        class="inline-flex min-h-11 items-center rounded-lg bg-black px-5 py-2.5 text-base font-semibold text-white">
+                    查詢訂單
+                </button>
+            </form>
+        </div>
+    </section>
 </main>
 @endsection
