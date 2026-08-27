@@ -99,15 +99,27 @@ final class PublicOrderPresenter
         /*
          * ⛔ 履約列可能不存在（尚未付款、或付款後還沒建立）。
          *
-         * ⭐ 一個商品項目可能有一條批次鏈（Owner 建立的更換履約）。
-         * **目前的公開狀態與剩餘數量一律取鏈尾那一批**——那是現在真正在跑的
-         * 那一筆。⛔ 取第 1 批會讓客人看到一個已經被更換掉的舊狀態
-         * （例如「請聯絡客服」），而實際上新的一批正在進行中。
+         * ⛔⛔ 上方原購買區塊只反映**第 1 批原始履約**，⛔ 不是鏈尾。
+         *
+         * ⭐ 初版我在這裡取 `->last()`，理由寫的是「鏈尾才是現在真正在跑的
+         * 那一筆」。⛔ 那個理由對「整個商品項目」成立，但這一欄描述的是
+         * **上方那張原購買資料**——於是原始履約已 `Canceled` 時，
+         * 上方仍顯示更換批次的「進行中／50」，下方第 1 次更換也顯示同樣的
+         * 「進行中／50」。⭐ 兩筆看起來像同一批，客人**看不出**原始單已經
+         * 取消、而新的一批正在進行。Owner 已在 staging 實際遇到。
+         *
+         * ⭐ 現在的語意是「每個批次各自負責自己的狀態」：
+         * 上方用第 1 批，下方每一批用自己的（見 `replacements()`）。
+         *
+         * ⛔ 用 `sequence_no === 1` 判定，⛔ 不用 `->first()`：
+         * sequence 是這條鏈的定義欄位，而集合順序只是碰巧相符。
          *
          * ⛔ 不存在時是 null，呼叫端必須處理，不得假設有值。
          */
         $batches = $item->fulfillmentOrders;
-        $fulfillment = $batches->last();
+        $fulfillment = $batches->first(
+            fn (FulfillmentOrder $batch): bool => (int) $batch->sequence_no === 1
+        );
 
         $target = self::target($item);
         $status = self::status($order, $fulfillment);

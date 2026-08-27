@@ -2209,4 +2209,159 @@ class CustomerOrderLookupTest extends TestCase
             );
         }
     }
+
+    // ==================================== 批次狀態各自獨立（HTTP render）
+
+    /**
+     * ⛔⛔ 同一張卡片必須**同時**看到兩個各自獨立的批次結果。
+     *
+     * ⭐ Owner 在 staging 遇到的實際情形：原始履約已 `Canceled`，
+     * 但上方原購買區塊卻顯示更換批次的「進行中／50」，上下兩筆看起來
+     * 像同一批——客人無法看懂原始單已取消、更換單正在進行。
+     *
+     * ⛔ 這條刻意走**真實 HTTP render**，⛔ 不只看 presenter 陣列：
+     * 施工單明確要求「不可能只改舊測試的 expected value」。
+     * ⭐ 真正要證明的是**畫面上**同時出現兩個不同的結果。
+     */
+    public function test_the_card_shows_the_original_and_the_replacement_independently(): void
+    {
+        $order = $this->orderFor();
+        $item = $order->items()->first();
+
+        // 第 1 批：原始履約，已被供應商取消。
+        $parent = FulfillmentOrder::factory()->submitted('SMM-ORIG-1')->create([
+            'order_item_id' => $item->id,
+        ]);
+
+        DB::table('fulfillment_orders')->where('id', $parent->id)->update([
+            'status' => FulfillmentStatus::Canceled->value,
+            'provider_status_code' => 'Canceled',
+            'provider_remains' => 1000,
+        ]);
+
+        // 第 2 批：Owner 建立的更換，正在進行中。
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent->fresh(), 'https://instagram.com/replacement_account', 250)
+            ->submitted('SMM-REPL-2')
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_status_code' => 'In progress',
+            'provider_remains' => 50,
+        ]);
+
+        $response = $this->lookup([
+            'reference' => $order->reference,
+            'email' => self::EMAIL,
+        ])->assertOk();
+
+        $html = $response->getContent();
+
+        /*
+         * ⭐ 兩種公開語意必須**同時**存在於同一頁。
+         *
+         * ⛔ 若上方仍取鏈尾，「請聯絡客服」根本不會出現；
+         * ⛔ 若下方被上方覆蓋，「進行中」不會出現。
+         */
+        $this->assertStringContainsString('請聯絡客服', $html, '⛔⛔ 上方原始批次必須顯示「請聯絡客服」。');
+        $this->assertStringContainsString('進行中', $html, '⛔⛔ 下方更換批次必須顯示「進行中」。');
+
+        // ⭐ 原購買數量仍是客人當初買的份數。
+        $this->assertStringContainsString('1,000', $html);
+        // ⭐ 更換批次的實際數量只出現在更換紀錄。
+        $this->assertStringContainsString('250', $html);
+
+        /*
+         * ⛔⛔ provider 秘密與 raw token 一律 0 洩漏——本輪只改「取哪一批」，
+         * ⛔ 不得因此讓任何內部資料流到公開頁。
+         */
+        foreach (['SMM-ORIG-1', 'SMM-REPL-2', 'FAKE-SERVICE-0000',
+            'Canceled', 'In progress', 'TheMostPanel', 'themostpanel',
+        ] as $forbidden) {
+            $this->assertStringNotContainsString($forbidden, $html, "⛔ 公開頁外洩：{$forbidden}");
+        }
+    }
+
+    /**
+     * ⛔ 上方那一批是用 `sequence_no === 1` 選的，⛔ 不是「集合的第一筆」。
+     *
+     * ⭐ 誠實說明：在目前的程式下這兩種寫法**行為相同**——
+     * `OrderItem::fulfillmentOrders()` 帶了 `orderBy('sequence_no')`，
+     * 所以集合第一筆剛好就是第 1 批。我實測確認過（把判定換成
+     * `->first()` 之後上面那條 HTTP 測試仍然全綠）。
+     *
+     * ⛔ 那為什麼還要用 sequence 判定、並補這一條測試？
+     * 因為「集合順序」是一個**碰巧成立**的前提：它由另一個檔案的 relation
+     * 定義決定，而那個定義隨時可能因為別的需求被改（例如改成最新在前，
+     * 後台列表就是那樣排的）。⭐ 一旦順序反轉，`->first()` 會**靜默**開始
+     * 顯示鏈尾——正好回到 Owner 這次遇到的缺陷，而且沒有任何測試會紅。
+     *
+     * ⭐ 這條測試直接把「順序改變也不影響選批次」釘住：
+     * 明確以反序載入關聯，再確認上方仍是第 1 批。
+     */
+    public function test_the_original_batch_is_chosen_by_sequence_not_by_collection_order(): void
+    {
+        $order = $this->orderFor();
+        $item = $order->items()->first();
+
+        $parent = FulfillmentOrder::factory()->submitted('SMM-SEQ-1')->create([
+            'order_item_id' => $item->id,
+        ]);
+
+        DB::table('fulfillment_orders')->where('id', $parent->id)->update([
+            'status' => FulfillmentStatus::Canceled->value,
+        ]);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent->fresh(), 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-SEQ-2')
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 50,
+        ]);
+
+        /*
+         * ⭐ 刻意以**反序**預載關聯：模擬「有人把 relation 的排序改掉」。
+         * ⛔ 若選批次靠的是集合順序，這裡就會取到鏈尾而顯示「進行中」。
+         */
+        $fresh = Order::query()
+            ->with(['items.fulfillmentOrders' => fn ($q) => $q->reorder('sequence_no', 'desc')])
+            ->findOrFail($order->id);
+
+        $shaped = PublicOrderPresenter::for($fresh);
+        $shapedItem = $shaped['items'][0];
+
+        $this->assertSame(
+            '請聯絡客服',
+            $shapedItem['status'],
+            '⛔⛔ 上方必須永遠是第 1 批，⛔ 不得受集合順序影響。',
+        );
+        $this->assertSame('-', $shapedItem['remains']);
+
+        // ⭐ 下方仍然只列更換批次，且用自己的狀態。
+        $this->assertCount(1, $shapedItem['replacements']);
+        $this->assertSame('進行中', $shapedItem['replacements'][0]['status']);
+    }
+
+    /**
+     * ⭐ 沒有更換批次時，上方仍照第 1 批顯示——⛔ 本輪不得改變單批次行為。
+     */
+    public function test_a_single_batch_order_still_shows_its_own_status(): void
+    {
+        $order = $this->orderFor();
+
+        FulfillmentOrder::factory()->submitted('SMM-SOLO-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'provider_remains' => 300,
+        ]);
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+
+        $this->assertSame('進行中', $shaped['items'][0]['status']);
+        $this->assertSame('300', $shaped['items'][0]['remains']);
+        $this->assertSame([], $shaped['items'][0]['replacements']);
+    }
 }

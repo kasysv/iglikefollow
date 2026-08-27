@@ -651,7 +651,13 @@ class FulfillmentReplacementTest extends TestCase
     }
 
     /**
-     * ⭐ 公開頁：顯示更換紀錄與**鏈尾**的客戶狀態。
+     * ⭐ 公開頁：上方原始批次與下方更換紀錄**各自顯示自己的狀態**。
+     *
+     * ⛔⛔ 這條測試原本把「上方取鏈尾」寫成規格，而那正是 Owner 在 staging
+     * 看到的缺陷：原始履約已 `Canceled`，上方卻顯示「進行中／50」，
+     * 上下兩筆看起來像同一批，客人無法看懂原始單已取消、更換單正在進行。
+     *
+     * ⭐ Owner 指定的新語意：上方只反映**第 1 批原始履約**。
      *
      * ⛔ 完全不含 provider order ID／service ID／service name／raw token／
      * SMM／TheMostPanel／操作者／Email／手機。
@@ -682,14 +688,24 @@ class FulfillmentReplacementTest extends TestCase
         $shaped = PublicOrderPresenter::for($parent->orderItem->order->fresh());
         $item = $shaped['items'][0];
 
-        // ⭐ 目前狀態取鏈尾：進行中，⛔ 不是 parent 的「請聯絡客服」。
-        $this->assertSame('進行中', $item['status']);
+        /*
+         * ⛔⛔ 上方原始區塊只反映**第 1 批**。
+         *
+         * parent 已 `Canceled`，所以公開語意是「請聯絡客服」、剩餘 `-`。
+         * ⛔ 不得因為鏈尾正在跑就顯示「進行中」——那會讓客人以為原始單
+         * 還會自己完成。
+         */
+        $this->assertSame('請聯絡客服', $item['status']);
+        $this->assertSame('-', $item['remains']);
+        $this->assertSame('danger', $item['status_tone']);
 
         // ⭐ 原購買數量與原下單 target 維持原意。
         $this->assertSame(1000, $item['quantity']);
         $this->assertSame('original_account', $item['target']);
 
-        // ⭐ 更換紀錄。
+        /*
+         * ⭐ 下方更換紀錄用**自己**的狀態與剩餘，⛔ 不被上方覆蓋。
+         */
         $this->assertCount(1, $item['replacements']);
         $replacement = $item['replacements'][0];
         $this->assertSame(2, $replacement['sequence']);
@@ -697,6 +713,8 @@ class FulfillmentReplacementTest extends TestCase
         $this->assertSame(self::NEW_TARGET, $replacement['target_url']);
         $this->assertSame(250, $replacement['quantity']);
         $this->assertSame('進行中', $replacement['status']);
+        $this->assertSame('80', $replacement['remains']);
+        $this->assertSame('info', $replacement['status_tone']);
 
         // ⛔ 整包輸出不得含任何 provider 資料。
         $serialised = json_encode($shaped, JSON_UNESCAPED_UNICODE);
