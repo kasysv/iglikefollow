@@ -140,6 +140,31 @@ return new class extends Migration
 
         $this->dropShapeGuard();
         $this->dropIndexIfExists('fulfillment_orders', self::PARENT_UNIQUE);
+
+        /*
+         * ⛔⛔ 索引交換的順序：**先建立** legacy unique，**再刪除** composite。
+         *
+         * ⭐ R2 修正。`order_item_id` 有外鍵，而 MySQL 8.0 官方明確規定
+         * referencing foreign-key columns 必須**持續**具備相同順序的前導索引，
+         * 且不能直接刪除外鍵仍需要的那個索引。
+         * https://dev.mysql.com/doc/refman/8.0/en/create-table-foreign-keys.html
+         *
+         * ⛔ R1 的順序是相反的（先刪 composite、最後才重建單欄 unique），
+         * 中間那段時間 `order_item_id` 沒有任何可用的前導索引。SQLite 不在乎，
+         * 所以本機測試全綠——**但 staging 是 MySQL 8.0.42，它會直接拒絕那個
+         * DDL**，回滾會在中途失敗並留下半改過的 schema。
+         *
+         * ⭐ 正確解法就是讓兩個索引在交換的瞬間**短暫共存**：
+         * ⛔ 不是暫時關閉 `FOREIGN_KEY_CHECKS`、⛔ 不是 drop／重建外鍵、
+         * ⛔ 也不是吞掉 DDL 錯誤——那三種都只是讓錯誤不出現，
+         * 而不是讓操作真的安全。
+         *
+         * ⛔ 這與 `up()` 對稱：那裡也是先建 composite、再刪 legacy。
+         */
+        Schema::table('fulfillment_orders', function (Blueprint $table): void {
+            $table->unique('order_item_id', self::ORDER_ITEM_UNIQUE);
+        });
+
         $this->dropIndexIfExists('fulfillment_orders', self::CHAIN_UNIQUE);
 
         Schema::table('fulfillment_orders', function (Blueprint $table): void {
@@ -149,11 +174,6 @@ return new class extends Migration
             $table->dropColumn('target_value_override');
             $table->dropConstrainedForeignId('replaces_fulfillment_order_id');
             $table->dropColumn('sequence_no');
-        });
-
-        // ⛔ 恢復原本的單欄 unique：沒有 replacement 時它與新規則等價。
-        Schema::table('fulfillment_orders', function (Blueprint $table): void {
-            $table->unique('order_item_id', self::ORDER_ITEM_UNIQUE);
         });
 
         /*
