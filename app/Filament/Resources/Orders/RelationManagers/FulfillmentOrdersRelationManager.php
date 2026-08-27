@@ -158,11 +158,31 @@ class FulfillmentOrdersRelationManager extends RelationManager
                  * ⛔ 刻意**不設** Remains、原訂購量、商品或 provider 的上下限
                  * ——Owner 是那個知道 SMM 後台實際發生什麼的人。
                  *
-                 * ⛔⛔ R1 修正：改用 `integer()` ＋ `step(1)`，⛔ 不是只用
-                 * `numeric()`。初版只用 `numeric()`，於是 `1.5` 通過表單驗證後
-                 * 被 PHP 的型別轉換靜默變成 `1`——Owner 明確要求「不自動截斷或
-                 * 調整」，而靜默取整正是最難察覺的那一種：畫面顯示成功，
-                 * 送出去的數量卻不是他打的那個。
+                 * ⛔⛔ R4 修正：⛔ 不得使用 `integer()` 或 `numeric()`。
+                 *
+                 * ⭐ Owner 在 staging 完全不改預設的 `50` 就送出，卻收到
+                 * 「實際送出數量必須是正整數」。我直接讀安裝版 Filament
+                 * v5.7.6 原始碼確認整條鏈：
+                 *
+                 *  1. `TextInput::integer()` 第一行就呼叫 `numeric()`
+                 *     （`TextInput.php:88`）；
+                 *  2. `numeric()` 設定 `isNumeric = true`（同檔 `:137`）；
+                 *  3. `getDefaultStateCasts()` 只要 `isNumeric()` 為真就掛上
+                 *     `NumberStateCast`（同檔 `:305`）；
+                 *  4. `NumberStateCast::get()／set()` **無條件** `floatval()`。
+                 *
+                 * ⛔ 所以合法的 `50` 在**送到 action 之前**就成了 `50.0`，
+                 * 而 action 為了擋 `1.5 → 1` 的靜默截斷，正確地拒絕所有 float。
+                 * ⭐ 錯在表單邊界弄丟了原始型別，⛔ 不在核心驗證——
+                 * 因此修的是這裡，⛔ 而不是去放寬 `validatedQuantity()`。
+                 *
+                 * ⭐ 以下寫法逐項取代 `integer()` 原本提供的東西，
+                 * ⛔ 但都不會設定 `isNumeric`，所以不會掛上 state cast：
+                 *  - `type('number')`：`integer()` 只是靠 `isNumeric` 間接得到
+                 *    `type=number`（`getType()`，同檔 `:254`），這裡直接指定；
+                 *  - `inputMode('numeric')`／`step(1)`：與 `integer()` 相同；
+                 *  - `rule('integer')`：與 `integer()` 相同（`numeric` 規則
+                 *    本來就比 `integer` 寬鬆，不需要）。
                  *
                  * ⛔ 表單這層只是第一道；真正的封閉驗證在 action 的
                  * `validatedQuantity()`——偽造的 Livewire payload 不經過表單。
@@ -170,8 +190,10 @@ class FulfillmentOrdersRelationManager extends RelationManager
                 TextInput::make('quantity')
                     ->label('實際送出數量')
                     ->required()
-                    ->integer()
+                    ->type('number')
+                    ->inputMode('numeric')
                     ->step(1)
+                    ->rule('integer')
                     ->minValue(1)
                     ->maxValue(CreateFulfillmentReplacement::MAX_QUANTITY)
                     ->default(fn (): int => $this->suggestedQuantity($record))
