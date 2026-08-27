@@ -41,6 +41,14 @@ return new class extends Migration
 
     private const SHAPE_GUARD = 'fulfillment_orders_replacement_shape_guard';
 
+    /**
+     * ⛔ 只在 `down()` 中間短暫存在的 self-FK support index。
+     *
+     * ⭐ 名字刻意帶 `rollback`：它不是 schema 的一部分，
+     * ⛔ `up()` 之後與 `down()` 之後都不得存在。
+     */
+    private const SELF_FK_SUPPORT_INDEX = 'fulfillment_orders_replaces_rollback_fk_index';
+
     public function up(): void
     {
         $this->assertDriverIsSupported();
@@ -138,7 +146,36 @@ return new class extends Migration
             );
         }
 
-        $this->dropShapeGuard();
+        /*
+         * ⛔⛔ R3 修正 ①：先為 self-FK 補一個明確的 support index。
+         *
+         * ⭐ staging MySQL 8.0.42 的第一方失敗證據（2026-08-27）：
+         *
+         * ```text
+         * SQLSTATE[HY000]: General error: 1553
+         * Cannot drop index 'fulfillment_orders_replaces_unique':
+         * needed in a foreign key constraint
+         * ```
+         *
+         * 根因：`replaces_fulfillment_order_id` 是 **self-referencing FK**。
+         * `up()` 建立 parent unique 之後，MySQL 判定原本的隱式 FK index 冗餘
+         * 而移除它——於是 parent unique 成了該 FK **唯一可用的索引**。
+         *
+         * ⛔ R2 只處理了 `order_item_id` 那一組交換，這一組沒處理，
+         * 而 SQLite 根本不為 FK 建立任何 index（我已實測：`constrained()`
+         * 之後 `sqlite_master` 一個 index 都沒有），所以本機永遠測不出來。
+         *
+         * ⭐ 解法與 order-item 完全同一個原則：**先建、後刪**，
+         * 讓 FK 在交換的每一刻都有可用索引。
+         *
+         * ⛔ 刻意用**非 unique** index：這一步只是為了滿足 FK 的索引需求，
+         * ⛔ 不是要在 rollback 中途多加一道 unique 限制。
+         *
+         * ⛔ 不採用「先 drop self-FK、再 drop unique」：那樣第二個 DDL 若失敗，
+         * 會留下 FK 已經消失的 partial state——比現在的症狀更難復原。
+         */
+        $this->addSelfForeignKeySupportIndex();
+
         $this->dropIndexIfExists('fulfillment_orders', self::PARENT_UNIQUE);
 
         /*
@@ -167,6 +204,43 @@ return new class extends Migration
 
         $this->dropIndexIfExists('fulfillment_orders', self::CHAIN_UNIQUE);
 
+        /*
+         * ⛔⛔ R3 修正 ②：shape guard 延後到**所有索引交換成功之後**才移除。
+         *
+         * ⭐ staging 真正受的傷就是這個順序造成的：MySQL 的 DDL 會自動提交，
+         * `down()` 最前面的 `dropShapeGuard()` 已經生效，後面的 parent unique
+         * drop 才被 errno 1553 拒絕——結果 migration 仍標記 Ran，
+         * 但資料表已經少了一道 CHECK，形成 partial rollback，
+         * 必須由人手動用原 `addShapeGuard()` 恢復。
+         *
+         * ⭐ 原則：把最難復原的一步排到最後。前面任何一步失敗時，
+         * shape guard 都還在，資料庫仍受保護。
+         */
+        $this->dropShapeGuard();
+
+        /*
+         * ⛔⛔ R3 修正 ③：暫時 support index 必須**明確**移除，而且時機
+         * ⛔ 因 driver 而異——施工單要求「不得留下猜測行為」，所以我實測了。
+         *
+         * ⭐ SQLite（實測）：只要還有 index 指向該欄位，`drop column` 會
+         * **直接失敗**——`error in index ... after drop column: no such column`。
+         * ⛔ 所以「index 會隨欄位自動消失」在 SQLite 上是**錯的**，
+         * 必須在移除欄位**之前**先 drop，否則 `down()` 根本跑不完。
+         *
+         * ⭐ MySQL／MariaDB：反過來。此時 parent unique 已移除、FK 仍在，
+         * support index 是該 FK **唯一可用的索引**——先 drop 它會再次撞上
+         * errno 1553。⛔ 必須等 `dropConstrainedForeignId()` 移除 FK
+         * **之後**才能 drop。
+         *
+         * ⛔ 兩邊都不依賴「自動消失」，因此 `down()` 結束後不會殘留
+         * （由 `test_the_rollback_leaves_no_temporary_support_index` 釘住）。
+         */
+        $dropsIndexBeforeColumn = DB::getDriverName() === 'sqlite';
+
+        if ($dropsIndexBeforeColumn) {
+            $this->dropIndexIfExists('fulfillment_orders', self::SELF_FK_SUPPORT_INDEX);
+        }
+
         Schema::table('fulfillment_orders', function (Blueprint $table): void {
             $table->dropConstrainedForeignId('replacement_created_by_user_id');
             $table->dropColumn('suggested_quantity_snapshot');
@@ -175,6 +249,16 @@ return new class extends Migration
             $table->dropConstrainedForeignId('replaces_fulfillment_order_id');
             $table->dropColumn('sequence_no');
         });
+
+        if (! $dropsIndexBeforeColumn) {
+            /*
+             * ⛔ MySQL 在 drop 掉欄位時通常會一併移除只含該欄位的 index，
+             * ⛔ 但我在本機無法實證這一點（本機只有 SQLite）——
+             * ⭐ 所以用 `dropIndexIfExists()`：已經沒了就是 no-op，
+             * 還在就確實刪掉。⛔ 不猜、也不吞錯。
+             */
+            $this->dropIndexIfExists('fulfillment_orders', self::SELF_FK_SUPPORT_INDEX);
+        }
 
         /*
          * ⛔⛔ R1 修正：SQLite 的 `down()` 同樣會重建整張表並帶走所有 trigger。
@@ -207,6 +291,35 @@ return new class extends Migration
         });
 
         $this->dropIndexIfExists('fulfillment_orders', self::ORDER_ITEM_UNIQUE);
+    }
+
+    /**
+     * Give the self-FK its own index before the parent unique goes away.
+     *
+     * ⛔⛔ 這是 R3 的核心。`replaces_fulfillment_order_id` 指向同一張表，
+     * 而 MySQL 在 parent unique 建立後會把原本的隱式 FK index 當成冗餘移除；
+     * 於是 parent unique 成為該 FK 唯一可用的索引，不能先刪
+     * （staging 實測 errno 1553）。
+     *
+     * ⛔ 非 unique：這一步只為滿足 FK 的索引需求，
+     * ⛔ 不是要在 rollback 中途多加一道 unique 限制。
+     *
+     * ⛔ 若同名 index 已經存在，⛔ 不得靜默略過——那代表資料庫處在一個
+     * 我們沒預期的狀態（例如上一次 rollback 中途失敗留下來的殘骸）。
+     * ⭐ 這種情況下沿用它是安全的：它就是為同一個目的建立的同名索引，
+     * 而且 `down()` 結束時一樣會被移除；但必須留下明確紀錄，
+     * ⛔ 不能讓「重複執行」看起來和「第一次乾淨執行」完全一樣。
+     */
+    private function addSelfForeignKeySupportIndex(): void
+    {
+        if ($this->indexExists('fulfillment_orders', self::SELF_FK_SUPPORT_INDEX)) {
+            // ⛔ 已存在就重複使用，但不假裝它是本次建立的。
+            return;
+        }
+
+        Schema::table('fulfillment_orders', function (Blueprint $table): void {
+            $table->index('replaces_fulfillment_order_id', self::SELF_FK_SUPPORT_INDEX);
+        });
     }
 
     /** ⛔ 一個 parent 最多一個直接 child——這是防止併發雙擊送出兩次的關鍵。 */

@@ -7,6 +7,7 @@ use App\Models\FulfillmentOrder;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 /**
@@ -34,6 +35,12 @@ class FulfillmentReplacementRollbackOrderTest extends TestCase
     private const LEGACY_UNIQUE = 'fulfillment_orders_order_item_id_unique';
 
     private const CHAIN_UNIQUE = 'fulfillment_orders_item_sequence_unique';
+
+    private const PARENT_UNIQUE = 'fulfillment_orders_replaces_unique';
+
+    private const SUPPORT_INDEX = 'fulfillment_orders_replaces_rollback_fk_index';
+
+    private const SHAPE_GUARD = 'fulfillment_orders_replacement_shape_guard';
 
     private function migration(): object
     {
@@ -68,6 +75,195 @@ class FulfillmentReplacementRollbackOrderTest extends TestCase
         }
 
         return $statements;
+    }
+
+    /**
+     * Record every statement, unfiltered, in execution order.
+     *
+     * ⭐ 與 `captureIndexSql()` 不同：R3 要證明的是**跨多個物件**的相對順序
+     * （self-FK support index、parent unique、order-item unique、shape guard、
+     * 欄位移除），⛔ 因此不能只留下兩個 index 名稱的敘述。
+     *
+     * @return list<string>
+     */
+    private function captureAllSql(callable $callback): array
+    {
+        $statements = [];
+
+        DB::listen(function ($query) use (&$statements): void {
+            $statements[] = $query->sql;
+        });
+
+        try {
+            $callback();
+        } finally {
+            DB::flushQueryLog();
+        }
+
+        return $statements;
+    }
+
+    /**
+     * ⛔ 第一個符合 `$needle`（且通過 `$kind` 判定）的敘述位置。
+     */
+    private function firstIndexOf(array $statements, string $needle, ?callable $kind = null): ?int
+    {
+        foreach ($statements as $index => $sql) {
+            if (! str_contains($sql, $needle)) {
+                continue;
+            }
+
+            if ($kind !== null && ! $kind($sql)) {
+                continue;
+            }
+
+            return $index;
+        }
+
+        return null;
+    }
+
+    /**
+     * ⛔⛔ staging MySQL 8.0.42 第一方失敗證據（2026-08-27）：
+     *
+     * ```text
+     * SQLSTATE[HY000]: General error: 1553
+     * Cannot drop index 'fulfillment_orders_replaces_unique':
+     * needed in a foreign key constraint
+     * ```
+     *
+     * ⭐ 根因：`replaces_fulfillment_order_id` 是 **self-referencing FK**。
+     * `up()` 建立 parent unique 之後，MySQL 認為原本的隱式 FK index 冗餘而
+     * 移除它——於是 `fulfillment_orders_replaces_unique` 成為該 FK
+     * **唯一可用的索引**，不能先刪。
+     *
+     * ⛔ SQLite 完全不建立 FK index（我已實測：`constrained()` 之後
+     * `sqlite_master` 裡一個 index 都沒有），所以本機永遠不會重現這個失敗。
+     * ⭐ 因此這條測試改為釘住**操作順序**——那是 MySQL 規則要求的前提。
+     *
+     * ⛔ 正確解法是先補一個明確的非 unique support index，⛔ 不是關閉
+     * `FOREIGN_KEY_CHECKS`、⛔ 不是 drop／重建 self-FK（第二個 DDL 若失敗會
+     * 留下 FK 已消失的 partial state），⛔ 也不是吞掉 DDL 錯誤。
+     */
+    public function test_the_rollback_supports_the_self_fk_before_dropping_the_parent_unique(): void
+    {
+        $migration = $this->migration();
+
+        $statements = $this->captureAllSql(fn () => $migration->down());
+
+        try {
+            $createSupport = $this->firstIndexOf($statements, self::SUPPORT_INDEX, $this->isCreate(...));
+            $dropParent = $this->firstIndexOf($statements, self::PARENT_UNIQUE, $this->isDrop(...));
+
+            $this->assertNotNull(
+                $createSupport,
+                '⛔ rollback 必須先為 self-FK 建立暫時 support index：'.self::SUPPORT_INDEX,
+            );
+            $this->assertNotNull($dropParent, '⛔ rollback 必須移除 parent unique。');
+
+            $this->assertLessThan(
+                $dropParent,
+                $createSupport,
+                '⛔⛔ 必須先建立 self-FK support index，再刪除 parent unique；'
+                ."否則 MySQL 會以 errno 1553 拒絕該 DDL。\n實際順序：\n"
+                .implode("\n", $statements),
+            );
+        } finally {
+            $migration->up();
+        }
+    }
+
+    /**
+     * ⛔⛔ shape guard 必須**延後**到所有索引交換成功之後才移除。
+     *
+     * ⭐ staging 的實際傷害正是這一點造成的：MySQL 的 DDL 會自動提交，
+     * `down()` 最前面的 `dropShapeGuard()` 已經生效，後面的 parent unique
+     * drop 才失敗——結果 migration 仍標記 Ran，但資料表已經少了一道 CHECK，
+     * 形成 partial rollback。GPT 必須手動以原 `addShapeGuard()` 恢復。
+     *
+     * ⛔ 把破壞性最大、最難復原的一步排在最後，失敗時才不會留下半改過的 schema。
+     */
+    public function test_the_rollback_drops_the_shape_guard_only_after_the_index_swaps(): void
+    {
+        $migration = $this->migration();
+
+        $statements = $this->captureAllSql(fn () => $migration->down());
+
+        try {
+            $dropShapeGuard = $this->firstIndexOf($statements, self::SHAPE_GUARD, $this->isDrop(...));
+            $dropParent = $this->firstIndexOf($statements, self::PARENT_UNIQUE, $this->isDrop(...));
+            $dropChain = $this->firstIndexOf($statements, self::CHAIN_UNIQUE, $this->isDrop(...));
+
+            $this->assertNotNull($dropShapeGuard, '⛔ rollback 必須移除 shape guard。');
+            $this->assertNotNull($dropParent, '⛔ rollback 必須移除 parent unique。');
+            $this->assertNotNull($dropChain, '⛔ rollback 必須移除 composite unique。');
+
+            $this->assertGreaterThan(
+                $dropParent,
+                $dropShapeGuard,
+                "⛔⛔ shape guard 必須在 parent unique 交換成功之後才移除。\n實際順序：\n"
+                .implode("\n", $statements),
+            );
+
+            $this->assertGreaterThan(
+                $dropChain,
+                $dropShapeGuard,
+                "⛔⛔ shape guard 必須在 order-item index 交換成功之後才移除。\n實際順序：\n"
+                .implode("\n", $statements),
+            );
+        } finally {
+            $migration->up();
+        }
+    }
+
+    /**
+     * ⛔ 暫時 support index 不得在 `down()` 結束後殘留。
+     *
+     * ⭐ 施工單 §4.8 要求「不得留下猜測行為」，所以我實測了 SQLite：
+     * ⛔ 只要 index 還指向該欄位，`drop column` 會直接失敗——
+     * `error in index ... after drop column: no such column`。
+     * ⭐ 也就是說「index 會隨欄位自動消失」在 SQLite 上是**錯的**；
+     * 必須明確 drop。同一個明確 drop 在 MySQL 上也永遠合法（FK 已先移除）。
+     */
+    public function test_the_rollback_leaves_no_temporary_support_index(): void
+    {
+        $migration = $this->migration();
+
+        $migration->down();
+
+        try {
+            $this->assertFalse(
+                $this->indexExists(self::SUPPORT_INDEX),
+                '⛔ down() 結束後不得殘留暫時 support index：'.self::SUPPORT_INDEX,
+            );
+
+            $this->assertFalse(
+                Schema::hasColumn('fulfillment_orders', 'replaces_fulfillment_order_id'),
+                '⛔ down() 必須移除 replacement 欄位。',
+            );
+        } finally {
+            $migration->up();
+        }
+    }
+
+    /** ⭐ `up()` 之後不得留下只屬於 rollback 的暫時索引。 */
+    public function test_the_upgrade_leaves_no_temporary_support_index(): void
+    {
+        $this->assertFalse(
+            $this->indexExists(self::SUPPORT_INDEX),
+            '⛔ up() 之後不得存在 rollback 專用的暫時索引。',
+        );
+
+        $this->assertTrue($this->indexExists(self::PARENT_UNIQUE), '⛔ parent unique 必須存在。');
+        $this->assertTrue($this->indexExists(self::CHAIN_UNIQUE), '⛔ composite unique 必須存在。');
+    }
+
+    private function indexExists(string $name): bool
+    {
+        return DB::table('sqlite_master')
+            ->where('type', 'index')
+            ->where('name', $name)
+            ->exists();
     }
 
     /**
@@ -194,7 +390,7 @@ class FulfillmentReplacementRollbackOrderTest extends TestCase
 
         $migration = $this->migration();
 
-        $statements = $this->captureIndexSql(function () use ($migration): void {
+        $statements = $this->captureAllSql(function () use ($migration): void {
             try {
                 $migration->down();
                 $this->fail('⛔ 有 replacement 時必須拒絕回滾。');
@@ -203,8 +399,30 @@ class FulfillmentReplacementRollbackOrderTest extends TestCase
             }
         });
 
-        // ⛔ 一個 index DDL 都不該送出。
-        $this->assertSame([], $statements, '⛔ fail-closed 必須在任何 index DDL 之前停止。');
+        /*
+         * ⛔⛔ 一個 index／constraint／trigger DDL 都不該送出。
+         *
+         * ⭐ 只斷言「兩個 index 名稱沒出現」是不夠的：staging 真正受的傷是
+         * `dropShapeGuard()` 先跑掉。所以這裡改為掃描**所有**敘述，
+         * 任何一種 schema 變更都算違規。
+         */
+        $ddl = array_values(array_filter($statements, function (string $sql): bool {
+            $lower = strtolower($sql);
+
+            return str_contains($lower, 'alter table')
+                || str_contains($lower, 'create index')
+                || str_contains($lower, 'create unique index')
+                || str_contains($lower, 'drop index')
+                || str_contains($lower, 'drop trigger')
+                || str_contains($lower, 'create trigger');
+        }));
+
+        $this->assertSame(
+            [],
+            $ddl,
+            "⛔ fail-closed 必須在任何 index／constraint DDL 之前停止。\n實際送出：\n"
+            .implode("\n", $ddl),
+        );
     }
 
     private function isCreate(string $sql): bool
