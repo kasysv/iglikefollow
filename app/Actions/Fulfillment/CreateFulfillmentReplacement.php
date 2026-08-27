@@ -30,14 +30,29 @@ class CreateFulfillmentReplacement
     /** ⛔ 與 checkout 的 target 欄位同一上限。 */
     public const MAX_TARGET_LENGTH = 255;
 
+    /** ⛔ `quantity_override` 是 unsigned integer；這是它能保存的上限。 */
+    public const MAX_QUANTITY = 4294967295;
+
     /**
+     * ⛔⛔ `$target` 與 `$quantity` 刻意宣告為 `mixed`。
+     *
+     * ⭐ R1 修正：初版把它們宣告成 `string` 與 `int`，於是 **PHP 的型別轉換
+     * 搶在我們的驗證之前發生**——`1.5` 靜默變成 `1`、`'1e3'` 變成 `1000`。
+     * 那正是 Owner 明確禁止的「自動調整」，而且是最難察覺的一種：畫面顯示
+     * 成功，送出去的數量卻不是他打的那個。
+     *
+     * ⛔ 接受未信任的原始 scalar，先封閉驗證，再轉成安全的整數。
+     *
+     * @param  mixed  $target  ⛔ 未信任的原始輸入
+     * @param  mixed  $quantity  ⛔ 未信任的原始輸入
+     *
      * @throws ValidationException 任何一項前置條件不成立
      */
     public function handle(
         User $actor,
         FulfillmentOrder $parent,
-        string $target,
-        int $quantity,
+        mixed $target,
+        mixed $quantity,
     ): FulfillmentOrder {
         /*
          * ⛔ 權限在 action 內再檢查一次。
@@ -51,30 +66,8 @@ class CreateFulfillmentReplacement
             ]);
         }
 
-        $target = trim($target);
-
-        if ($target === '' || mb_strlen($target) > self::MAX_TARGET_LENGTH) {
-            throw ValidationException::withMessages([
-                'target' => '請輸入新的連結／帳號，最多 '.self::MAX_TARGET_LENGTH.' 字。',
-            ]);
-        }
-
-        /*
-         * ⭐ 唯一的數量驗證：可由 unsigned integer 保存的正整數。
-         *
-         * ⛔⛔ 刻意**不套**商品或供應商的 min／max，⛔ 不與 Remains、原訂購量
-         * 或前一批次數量比較，⛔ 不自動截斷或調整。
-         *
-         * Owner 是那個知道 SMM 後台實際發生什麼的人：他可能要補比 Remains 更多
-         * （對方少給了），也可能只補一部分。我們自作主張調整數量，等於用一個
-         * 猜測覆蓋掉他的判斷；供應商若真的拒絕，沿既有 rejected／failed 流程
-         * 誠實記錄就好。
-         */
-        if ($quantity < 1 || $quantity > 4294967295) {
-            throw ValidationException::withMessages([
-                'quantity' => '實際送出數量必須是正整數。',
-            ]);
-        }
+        $target = self::validatedTarget($target);
+        $quantity = self::validatedQuantity($quantity);
 
         /*
          * ⛔ 派單總開關未成立時**不建立** child。
@@ -195,6 +188,107 @@ class CreateFulfillmentReplacement
         SubmitFulfillmentOrder::dispatch($child->getKey());
 
         return $child->fresh();
+    }
+
+    /**
+     * The new target, exactly as the Owner submitted it.
+     *
+     * ⛔⛔ R1 修正：初版先 `trim()` 再保存——那是**改寫 Owner 的輸入**，
+     * 而且是靜默的：他看不出我們動過。原施工單要求「保存原值，不自行補網址
+     * 或改寫」。
+     *
+     * ⭐ 空白**可以**用來判定「全空白＝沒填」，但判定與儲存是兩件事：
+     * 用 `trim()` 的結果**判斷**，用原始字串**儲存**。
+     *
+     * ⛔ 長度上限對**原始字串**計算。若先 trim 再量長度，一個 260 字元、
+     * 首尾各有幾個空白的輸入會被誤判為合法，然後那個超長值被存進 DB。
+     */
+    private static function validatedTarget(mixed $target): string
+    {
+        if (! is_string($target)) {
+            throw ValidationException::withMessages([
+                'target' => '請輸入新的連結／帳號。',
+            ]);
+        }
+
+        // ⛔ 只用來判定「是不是全空白」，⛔ 不拿它的結果去儲存。
+        if (trim($target) === '') {
+            throw ValidationException::withMessages([
+                'target' => '請輸入新的連結／帳號。',
+            ]);
+        }
+
+        if (mb_strlen($target) > self::MAX_TARGET_LENGTH) {
+            throw ValidationException::withMessages([
+                'target' => '新的連結／帳號最多 '.self::MAX_TARGET_LENGTH.' 字。',
+            ]);
+        }
+
+        return $target;
+    }
+
+    /**
+     * A canonical decimal positive integer, or a refusal.
+     *
+     * ⭐ 唯一的數量驗證：可由 unsigned integer 保存的正整數。
+     *
+     * ⛔⛔ 刻意**不套**商品或供應商的 min／max，⛔ 不與 Remains、原訂購量
+     * 或前一批次數量比較。Owner 是那個知道 SMM 後台實際發生什麼的人；
+     * 我們自作主張調整，等於用一個猜測覆蓋掉他的判斷。
+     *
+     * ⛔⛔ 但「不限制範圍」**不等於**「接受任何東西」。以下一律拒絕，
+     * ⛔ 絕不截斷、四捨五入或修正：
+     *
+     *  - 小數（`1.5`）與指數記法（`1e3`）——PHP 的 `(int)` 會把它們變成
+     *    另一個數字，而那個數字不是 Owner 打的；
+     *  - 帶正負號（`+100`／`-5`）、前後空白（` 100 `）、前導零（`007`）
+     *    ——它們都不是 canonical 形式，接受其中任何一種就等於預設「我們
+     *    知道你的意思」；
+     *  - 陣列／物件／布林／null／空字串；
+     *  - `0`、負數與超過 unsigned 上限的值。
+     *
+     * ⛔ 用 regex 比對**原始字串**，⛔ 不用 `is_numeric()`——後者接受
+     * `1.5`、`1e3` 與前後空白。
+     */
+    private static function validatedQuantity(mixed $quantity): int
+    {
+        $refuse = static fn (): never => throw ValidationException::withMessages([
+            'quantity' => '實際送出數量必須是正整數（不含小數、正負號或空白）。',
+        ]);
+
+        /*
+         * ⛔ 只接受 int 與 string 兩種輸入型別。
+         * ⛔ float 一律拒絕——連 `2.0` 也是：它已經失去「Owner 打的是不是
+         * 整數」這個資訊，而我們無法分辨它原本是 `2` 還是 `2.0`。
+         */
+        if (is_int($quantity)) {
+            $raw = (string) $quantity;
+        } elseif (is_string($quantity)) {
+            $raw = $quantity;
+        } else {
+            $refuse();
+        }
+
+        // ⛔ canonical 十進位正整數：無符號、無空白、無前導零。
+        if (preg_match('/\A[1-9][0-9]*\z/', $raw) !== 1) {
+            $refuse();
+        }
+
+        /*
+         * ⛔ 先比長度再轉型：一個 20 位數的字串轉成 int 會 overflow 成
+         * 一個看起來合理的值，而那個值不是 Owner 打的。
+         */
+        if (strlen($raw) > strlen((string) self::MAX_QUANTITY)) {
+            $refuse();
+        }
+
+        $value = (int) $raw;
+
+        if ($value < 1 || $value > self::MAX_QUANTITY) {
+            $refuse();
+        }
+
+        return $value;
     }
 
     /**

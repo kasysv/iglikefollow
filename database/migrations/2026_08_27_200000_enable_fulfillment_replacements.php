@@ -156,6 +156,20 @@ return new class extends Migration
             $table->unique('order_item_id', self::ORDER_ITEM_UNIQUE);
         });
 
+        /*
+         * ⛔⛔ R1 修正：SQLite 的 `down()` 同樣會重建整張表並帶走所有 trigger。
+         *
+         * ⭐ 初版只在 `up()` 補了這件事，`down()` 沒有——於是回滾之後，
+         * `values_check`／`transition_guard`／`identifier_guard` 全部消失，
+         * 資料庫進入一個**完全沒有履約保護**的狀態。
+         *
+         * ⛔ 原本的 rollback 測試看不出來：它 `down()` 之後只檢查欄位不見了，
+         * 就立刻再 `up()` 把 guard 裝回去——那個「中間的無保護狀態」從來沒有
+         * 被檢查過。一支讓資料庫變成無保護、卻回報成功的 rollback，
+         * 比直接失敗危險得多。
+         */
+        $this->restoreOrderGuardsLostToTableRebuild();
+
         $this->rebuildEventValueGuard(legacy: true);
     }
 
@@ -201,21 +215,51 @@ return new class extends Migration
          * ⛔ `suggested_quantity_snapshot` 只檢查 NOT NULL，⛔ 不要求 > 0：
          * `provider_remains` 可能真的是 0。
          */
-        $illegal = "({$this->prefix()}sequence_no = 1 AND ("
-            ."{$this->prefix()}replaces_fulfillment_order_id IS NOT NULL"
-            ." OR {$this->prefix()}target_value_override IS NOT NULL"
-            ." OR {$this->prefix()}quantity_override IS NOT NULL"
-            ." OR {$this->prefix()}suggested_quantity_snapshot IS NOT NULL"
-            ." OR {$this->prefix()}replacement_created_by_user_id IS NOT NULL"
-            .')) OR ('
-            ."{$this->prefix()}sequence_no > 1 AND ("
-            ."{$this->prefix()}replaces_fulfillment_order_id IS NULL"
-            ." OR {$this->prefix()}target_value_override IS NULL"
-            ." OR {$this->prefix()}quantity_override IS NULL"
-            ." OR {$this->prefix()}quantity_override < 1"
-            ." OR {$this->prefix()}suggested_quantity_snapshot IS NULL"
-            ." OR {$this->prefix()}replacement_created_by_user_id IS NULL"
-            .'))';
+        $p = $this->prefix();
+
+        /*
+         * ⛔ 改為「一組非法情況」再 OR 起來，⛔ 不再手工拼接巢狀括號。
+         *
+         * ⭐ R1 施工時我用字串接了一次括號、以為對了，實際生成的 SQL 少一個
+         * 右括號（我在寫入前把條件印出來檢查才發現）。這種錯誤在 migration
+         * 裡特別危險：它可能在某些 driver 上仍然「跑得過」，但保護的範圍
+         * 與預期不同。分組之後每一段自己閉合，⛔ 不依賴人眼數括號。
+         */
+        $replacementColumns = [
+            'replaces_fulfillment_order_id',
+            'target_value_override',
+            'quantity_override',
+            'suggested_quantity_snapshot',
+            'replacement_created_by_user_id',
+        ];
+
+        /*
+         * ⛔⛔ R1 修正：`sequence_no < 1` 明確列為非法。
+         *
+         * ⭐ 初版只處理 `= 1` 與 `> 1` 兩種情況——`0` 兩邊都不符合，於是整條
+         * 檢查被**跳過**，一筆 sequence 0 的列可以直接寫進去。
+         * GPT 已以 fresh SQLite migration 實證（`SEQUENCE_ZERO_ACCEPTED`）。
+         *
+         * ⛔ 不能只靠 unsigned 欄位：SQLite 的 `unsigned` 只是型別親和性提示，
+         * 不是約束。
+         */
+        $conditions = ["{$p}sequence_no < 1"];
+
+        // ⛔ 第 1 批不得帶任何更換欄位。
+        $firstBatchHasReplacementData = implode(' OR ', array_map(
+            fn (string $c): string => "{$p}{$c} IS NOT NULL",
+            $replacementColumns,
+        ));
+        $conditions[] = "{$p}sequence_no = 1 AND ({$firstBatchHasReplacementData})";
+
+        // ⛔ 第 2 批以後必須齊備，且數量必須是正整數。
+        $replacementMissingData = implode(' OR ', array_merge(
+            array_map(fn (string $c): string => "{$p}{$c} IS NULL", $replacementColumns),
+            ["{$p}quantity_override < 1"],
+        ));
+        $conditions[] = "{$p}sequence_no > 1 AND ({$replacementMissingData})";
+
+        $illegal = '('.implode(') OR (', $conditions).')';
 
         $message = '⛔ 更換履約的資料形狀不合法：第 1 批不得有更換欄位；'
             .'第 2 批以後必須有 parent、新連結、正整數數量、建議值與建立者。';

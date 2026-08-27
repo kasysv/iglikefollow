@@ -157,14 +157,25 @@ class FulfillmentOrdersRelationManager extends RelationManager
                  *
                  * ⛔ 刻意**不設** Remains、原訂購量、商品或 provider 的上下限
                  * ——Owner 是那個知道 SMM 後台實際發生什麼的人。
+                 *
+                 * ⛔⛔ R1 修正：改用 `integer()` ＋ `step(1)`，⛔ 不是只用
+                 * `numeric()`。初版只用 `numeric()`，於是 `1.5` 通過表單驗證後
+                 * 被 PHP 的型別轉換靜默變成 `1`——Owner 明確要求「不自動截斷或
+                 * 調整」，而靜默取整正是最難察覺的那一種：畫面顯示成功，
+                 * 送出去的數量卻不是他打的那個。
+                 *
+                 * ⛔ 表單這層只是第一道；真正的封閉驗證在 action 的
+                 * `validatedQuantity()`——偽造的 Livewire payload 不經過表單。
                  */
                 TextInput::make('quantity')
                     ->label('實際送出數量')
                     ->required()
-                    ->numeric()
+                    ->integer()
+                    ->step(1)
                     ->minValue(1)
+                    ->maxValue(CreateFulfillmentReplacement::MAX_QUANTITY)
                     ->default(fn (): int => $this->suggestedQuantity($record))
-                    ->helperText('可大於或小於建議數量；本站不套用商品或供應商的上下限。'),
+                    ->helperText('必須是正整數。可大於或小於建議數量；本站不套用商品或供應商的上下限。'),
 
                 Placeholder::make('confirmation')
                     ->label('')
@@ -180,8 +191,16 @@ class FulfillmentOrdersRelationManager extends RelationManager
                     $child = app(CreateFulfillmentReplacement::class)->handle(
                         $user,
                         $record,
-                        (string) ($data['target'] ?? ''),
-                        (int) ($data['quantity'] ?? 0),
+                        /*
+                         * ⛔⛔ 原始值直接傳進去，⛔ 絕不在這裡 cast。
+                         *
+                         * ⭐ R1 修正：初版寫的是 `(string)` 與 `(int)`——
+                         * `(int) '1.5'` 在**送到 action 之前**就變成 `1`，
+                         * 於是 action 再嚴格的驗證也看不到原始輸入。
+                         * 封閉驗證必須拿到未經轉換的值才有意義。
+                         */
+                        $data['target'] ?? null,
+                        $data['quantity'] ?? null,
                     );
                 } catch (ValidationException $e) {
                     /*

@@ -449,9 +449,32 @@ class FulfillmentReplacementTest extends TestCase
 
         $this->expectException(QueryException::class);
 
-        // ⛔ 繞過 action 直接寫入，仍然被 unique index 擋下。
-        FulfillmentOrder::factory()->replacing($parent->fresh())->create([
-            'sequence_no' => 3,
+        /*
+         * ⛔ 用 **raw insert** 繞過 model 層，⛔ 不用 factory。
+         *
+         * ⭐ R1 之後 model observer 會先擋下不合法的 chain，所以走 model 的
+         * 寫入根本到不了資料庫——那樣測到的是 observer，不是這條要證明的
+         * **DB unique**。這裡刻意直接寫 SQL：即使有人繞過整個應用層，
+         * 同一個 parent 仍然不可能有第二個 child。
+         *
+         * ⛔ 這是併發下的最終防線：兩個 transaction 可以同時通過應用層檢查。
+         */
+        DB::table('fulfillment_orders')->insert([
+            'order_item_id' => $parent->order_item_id,
+            'sequence_no' => 2,
+            // ⛔ 同一個 parent——unique index 必須擋下。
+            'replaces_fulfillment_order_id' => $parent->id,
+            'provider' => $parent->provider,
+            'provider_service_id_snapshot' => $parent->provider_service_id_snapshot,
+            'payload_type_snapshot' => 'link_quantity',
+            'target_value_override' => 'ciphertext-placeholder',
+            'quantity_override' => 100,
+            'suggested_quantity_snapshot' => 100,
+            'replacement_created_by_user_id' => $this->owner()->id,
+            'status' => FulfillmentStatus::Ready->value,
+            'attempt_count' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
     }
 

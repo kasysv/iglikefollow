@@ -25,6 +25,7 @@ use App\Observers\AuditObserver;
 use App\Observers\FulfillmentEventIntegrityObserver;
 use App\Observers\FulfillmentMappingAuditObserver;
 use App\Observers\FulfillmentOrderIntegrityObserver;
+use App\Observers\FulfillmentReplacementIntegrityObserver;
 use App\Observers\IntegrationSettingObserver;
 use App\Observers\InvoiceIntegrityObserver;
 use App\Observers\LastOwnerObserver;
@@ -284,6 +285,14 @@ class AppServiceProvider extends ServiceProvider
 
         // ⛔ 不可逆狀態與 append-only 的 model 層防線；DB 層另有 trigger。
         FulfillmentOrder::observe(FulfillmentOrderIntegrityObserver::class);
+        /*
+         * ⛔ 更換履約的**跨列**不變量（parent 同商品、sequence 連續、快照一致）。
+         *
+         * ⭐ 必須在 model 層：direct model／factory 寫入完全繞過
+         * `CreateFulfillmentReplacement`,而 GPT 複審正是用那條路徑實證了
+         * 跨商品 child 可以成立。單列的 DB guard 擋不住需要讀 parent 的規則。
+         */
+        FulfillmentOrder::observe(FulfillmentReplacementIntegrityObserver::class);
         FulfillmentEvent::observe(FulfillmentEventIntegrityObserver::class);
 
         foreach (self::AUDITED as $model) {
