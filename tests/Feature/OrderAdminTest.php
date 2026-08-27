@@ -267,16 +267,27 @@ class OrderAdminTest extends TestCase
 
     // ------------------------------------------------------------ 個資
 
-    public function test_the_admin_list_masks_the_customer_email(): void
+    /**
+     * ⭐ M4C-ORDER-ADMIN-COMPACT-OPERATIONS-A：後台列表改為顯示**完整** Email。
+     *
+     * ⛔ 這一條原本斷言「列表不得出現完整 Email」，是先前刻意的設計；
+     * Owner 已明確改變要求：客服要能直接從列表複製 Email 聯絡客人，
+     * ⭐ 而詳情頁（下一條測試）本來就已經是完整顯示，兩處原本不一致。
+     *
+     * ⛔ 改變的只有**後台列表這一處呈現**：DB 的 `encrypted` cast 不變，
+     * ⛔ 公開頁、log 與匯出都不得因此出現明文（由既有測試各自把關）。
+     * ⛔ `Order::maskedEmail()` 本身保留，其他地方仍在用。
+     */
+    public function test_the_admin_list_shows_the_full_customer_email(): void
     {
         $this->actingAs($this->owner());
-        $this->order();
+        $order = $this->order();
 
         $html = Livewire::test(ListOrders::class)->assertOk()->html();
 
-        // ⛔ 後台列表也不顯示完整 Email。
-        $this->assertStringNotContainsString('private@example.com', $html);
-        $this->assertStringContainsString('@example.com', $html);
+        $this->assertStringContainsString('private@example.com', $html);
+        // ⛔ 遮罩版本不得同時出現。
+        $this->assertStringNotContainsString($order->maskedEmail(), $html);
     }
 
     /** ⛔ M4C:Owner 詳情頁改為完整顯示聯絡資料，客服才能真的聯絡客人。 */

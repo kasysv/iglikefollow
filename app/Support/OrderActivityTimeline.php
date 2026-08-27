@@ -67,10 +67,23 @@ final class OrderActivityTimeline
             ]);
 
         return $orderEntries->concat($fulfillmentEntries)
-            // ⛔ 穩定排序:created_at → id → source,兩個不同表的 id 可能撞號。
+            /*
+             * ⛔⛔ 最新事件在**最上面**。
+             *
+             * ⭐ Owner 要求：打開訂單就先看到「剛剛發生了什麼」，
+             * ⛔ 而不是從最舊的一筆往下捲。
+             *
+             * ⛔ `created_at` 與 `id` 都改成 `desc`，但 `source` 仍維持
+             * `asc`——它不是時間，只是一個**固定的** tie-break，用來確保
+             * 「同一秒、同一個 id」的兩筆在每次重讀時落在同樣的位置。
+             * ⭐ 把它一起反轉並不會更正確，只會讓既有的穩定順序無謂地改變。
+             *
+             * ⛔ 只改唯讀 presenter 的排序：兩張 append-only 表、事件內容
+             * 與寫入時機全部不動。
+             */
             ->sortBy([
-                ['created_at', 'asc'],
-                ['id', 'asc'],
+                ['created_at', 'desc'],
+                ['id', 'desc'],
                 ['source', 'asc'],
             ])
             ->values()

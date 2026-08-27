@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Orders\RelationManagers;
 
 use App\Actions\Fulfillment\CreateFulfillmentReplacement;
-use App\Enums\FulfillmentAttentionReason;
 use App\Models\FulfillmentOrder;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -35,38 +34,55 @@ class FulfillmentOrdersRelationManager extends RelationManager
     public function table(Table $table): Table
     {
         return $table
+            /*
+             * ⛔⛔ Owner 指定的固定 9 欄，順序逐字照這裡。
+             *
+             * ⭐ 客服真正在這張表上回答的問題只有一個：「這批送出去了沒、
+             * 供應商怎麼說」。原本的 `本站分類`、`待處理原因`、`服務代碼`
+             * 都不是回答那個問題需要的，卻把表推寬到要橫向捲動。
+             *
+             * ⛔ 「更換連結」row action 保留——它是**操作按鈕**，不是資料欄，
+             * 不佔這 9 欄的名額。
+             */
             ->columns([
-                /*
-                 * ⭐ 批次：第 1 次是原始履約，第 2 次以後是 Owner 建立的更換。
-                 * ⛔ 沒有這一欄，多批次的列在畫面上會看起來像重複資料。
-                 */
-                TextColumn::make('sequence_no')
-                    ->label('批次')
-                    ->state(fn (FulfillmentOrder $record): string => '第 '.$record->sequence_no.' 次'),
+                TextColumn::make('submitted_at')
+                    ->label('送出時間')
+                    ->dateTime('Y-m-d H:i')
+                    ->placeholder('—'),
 
-                // ⛔ SMM 完整服務名稱：Owner／Editor 皆可見，服務代碼才是 Owner-only。
+                TextColumn::make('provider_order_id')
+                    ->label('供應商單號')
+                    ->placeholder('—'),
+
+                // ⛔ SMM 完整服務名稱：Owner／Editor 皆可見。
                 TextColumn::make('smm_service_name')
-                    ->label('SMM 服務名稱')
-                    ->state(fn ($record) => $record->displayServiceName()),
-                TextColumn::make('orderItem.service_name')->label('本站分類')->wrap(),
+                    ->label('服務名稱')
+                    ->state(fn (FulfillmentOrder $record): string => $record->displayServiceName()),
 
                 /*
-                 * ⭐ 改為**本批次實際**的連結與數量。
+                 * ⭐ 讀**本批次實際**的連結，⛔ 不是一律讀原始 order item。
                  *
-                 * ⛔ 原本這裡讀 `orderItem.quantity`——那是原訂購量，在多批次
-                 * 之後會讓每一列都顯示同一個數字，看起來像每批都送了原始數量。
-                 * 現在讀 `effectiveQuantity()`：第 1 批仍是訂單快照，更換批次
-                 * 是 Owner 實際輸入的量。
+                 * ⛔ 讀 order item 會讓每一列都顯示同一個連結，
+                 * 看起來像每批都送到同一個地方——而更換的重點正是換了目標。
                  */
                 TextColumn::make('effective_target')
-                    ->label('本批次連結／帳號')
+                    ->label('連結／帳號')
                     ->state(fn (FulfillmentOrder $record): string => $record->effectiveTarget())
                     ->wrap()
-                    // ⛔ 交付目標只給 Owner 看，與服務代碼同級。
+                    // ⛔ 交付目標只給 Owner 看。
                     ->visible(fn (): bool => Auth::user()?->isOwner() ?? false),
 
+                // ⭐ 起始值：`null`＝尚未取得、`0`＝確實是 0，⛔ 兩者不得混淆。
+                TextColumn::make('provider_start_count')
+                    ->label('起始值')
+                    ->state(fn (FulfillmentOrder $record): string => $record->displayStartCount()),
+
+                /*
+                 * ⭐ 同樣讀本批次實際數量。第 1 批是訂單快照，
+                 * 更換批次是 Owner 實際輸入的量。
+                 */
                 TextColumn::make('effective_quantity')
-                    ->label('本批次數量')
+                    ->label('數量')
                     ->state(fn (FulfillmentOrder $record): int => $record->effectiveQuantity())
                     ->numeric(),
 
@@ -75,33 +91,23 @@ class FulfillmentOrdersRelationManager extends RelationManager
                  * ⛔ 顏色不由原文推導——那等於用未經狀態機驗證的文字控制呈現。
                  */
                 TextColumn::make('provider_status')
-                    ->label('SMM 狀態')
+                    ->label('狀態')
                     ->badge()
-                    ->state(fn ($record): string => $record->displayProviderStatus())
-                    ->color(fn ($record) => $record->status->color()),
+                    ->state(fn (FulfillmentOrder $record): string => $record->displayProviderStatus())
+                    ->color(fn (FulfillmentOrder $record) => $record->status->color()),
 
-                // ⭐ 起始值：與剩餘同規則（null＝尚未取得、0＝確實是 0）。
-                TextColumn::make('provider_start_count')
-                    ->label('起始值')
-                    ->state(fn ($record): string => $record->displayStartCount()),
-
+                // ⭐ 與起始值完全相同的規則：`0` 不得被 placeholder 吞掉。
                 TextColumn::make('provider_remains')
-                    ->label('剩餘數量（Remains）')
-                    ->state(fn ($record): string => $record->displayRemains()),
+                    ->label('剩餘')
+                    ->state(fn (FulfillmentOrder $record): string => $record->displayRemains()),
 
-                TextColumn::make('attention_code')
-                    ->label('待處理原因')
-                    // ⛔ 本地 enum 訊息。
-                    ->formatStateUsing(fn (?FulfillmentAttentionReason $state) => $state?->message())
-                    ->wrap(),
-
-                // ⛔ 服務代碼只有 Owner 看得到。
-                TextColumn::make('provider_service_id_snapshot')
-                    ->label('服務代碼')
-                    ->visible(fn () => Auth::user()?->isOwner() ?? false),
-
-                TextColumn::make('provider_order_id')->label('供應商單號')->placeholder('—'),
-                TextColumn::make('submitted_at')->label('送出時間')->dateTime('Y-m-d H:i')->placeholder('—'),
+                /*
+                 * ⭐ 批次：第 1 次是原始履約，第 2 次以後是 Owner 建立的更換。
+                 * ⛔ 沒有這一欄，多批次的列在畫面上會看起來像重複資料。
+                 */
+                TextColumn::make('sequence_no')
+                    ->label('批次')
+                    ->state(fn (FulfillmentOrder $record): string => '第 '.$record->sequence_no.' 次'),
             ])
             // ⛔ 依批次排序，讓鏈的順序在畫面上一目了然。
             ->defaultSort('sequence_no')
