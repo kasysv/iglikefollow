@@ -2364,4 +2364,225 @@ class CustomerOrderLookupTest extends TestCase
         $this->assertSame('300', $shaped['items'][0]['remains']);
         $this->assertSame([], $shaped['items'][0]['replacements']);
     }
+
+    // ==================================== 卡片底部提示跟隨最新批次
+
+    private const FOOTER_SUPPORT = '此訂單需要人工確認，請與我們聯繫。';
+
+    private const FOOTER_AUTOMATIC = '訂單已自動安排處理，實際完成時間依系統狀況為準；若暫時沒有進度，還請耐心等候。';
+
+    /** ⛔⛔ 兩句永遠互斥——每一條底部測試都順帶確認這件事。 */
+    private function assertFooterIs(string $html, string $expected): void
+    {
+        $other = $expected === self::FOOTER_SUPPORT
+            ? self::FOOTER_AUTOMATIC
+            : self::FOOTER_SUPPORT;
+
+        $this->assertStringContainsString($expected, $html, '⛔ 底部提示不正確。');
+        $this->assertStringNotContainsString(
+            $other,
+            $html,
+            '⛔⛔ 兩句底部提示不得同時出現：一句叫客人來找我們、一句叫他別來。',
+        );
+    }
+
+    /** 一筆原始履約（第 1 批）。 */
+    private function originalBatch(Order $order, FulfillmentStatus $status, ?int $remains = null): FulfillmentOrder
+    {
+        $batch = FulfillmentOrder::factory()->submitted('SMM-FOOT-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+        ]);
+
+        DB::table('fulfillment_orders')->where('id', $batch->id)->update([
+            'status' => $status->value,
+            'provider_remains' => $remains,
+        ]);
+
+        return $batch->fresh();
+    }
+
+    private function lookupHtml(Order $order): string
+    {
+        return $this->lookup([
+            'reference' => $order->reference,
+            'email' => self::EMAIL,
+        ])->assertOk()->getContent();
+    }
+
+    /**
+     * ⭐ 案例 1：原始 `Canceled` ＋ 第 2 批 `Processing`。
+     *
+     * ⛔⛔ 這是 Owner 在 staging 遇到的那一張。上方仍誠實顯示原始單已卡住，
+     * ⭐ 但底部必須說「已自動安排處理」——現在真正在跑的是第 2 批；
+     * ⛔ 再叫客人來聯絡我們，是請他處理一件**已經處理過**的事。
+     */
+    public function test_the_footer_follows_a_running_replacement_batch(): void
+    {
+        $order = $this->orderFor();
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-FOOT-2')
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 50,
+        ]);
+
+        $html = $this->lookupHtml($order);
+
+        // ⭐ 上方原始區塊與下方更換紀錄**不變**。
+        $this->assertStringContainsString('請聯絡客服', $html, '⛔ 上方原始批次仍須顯示請聯絡客服。');
+        $this->assertStringContainsString('進行中', $html, '⛔ 下方更換批次仍須顯示進行中。');
+
+        // ⛔⛔ 但底部只有自動處理文案。
+        $this->assertFooterIs($html, self::FOOTER_AUTOMATIC);
+    }
+
+    /** ⭐ 案例 2：原始 `Canceled` ＋ 第 2 批也 `Canceled` → 底部要客服。 */
+    public function test_the_footer_asks_for_support_when_the_latest_batch_is_also_stuck(): void
+    {
+        $order = $this->orderFor();
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-FOOT-3')
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Canceled->value,
+        ]);
+
+        $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_SUPPORT);
+    }
+
+    /** ⭐ 案例 3：原始 `Canceled` 且**沒有**更換 → 底部要客服。 */
+    public function test_the_footer_asks_for_support_when_a_stuck_batch_has_no_replacement(): void
+    {
+        $order = $this->orderFor();
+        $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_SUPPORT);
+    }
+
+    /** ⭐ 案例 4：正常單批次進行中 → 維持自動處理文案。 */
+    public function test_the_footer_stays_automatic_for_a_healthy_single_batch(): void
+    {
+        $order = $this->orderFor();
+        $this->originalBatch($order, FulfillmentStatus::Processing, remains: 300);
+
+        $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_AUTOMATIC);
+    }
+
+    /**
+     * ⭐ 案例 5：多商品——⛔ **任一**商品的最新批次需要客服，整張卡就要客服。
+     *
+     * ⛔ 若只看第一個商品，一張「第一項已被更換且正在跑、第二項卡住」的訂單
+     * 會被標成「請耐心等候」，⛔ 而那位客人會一直等一個永遠不會好的項目。
+     */
+    public function test_any_item_needing_support_makes_the_whole_card_ask_for_support(): void
+    {
+        $order = $this->orderFor();
+
+        // 第一個商品：原始取消，但更換批次正在跑 → 本身不需要客服。
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-FOOT-4')
+            ->create();
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 50,
+        ]);
+
+        // 第二個商品：單批次且卡住 → 需要客服。
+        $second = $order->items()->create([
+            'platform_name' => 'Instagram',
+            'service_name' => 'Instagram 粉絲',
+            'variant_label' => '真人粉絲',
+            'sku' => 'ig-followers-real',
+            'unit_price_mills' => 5900,
+            'quantity' => 500,
+            'quantity_unit' => '個',
+            'amount' => 295,
+            'target_kind' => 'account',
+            'target_value' => 'second_account',
+        ]);
+
+        $stuck = FulfillmentOrder::factory()->submitted('SMM-FOOT-5')->create([
+            'order_item_id' => $second->id,
+        ]);
+        DB::table('fulfillment_orders')->where('id', $stuck->id)->update([
+            'status' => FulfillmentStatus::Failed->value,
+        ]);
+
+        $this->assertFooterIs($this->lookupHtml($order->fresh()), self::FOOTER_SUPPORT);
+    }
+
+    /**
+     * ⛔ 「最新批次」指 sequence 最大的那一批，
+     * ⛔ 不是 `replacements` 陣列碰巧的最後一個元素。
+     *
+     * ⭐ 誠實說明：目前兩者行為相同——presenter 的 `replacements` 沿用
+     * `OrderItem::fulfillmentOrders()` 的 `orderBy('sequence_no')`。
+     * ⛔ 但那個前提由**另一個檔案**決定，隨時可能被改；一旦順序反轉，
+     * 底部提示會**靜默**開始看錯批次。⭐ 這條以三批次把它釘住：
+     * 第 2 批取消、第 3 批正在跑，只有真正取最後一批才會是自動處理文案。
+     */
+    public function test_the_footer_uses_the_latest_batch_not_an_earlier_replacement(): void
+    {
+        $order = $this->orderFor();
+
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        // 第 2 批：也取消。
+        $second = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/second', 250)
+            ->submitted('SMM-FOOT-6')
+            ->create();
+        DB::table('fulfillment_orders')->where('id', $second->id)->update([
+            'status' => FulfillmentStatus::Canceled->value,
+        ]);
+
+        // 第 3 批：正在跑——⭐ 這才是目前真正有效的那一批。
+        $third = FulfillmentOrder::factory()
+            ->replacing($second->fresh(), 'https://instagram.com/third', 200)
+            ->submitted('SMM-FOOT-7')
+            ->create();
+        DB::table('fulfillment_orders')->where('id', $third->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 30,
+        ]);
+
+        $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_AUTOMATIC);
+    }
+
+    /** ⛔ 本輪只改底部提示，⛔ provider 與 PII 公開洩漏仍必須為 0。 */
+    public function test_the_footer_change_leaks_no_provider_or_contact_data(): void
+    {
+        $order = $this->orderFor();
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-FOOT-8')
+            ->create();
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_status_code' => 'In progress',
+            'provider_remains' => 50,
+        ]);
+
+        $html = $this->lookupHtml($order);
+
+        foreach (['SMM-FOOT-1', 'SMM-FOOT-8', 'FAKE-SERVICE-0000',
+            'Canceled', 'In progress', 'TheMostPanel', 'themostpanel',
+            self::EMAIL, self::PHONE,
+        ] as $forbidden) {
+            $this->assertStringNotContainsString($forbidden, $html, "⛔ 公開頁外洩：{$forbidden}");
+        }
+    }
 }

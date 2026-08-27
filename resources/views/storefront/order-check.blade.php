@@ -107,16 +107,41 @@
                         @foreach ($results as $order)
                             @php
                                 /*
-                                 * ⭐ 這張卡片裡**只要有任何一個商品**是「請聯絡客服」，
-                                 * 整張卡就顯示客服說明，而不是「耐心等候」。
+                                 * ⛔⛔ 底部提示看每個商品的**目前最新批次**。
+                                 *
+                                 * ⭐ 有更換批次就看最後一批，沒有才看原始批次。
+                                 *
+                                 * ⛔ 不能沿用上方原始區塊的狀態：上一輪把上方改成
+                                 * 只顯示第 1 批之後，一張「原始已取消、但 Owner 已
+                                 * 建立新批次且正在跑」的訂單會被整張標成需要客服
+                                 * ——⛔ 那是在請客人來找我們處理一件**已經處理過**
+                                 * 的事。⭐ 上方仍誠實顯示原始單的結果，
+                                 * 而底部講的是「這張單現在整體怎麼了」。
                                  *
                                  * ⛔ 一張訂單可能有多個商品。若只看第一個，一張
                                  * 「第一項正常、第二項卡住」的訂單會被整張標成
                                  * 「已自動安排處理，請耐心等候」——那位客人會一直等
                                  * 一個永遠不會好的項目。⛔ 判斷必須看全部。
+                                 *
+                                 * ⛔ 仍然只比對 presenter 已經收斂過的公開文案，
+                                 * ⛔ 不碰任何 provider 原文或內部狀態。
                                  */
                                 $needsSupport = collect($order['items'])
-                                    ->contains(fn (array $item): bool => $item['status'] === '請聯絡客服');
+                                    ->contains(function (array $item): bool {
+                                        $replacements = $item['replacements'] ?? [];
+
+                                        /*
+                                         * ⛔ 用 `array_key_last()` 而不是 `end()`：
+                                         * `end()` 需要參考傳遞、且會移動陣列指標。
+                                         * ⭐ `replacements` 已由 presenter 依
+                                         * sequence 遞增輸出，所以最後一筆就是最新批次。
+                                         */
+                                        $effective = $replacements === []
+                                            ? $item['status']
+                                            : $replacements[array_key_last($replacements)]['status'];
+
+                                        return $effective === '請聯絡客服';
+                                    });
                             @endphp
                             <article class="rounded-xl border border-black/10 p-5">
                                 {{--
