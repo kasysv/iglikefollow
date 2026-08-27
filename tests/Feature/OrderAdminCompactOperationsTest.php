@@ -135,6 +135,60 @@ class OrderAdminCompactOperationsTest extends TestCase
         );
     }
 
+    /**
+     * ⛔⛔ R1：**Editor 也必須看到同樣的 9 欄**，包含實際交付目標。
+     *
+     * ⭐ 初版把 `連結／帳號` 設成 Owner-only，於是 Owner 看到 9 欄、
+     * Editor 只看到 8 欄——⛔ 那既違反「固定 9 欄」，也與既有權限決策
+     * 不一致（policy 允許 Editor 讀取，`ViewOrder` 也已給客服完整資料）。
+     *
+     * ⭐ 客服要回答「我們把東西送到哪裡」，看不到交付目標就答不了。
+     */
+    public function test_an_editor_sees_the_same_nine_columns_and_the_actual_target(): void
+    {
+        $order = $this->order();
+        $item = $order->items()->first();
+
+        $parent = FulfillmentOrder::factory()->submitted('SMM-ED-1')->create([
+            'order_item_id' => $item->id,
+        ]);
+
+        // 第 2 批：Owner 換過連結；⭐ Editor 也必須看得到新的那個。
+        FulfillmentOrder::factory()
+            ->replacing($parent, 'editor_visible_target', 250)
+            ->submitted('SMM-ED-2')
+            ->create();
+
+        $html = Livewire::actingAs($this->editor())
+            ->test(FulfillmentOrdersRelationManager::class, [
+                'ownerRecord' => $order,
+                'pageClass' => ViewOrder::class,
+            ])
+            ->assertOk()
+            ->html();
+
+        $expected = ['送出時間', '供應商單號', '服務名稱', '連結／帳號',
+            '起始值', '數量', '狀態', '剩餘', '批次'];
+
+        $positions = [];
+
+        foreach ($expected as $label) {
+            $at = mb_strpos($html, $label);
+            $this->assertNotFalse($at, "⛔⛔ Editor 也必須看到這一欄：{$label}");
+            $positions[$label] = $at;
+        }
+
+        $sorted = $positions;
+        asort($sorted);
+        $this->assertSame($expected, array_keys($sorted), '⛔ Editor 的欄位順序也必須相同。');
+
+        // ⭐ Editor 看得到**該批次實際**的交付目標。
+        $this->assertStringContainsString('editor_visible_target', $html);
+
+        // ⛔⛔ 但仍然不得看到「更換連結」——看得到與改得動是兩件事。
+        $this->assertStringNotContainsString('更換連結', $html);
+    }
+
     /** ⛔ 被移除的舊資料欄一個都不得留下。 */
     #[DataProvider('removedColumnLabels')]
     public function test_the_removed_fulfillment_columns_are_gone(string $label): void
@@ -618,12 +672,73 @@ class OrderAdminCompactOperationsTest extends TestCase
             ->assertOk()
             ->html();
 
-        // ⭐ token 必須以 aria-label 與 title 出現（可讀、可聚焦）。
+        /*
+         * ⭐ R1：token 由 Filament 的 `icon-button` 以 `x-tooltip` ＋
+         * `aria-label` 輸出。
+         *
+         * ⛔ 該 component 在有 tooltip 時會**刻意把 `title` 設為 null**
+         * （`icon-button.blade.php:94`），避免原生 title 與 tooltip 疊加；
+         * ⛔ 所以這裡不再斷言 `title=`——初版那條斷言在 R1 之後已不成立。
+         */
         $this->assertStringContainsString('aria-label="Partial"', $html);
-        $this->assertStringContainsString('title="Partial"', $html);
+        $this->assertMatchesRegularExpression(
+            "/x-tooltip=\"\{\s*content:\s*'Partial'/su",
+            $html,
+            '⛔ 警示必須使用 Filament 的 x-tooltip，⛔ 不得只靠原生 title。',
+        );
 
         // ⛔ 但不得作為可見文字節點出現（`>Partial<`）。
         $this->assertStringNotContainsString('>Partial<', $html);
+    }
+
+    /**
+     * ⛔⛔ R1：點擊／觸控警示圖示**不得**觸發整列的訂單導航。
+     *
+     * ⭐ 整列是可以點進訂單的連結。初版的手寫 button 沒有隔離事件，
+     * ⛔ 於是使用者想看提示、卻直接被帶去另一頁——那個提示等於看不到。
+     *
+     * ⛔ 同時確認這顆 button 自己沒有 `href`，也不是 submit。
+     */
+    public function test_the_indicator_buttons_do_not_trigger_row_navigation(): void
+    {
+        $order = $this->order();
+
+        FulfillmentOrder::factory()->submitted('SMM-STOP-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Partial,
+            'provider_status_code' => 'Partial',
+        ]);
+
+        $html = Livewire::actingAs($this->owner())
+            ->test(ListOrders::class)
+            ->assertOk()
+            ->html();
+
+        // ⭐ 事件必須被隔離。
+        $this->assertMatchesRegularExpression(
+            '/<button\b[^>]*\bx-on:click\.stop\.prevent=/su',
+            $html,
+            '⛔⛔ 警示圖示必須阻止 click 冒泡，否則會觸發整列跳轉。',
+        );
+
+        // ⛔ 該 button 不得帶 href，也不得是 submit。
+        $this->assertMatchesRegularExpression(
+            '/<button\b[^>]*\baria-label="Partial"[^>]*>/su',
+            $html,
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '/<button\b[^>]*\baria-label="Partial"[^>]*\bhref=/su',
+            $html,
+            '⛔ 警示圖示不得是連結。',
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '/<button\b[^>]*\baria-label="Partial"[^>]*\btype="submit"/su',
+            $html,
+            '⛔ 警示圖示不得是 submit。',
+        );
+
+        // ⭐ 整列的訂單連結仍然存在。
+        $this->assertStringContainsString('/admin/orders/'.$order->reference, $html);
     }
 
     /**
@@ -655,33 +770,37 @@ class OrderAdminCompactOperationsTest extends TestCase
             ->html();
 
         /*
-         * ⭐ 直接比對**同一個 button 標籤內**的 class 與 title。
+         * ⭐ 直接比對**同一個 button 標籤內**的 class 與 `aria-label`。
          *
          * ⛔ 不用「往前抓 N 個字元再看有沒有 warning」那種寫法：
          * 兩顆圖示在 HTML 裡相鄰，抓太寬會抓到隔壁那顆的 class，
          * 於是顏色對調時測試仍然會通過——那等於沒有測。
+         *
+         * ⛔ R1：Filament 的 `icon-button` 輸出的是 `fi-color-warning`／
+         * `fi-color-danger`（它自己的 color 系統），⛔ 不是我初版手寫的
+         * `text-warning-600`；而且有 tooltip 時不再輸出 `title`。
          */
         $this->assertMatchesRegularExpression(
-            '/<button\b[^>]*\btext-warning-600\b[^>]*\btitle="Partial"/su',
+            '/<button\b[^>]*\bfi-color-warning\b[^>]*\baria-label="Partial"/su',
             $html,
             '⛔⛔ Partial 必須是 warning 色（同一個 button 上）。',
         );
 
         $this->assertMatchesRegularExpression(
-            '/<button\b[^>]*\btext-danger-600\b[^>]*\btitle="Canceled"/su',
+            '/<button\b[^>]*\bfi-color-danger\b[^>]*\baria-label="Canceled"/su',
             $html,
             '⛔⛔ Canceled 必須是 danger 色（同一個 button 上）。',
         );
 
         // ⛔ 反向：顏色不得對調。
         $this->assertDoesNotMatchRegularExpression(
-            '/<button\b[^>]*\btext-danger-600\b[^>]*\btitle="Partial"/su',
+            '/<button\b[^>]*\bfi-color-danger\b[^>]*\baria-label="Partial"/su',
             $html,
             '⛔ Partial 不得是 danger 色。',
         );
 
         $this->assertDoesNotMatchRegularExpression(
-            '/<button\b[^>]*\btext-warning-600\b[^>]*\btitle="Canceled"/su',
+            '/<button\b[^>]*\bfi-color-warning\b[^>]*\baria-label="Canceled"/su',
             $html,
             '⛔ Canceled 不得是 warning 色。',
         );

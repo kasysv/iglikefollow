@@ -8,15 +8,26 @@
 
     ⭐ 因此每一種指示各是一個獨立的圖示，可以同時出現。
 
-    ⛔⛔ 無障礙：tooltip 不得只靠 CSS `:hover`。
-    ⭐ 這裡用 `<button type="button">`：
-      - 鍵盤可 focus（Tab 走得到）；
-      - 觸控可 tap；
-      - `title` 提供原生 tooltip，`aria-label` 提供螢幕閱讀器的等價文字。
-    ⛔ 不用 `<div>` ＋ hover-only：那對鍵盤與手機使用者等於不存在。
+    ⛔⛔ R1 修正一：改用安裝版 Filament 既有的 `<x-filament::icon-button>`。
 
-    ⛔ `type="button"` 是必要的：這個表格的列本身是連結／可點擊，
-    ⛔ 沒有 type 的 button 在某些情境會觸發預設送出行為。
+    ⭐ 初版是我手寫的 `<button title="...">`，只有瀏覽器原生 title：
+    ⛔ 沒有專案其他地方都在用的 `x-tooltip` 互動，樣式與行為都自成一格。
+    Filament 的 component 會自己輸出 `x-tooltip`（內容經 `@js()` 編碼）
+    與經過 `e()` 逸出的 `aria-label`，⛔ 也就不需要我自己拼字串。
+
+    ⛔ 注意：該 component 在有 `tooltip` 時會**刻意把 `title` 設為 null**
+    （`icon-button.blade.php:94`），避免原生 title 與 tooltip 疊加。
+    ⭐ 所以 exact token 出現在 `x-tooltip` 與 `aria-label`，⛔ 不再有 `title`。
+
+    ⛔⛔ R1 修正二：阻止事件冒泡。
+
+    ⭐ 整列是可以點進訂單的連結。初版的 button 沒有隔離事件，
+    ⛔ 於是點擊／觸控警示圖示很可能直接觸發整列跳轉——
+    使用者根本沒機會看到提示。`x-on:click.stop.prevent` 讓這顆圖示
+    只做自己的事，⛔ 不觸發列導航、⛔ 也不 submit 任何表單。
+
+    ⭐ 鍵盤仍可 Tab focus（它就是一個真正的 `<button>`），
+    ⛔ 不是只靠 CSS `:hover` 的裝飾元素。
 --}}
 @php
     $indicators = \App\Support\OrderOperationsIndicators::smm($getRecord());
@@ -24,51 +35,49 @@
 
 <div class="flex items-center gap-1.5">
     @if ($indicators['partial'])
-        {{-- ⛔ 黃色 warning：部分完成。 --}}
-        <button
-            type="button"
-            class="fi-color-warning text-warning-600 dark:text-warning-400 cursor-help"
-            title="{{ \App\Support\OrderOperationsIndicators::partialToken() }}"
-            aria-label="{{ \App\Support\OrderOperationsIndicators::partialToken() }}"
-        >
-            <x-filament::icon
-                icon="heroicon-o-exclamation-triangle"
-                class="h-5 w-5"
-            />
-        </button>
+        {{-- ⛔ warning：部分完成。⛔ 顏色不得與下面的 danger 對調。 --}}
+        <x-filament::icon-button
+            icon="heroicon-o-exclamation-triangle"
+            color="warning"
+            :label="\App\Support\OrderOperationsIndicators::partialToken()"
+            :tooltip="\App\Support\OrderOperationsIndicators::partialToken()"
+            x-on:click.stop.prevent=""
+        />
     @endif
 
     @if ($indicators['canceled'])
-        {{-- ⛔ 紅色 danger：已取消。⛔ 與上面的顏色不得對調。 --}}
-        <button
-            type="button"
-            class="fi-color-danger text-danger-600 dark:text-danger-400 cursor-help"
-            title="{{ \App\Support\OrderOperationsIndicators::canceledToken() }}"
-            aria-label="{{ \App\Support\OrderOperationsIndicators::canceledToken() }}"
-        >
-            <x-filament::icon
-                icon="heroicon-o-exclamation-triangle"
-                class="h-5 w-5"
-            />
-        </button>
+        {{-- ⛔ danger：已取消。 --}}
+        <x-filament::icon-button
+            icon="heroicon-o-exclamation-triangle"
+            color="danger"
+            :label="\App\Support\OrderOperationsIndicators::canceledToken()"
+            :tooltip="\App\Support\OrderOperationsIndicators::canceledToken()"
+            x-on:click.stop.prevent=""
+        />
     @endif
 
     @if ($indicators['pending'])
-        {{-- ⛔ 另有商品的**最新**批次還沒拿到供應商單號。 --}}
-        <span aria-label="尚未全部送出" title="尚未全部送出">
-            <x-filament::icon
-                icon="heroicon-o-x-mark"
-                class="text-danger-600 dark:text-danger-400 h-5 w-5"
-            />
-        </span>
+        {{--
+            ⛔ 另有商品的**最新**批次還沒拿到供應商單號。
+            ⭐ 這是固定的本地中文說明，⛔ 不是 provider 原文，
+            所以不受「平常不露文字」那條限制——它本來就不是 SMM 的 token。
+        --}}
+        <x-filament::icon-button
+            icon="heroicon-o-x-mark"
+            color="danger"
+            label="尚未全部送出"
+            tooltip="尚未全部送出"
+            x-on:click.stop.prevent=""
+        />
     @endif
 
     @if ($indicators['allSubmitted'])
-        <span aria-label="全部已送出" title="全部已送出">
-            <x-filament::icon
-                icon="heroicon-o-check"
-                class="text-success-600 dark:text-success-400 h-5 w-5"
-            />
-        </span>
+        <x-filament::icon-button
+            icon="heroicon-o-check"
+            color="success"
+            label="全部已送出"
+            tooltip="全部已送出"
+            x-on:click.stop.prevent=""
+        />
     @endif
 </div>

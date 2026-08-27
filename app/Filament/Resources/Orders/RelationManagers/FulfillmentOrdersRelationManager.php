@@ -64,13 +64,23 @@ class FulfillmentOrdersRelationManager extends RelationManager
                  *
                  * ⛔ 讀 order item 會讓每一列都顯示同一個連結，
                  * 看起來像每批都送到同一個地方——而更換的重點正是換了目標。
+                 *
+                 * ⛔⛔ R1 修正：移除初版的 Owner-only `visible()`。
+                 *
+                 * ⭐ 初版把這一欄限制成只有 Owner 看得到，結果 Owner 看到 9 欄、
+                 * Editor 只看到 8 欄——⛔ 這與本 milestone「固定 9 欄」的要求
+                 * 直接衝突，也與既有權限決策不一致：`OrderPolicy`／
+                 * `FulfillmentOrderPolicy` 本來就允許 Editor 讀取，
+                 * 而 `ViewOrder` 早已明定客服需要完整的聯絡與交付資料。
+                 *
+                 * ⭐ 客服要回答「我們把東西送到哪裡」，看不到交付目標就答不了。
+                 * ⛔ 「更換連結」action 仍嚴格 Owner-only——
+                 * **看得到**與**改得動**是兩件事。
                  */
                 TextColumn::make('effective_target')
                     ->label('連結／帳號')
                     ->state(fn (FulfillmentOrder $record): string => $record->effectiveTarget())
-                    ->wrap()
-                    // ⛔ 交付目標只給 Owner 看。
-                    ->visible(fn (): bool => Auth::user()?->isOwner() ?? false),
+                    ->wrap(),
 
                 // ⭐ 起始值：`null`＝尚未取得、`0`＝確實是 0，⛔ 兩者不得混淆。
                 TextColumn::make('provider_start_count')
