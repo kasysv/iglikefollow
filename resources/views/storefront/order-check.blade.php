@@ -239,9 +239,26 @@
                                                                 'danger' => 'bg-accent/10 text-accent',
                                                                 default => 'bg-[#a16207]/12 text-[#a16207]',
                                                             };
+
+                                                            /*
+                                                             * ⭐ 原始批次需要客服、但**已經有後續更換**時，
+                                                             * 加上「- 已處理」。
+                                                             *
+                                                             * ⛔ 上方顯示的仍是原始批次的真實結果（它確實
+                                                             * 卡住了，⛔ 狀態、tone 與 remains 都不變）；
+                                                             * ⭐ 這三個字只是告訴客人「我們已經為這件事
+                                                             * 建立了新的一批」，⛔ 不代表最新批次已完成
+                                                             * ——最新批次的進度在下方的更換紀錄。
+                                                             *
+                                                             * ⛔ 純顯示層：⛔ 不改 presenter、⛔ 不改
+                                                             * `status_tone`，⛔ 也不影響卡片底部的判定。
+                                                             */
+                                                            $statusLabel = ($item['status'] === '請聯絡客服' && ! empty($item['replacements']))
+                                                                ? '請聯絡客服 - 已處理'
+                                                                : $item['status'];
                                                         @endphp
                                                         <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-semibold {{ $toneClass }}">
-                                                            {{ $item['status'] }}
+                                                            {{ $statusLabel }}
                                                         </span>
                                                     </dd>
                                                 </div>
@@ -284,7 +301,7 @@
 
                                                                 <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
                                                                     <div>
-                                                                        <dt class="text-black/55">送出數量</dt>
+                                                                        <dt class="text-black/55">數量</dt>
                                                                         <dd class="text-black">{{ number_format($replacement['quantity']) }}</dd>
                                                                     </div>
                                                                     <div>

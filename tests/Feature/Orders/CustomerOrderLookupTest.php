@@ -2585,4 +2585,143 @@ class CustomerOrderLookupTest extends TestCase
             $this->assertStringNotContainsString($forbidden, $html, "⛔ 公開頁外洩：{$forbidden}");
         }
     }
+
+    // ==================================== 原始批次「已處理」與更換數量標籤
+
+    /** 一筆原始 `Canceled` ＋ 一筆進行中的更換。 */
+    private function stuckOriginalWithRunningReplacement(Order $order, string $providerOrderId): void
+    {
+        $parent = $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted($providerOrderId)
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 50,
+        ]);
+    }
+
+    /**
+     * ⛔ 原始批次需要客服、且**沒有**任何更換時，維持 exact「請聯絡客服」。
+     *
+     * ⭐ 這種情況下我們確實還沒為它做任何事，⛔ 不得暗示已處理。
+     */
+    public function test_a_stuck_original_without_replacement_shows_no_handled_suffix(): void
+    {
+        $order = $this->orderFor();
+        $this->originalBatch($order, FulfillmentStatus::Canceled);
+
+        $html = $this->lookupHtml($order);
+
+        $this->assertStringContainsString('請聯絡客服', $html);
+        $this->assertStringNotContainsString(
+            '已處理',
+            $html,
+            '⛔⛔ 還沒建立更換批次，⛔ 不得顯示「已處理」。',
+        );
+    }
+
+    /**
+     * ⭐ 原始批次需要客服、且**已有**更換時，上方顯示 exact
+     * 「請聯絡客服 - 已處理」。
+     *
+     * ⛔ 「已處理」只代表已建立後續更換，⛔ 不代表最新批次已完成
+     * ——最新批次的進度在下方各自顯示。
+     */
+    public function test_a_stuck_original_with_a_replacement_shows_the_handled_suffix(): void
+    {
+        $order = $this->orderFor();
+        $this->stuckOriginalWithRunningReplacement($order, 'SMM-LABEL-1');
+
+        $html = $this->lookupHtml($order);
+
+        $this->assertStringContainsString(
+            '請聯絡客服 - 已處理',
+            $html,
+            '⛔⛔ 已有更換批次時，上方必須顯示「請聯絡客服 - 已處理」。',
+        );
+
+        // ⭐ 下方更換批次仍用自己的公開狀態與剩餘。
+        $this->assertStringContainsString('進行中', $html);
+        $this->assertStringContainsString('50', $html);
+    }
+
+    /**
+     * ⛔ 「已處理」**只**加在需要客服的原始批次上。
+     *
+     * ⭐ 一張原始批次正常進行中、又有更換的訂單，上方仍是「進行中」，
+     * ⛔ 不得變成「進行中 - 已處理」。
+     */
+    public function test_a_healthy_original_never_gets_the_handled_suffix(): void
+    {
+        $order = $this->orderFor();
+        $parent = $this->originalBatch($order, FulfillmentStatus::Processing, remains: 300);
+
+        $child = FulfillmentOrder::factory()
+            ->replacing($parent, 'https://instagram.com/replacement', 250)
+            ->submitted('SMM-LABEL-2')
+            ->create();
+
+        DB::table('fulfillment_orders')->where('id', $child->id)->update([
+            'status' => FulfillmentStatus::Processing->value,
+            'provider_remains' => 50,
+        ]);
+
+        $this->assertStringNotContainsString(
+            '已處理',
+            $this->lookupHtml($order),
+            '⛔ 原始批次不需要客服時，⛔ 不得出現「已處理」。',
+        );
+    }
+
+    /** ⭐ 更換紀錄的欄位標籤是「數量」，⛔ 不再是「送出數量」。 */
+    public function test_the_replacement_quantity_label_is_simplified(): void
+    {
+        $order = $this->orderFor();
+        $this->stuckOriginalWithRunningReplacement($order, 'SMM-LABEL-3');
+
+        $html = $this->lookupHtml($order);
+
+        $this->assertStringNotContainsString(
+            '送出數量',
+            $html,
+            '⛔ 更換紀錄不得再出現「送出數量」。',
+        );
+
+        // ⭐ 數量本身仍要顯示。
+        $this->assertStringContainsString('250', $html);
+    }
+
+    /**
+     * ⛔⛔ 本輪只改**顯示文字**：狀態、tone、remains、數量與底部判定全不變。
+     *
+     * ⭐ 直接比對 presenter 的輸出——它是這幾項的唯一來源，
+     * ⛔ 若有人把「已處理」寫進 presenter，這裡會立刻紅。
+     */
+    public function test_the_label_change_does_not_alter_any_underlying_value(): void
+    {
+        $order = $this->orderFor();
+        $this->stuckOriginalWithRunningReplacement($order, 'SMM-LABEL-4');
+
+        $shaped = PublicOrderPresenter::for($order->fresh());
+        $item = $shaped['items'][0];
+
+        // ⛔ presenter 仍輸出未加工的「請聯絡客服」。
+        $this->assertSame('請聯絡客服', $item['status']);
+        $this->assertSame('danger', $item['status_tone']);
+        $this->assertSame('-', $item['remains']);
+        $this->assertSame(1000, $item['quantity']);
+
+        // ⛔ 更換批次不受影響。
+        $this->assertSame('進行中', $item['replacements'][0]['status']);
+        $this->assertSame('info', $item['replacements'][0]['status_tone']);
+        $this->assertSame('50', $item['replacements'][0]['remains']);
+        $this->assertSame(250, $item['replacements'][0]['quantity']);
+
+        // ⭐ 底部仍依最新批次判定 → 自動處理文案。
+        $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_AUTOMATIC);
+    }
 }
