@@ -3,8 +3,10 @@
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\MockCheckoutController;
 use App\Http\Controllers\OrderLookupController;
+use App\Http\Controllers\SitemapController;
 use App\Http\Controllers\StorefrontController;
 use App\Http\Middleware\NeverIndex;
+use App\Support\CanonicalUrl;
 use App\Support\IndexingPolicy;
 use Illuminate\Support\Facades\Route;
 
@@ -91,10 +93,33 @@ Route::middleware(NeverIndex::class)->group(function () {
         ->name('checkout.mock');
 });
 
+/*
+ * ⭐ M5A：只含 14 條 indexable canonical 的 sitemap。
+ *
+ * ⛔ 不套 `NeverIndex`：sitemap 本身不是要被索引的「頁面」，
+ * 它是給爬蟲讀的資料檔；⭐ 而它是否**該被讀取**由 robots.txt 決定
+ * ——不可索引時 robots 是 `Disallow: /`，爬蟲根本不會來要它。
+ */
+Route::get('/sitemap.xml', SitemapController::class)->name('sitemap');
+
 Route::get('/robots.txt', function (IndexingPolicy $indexingPolicy) {
-    $contents = $indexingPolicy->allows(request())
-        ? "User-agent: *\nAllow: /"
-        : "User-agent: *\nDisallow: /";
+    /*
+     * ⛔⛔ 只有在真正允許索引時才 `Allow`，⛔ 且同時附上 sitemap 位置。
+     *
+     * ⭐ `IndexingPolicy` 已同時要求 production ＋ flag ＋ **精確 host**，
+     * 所以 staging host 即使 `APP_ENV=production` 且 flag 誤開，
+     * ⛔ 仍然會落在 `Disallow: /`（施工單 §3）。
+     *
+     * ⛔ sitemap URL 用 trusted origin，⛔ 不用 request Host——
+     * 否則攻擊者送一個假 Host 就能讓我們的 robots.txt 指向他的網域。
+     */
+    if (! $indexingPolicy->allows(request())) {
+        return response("User-agent: *\nDisallow: /", 200, [
+            'Content-Type' => 'text/plain; charset=UTF-8',
+        ]);
+    }
+
+    $contents = "User-agent: *\nAllow: /\n\nSitemap: ".CanonicalUrl::to('/sitemap.xml');
 
     return response($contents, 200, ['Content-Type' => 'text/plain; charset=UTF-8']);
 })->name('robots');
@@ -107,3 +132,25 @@ Route::get('/api/health', function (IndexingPolicy $indexingPolicy) {
         'indexing' => $indexingPolicy->allows(request()),
     ]);
 })->name('health');
+
+/*
+|--------------------------------------------------------------------------
+| M5A fallback：舊站 path 沒有對應 route
+|--------------------------------------------------------------------------
+|
+| ⛔⛔ 這**不是** catch-all 轉首頁。施工單 §2.4 明文禁止那件事，理由也很實際：
+| 把所有未知 URL 轉去首頁會讓 Google 認為我們有大量「軟 404」，
+| ⭐ 而且真正打錯字的訪客會以為自己找到了正確頁面。
+|
+| ⭐ 它存在的唯一理由是：`/shop/`、`/product/ig粉絲/`、`/cart/` 這些舊 path
+| 在新站**沒有任何 route**，因此 web group 的 middleware 根本不會執行
+| ——⛔ 我實測確認過：加了 middleware 之後它們仍然直接 404。
+|
+| ⛔ 所以這裡把「有沒有對應規則」的判斷交回同一個 resolver：
+|  - 命中 410 清單 → 410；
+|  - 命中 legacy／alias → 由 middleware 發出的 301（本 closure 不會被執行到）；
+|  - ⛔ 其餘一律 **真 404**。
+*/
+Route::fallback(function () {
+    abort(404);
+});

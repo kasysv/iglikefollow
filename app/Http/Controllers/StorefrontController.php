@@ -92,18 +92,18 @@ class StorefrontController extends Controller
 
         $canonical = $record->primaryUrl();
 
-        $path = (string) parse_url($request->getRequestUri(), PHP_URL_PATH);
-
         /*
-         * ⛔ 測試 client 的 prepareUrlForRequest 會剝掉尾斜線,永遠送出
-         * 非尾斜線 URI;在 unit test runtime 跳過此收斂以免自我迴圈。
-         * 真實 HTTP(Apache/PHPStudy)行為由 local smoke 驗證:非尾斜線
-         * 302 → 尾斜線 canonical。
+         * ⛔⛔ M5A：尾斜線收斂已**整個移到** `CanonicalUrlRedirect`。
+         *
+         * ⭐ 原本這裡有一段 302，還帶著 `runningUnitTests()` 的例外
+         * ——因為測試 client 的 `prepareUrlForRequest()` 會 `trim($uri,'/')`，
+         * 永遠送不出尾斜線，那段收斂在測試裡會自我迴圈。
+         *
+         * ⛔ 那個例外的代價是：真正的收斂行為**從來沒有被測到**。
+         * ⭐ 現在由 middleware 統一處理（施工單要求「一個集中 resolver」），
+         * 而 M5A 測試以 `Request::create()` 直接餵 kernel——它保留尾斜線，
+         * ⭐ 所以兩個方向都測得到，⛔ 不再需要任何 runtime 例外。
          */
-        if (! app()->runningUnitTests() && ! str_ends_with($path, '/')) {
-            return redirect()->to($canonical, 302);
-        }
-
         return $this->renderServicePage($request, $record, preview: false, canonical: $canonical);
     }
 
@@ -122,16 +122,18 @@ class StorefrontController extends Controller
         $record = $this->catalog->findService($platform, $service);
 
         /*
-         * ⛔ D-103:商品級 /services/... 不得形成可索引第二頁。published
-         * 且已有 product slug 的 guest request 以單次 302 收斂到唯一
-         * canonical;沒有 product slug(draft 已由 findService 排除;
-         * 過渡期尚未指派 slug 的 published 服務)且非授權 preview 回 404。
+         * ⛔ D-103：商品級 `/services/...` 不得形成可索引第二頁。
+         *
+         * ⛔⛔ M5A：guest 的收斂已由 `CanonicalUrlRedirect` 以 **301** 處理，
+         * 而且是在 controller 之前——所以走到這裡的 guest request，
+         * 代表該組合**不在** `ProductSlugMap` 裡（例如 comments／auto-likes）。
+         *
+         * ⭐ 那種情況維持 404：⛔ 不新增 SEO 頁、⛔ 不轉址（施工單 §2.3）。
+         *
+         * ⛔ 這裡刻意不再自己 redirect：同一條規則若同時存在於 middleware
+         * 與 controller，兩邊有一天會不一致，而 301 是永久的。
          */
         abort_if($record === null, 404);
-
-        if (filled($record->product_slug)) {
-            return redirect()->to($record->primaryUrl(), 302);
-        }
 
         abort(404);
     }

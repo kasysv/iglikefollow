@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AddRobotsHeader;
+use App\Http\Middleware\CanonicalUrlRedirect;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -16,6 +17,19 @@ return Application::configure(basePath: dirname(__DIR__))
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
+        /*
+         | ⭐ M5A：URL 正規化必須在**路由解析之前**發生。
+         |
+         | ⛔ 15 條 legacy path（例如 `/shop/`、`/product/ig粉絲/`）在新站
+         | 沒有對應 route。若等到路由解析完才處理，它們會先變成 404，
+         | ⛔ 而 404 之後再想轉址就只能靠 exception handler——那是一條把
+         | 「找不到」與「已搬家」混在一起的路。
+         |
+         | ⭐ `prependToGroup('web')` 讓它成為 web group 的第一道，
+         | 在 controller 之前就給出最終答案。
+         */
+        $middleware->prependToGroup('web', CanonicalUrlRedirect::class);
+
         $middleware->append(AddRobotsHeader::class);
 
         /*
