@@ -17,7 +17,7 @@ use Illuminate\Http\Response;
  *
  * ⭐ 這些不是「忘了加」，而是每一個都有理由不該被收錄：
  * redirect 來源會讓 Google 一直重爬已經搬走的 URL；
- * alias 與 canonical 內容相同會造成重複內容；
+ * alias 與 canonical 內容相同，列入兩者等於要求收錄同一頁的兩個 URL；
  * checkout／order-check 含交易與個資；preview 是未發布內容。
  *
  * ⛔ 不輸出 `lastmod`：我們沒有可信的「內容最後實質變更時間」，

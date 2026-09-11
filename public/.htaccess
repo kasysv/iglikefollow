@@ -22,7 +22,7 @@
     #  1. **Host 污染**：bare `R=301` 沒有帶 scheme/host，Apache 會用
     #     request 的 `Host` header 重建 Location。實測
     #     `Host: evil.test` + `/shop/` → `301 http://evil.test/shop`，
-    #     ⛔ 攻擊者能把我們的使用者與 SEO 權重直接導走。
+    #     攻擊者能把我們的使用者與爬蟲直接導到他的網域。
     #  2. **多跳**：legacy 會先被剝掉尾斜線再進 Laravel，
     #     `/shop/` 變成兩跳；⛔ 而 `/cart/` 這種要回 410 的路徑
     #     會先吃到一個毫無意義的 301。

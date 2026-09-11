@@ -5,6 +5,7 @@ use App\Http\Middleware\CanonicalUrlRedirect;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 
@@ -46,26 +47,35 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions) {
         /*
-         | M5A-1 R1: an unknown path must be a real 404 for EVERY method.
+         | An unknown path must be a real 404 for every method.
          |
          | `Route::fallback()` only registers GET/HEAD, so `POST /order-lookup`
-         | came back as `405 Method Not Allowed` -- the existing test
-         | `test_the_old_lookup_path_is_gone` caught it as
-         | `[404] but received 405`. A 405 leaks "this path exists, you just
-         | used the wrong verb", and the truth is the new site has no such
-         | resource at all.
+         | came back as 405 -- the existing test `test_the_old_lookup_path_is_gone`
+         | caught it as `[404] but received 405`. A 405 says "this path exists,
+         | you used the wrong verb", and the new site has no such resource.
          |
-         | My first attempt was a catch-all `Route::addRoute([...], '{any}')`.
-         | That was wrong and the suite proved it: `routes/payments.php` is
-         | registered AFTER `routes/web.php` via the `then:` callback, so the
-         | catch-all shadowed every payments POST route and 39 payment tests
-         | started failing with 404. A `.*` route silently depends on
-         | registration order.
+         | R2: only convert the 405 when the path has NO real route at all.
+         | R1 converted every 405 globally, which changed the method semantics
+         | of routes that genuinely exist: `POST /faq` must stay 405 with its
+         | Allow header, because `/faq` really is a GET-only page.
          |
-         | Handling it here is order-independent: routing has already been
-         | fully attempted, so nothing can be shadowed.
+         | Handling it here rather than with a catch-all route is deliberate:
+         | `routes/payments.php` is registered AFTER `routes/web.php` via the
+         | `then:` callback, so a catch-all silently shadowed every payments
+         | POST route (39 payment tests failed with 404).
          */
-        $exceptions->render(function (MethodNotAllowedHttpException $e) {
+        $exceptions->render(function (MethodNotAllowedHttpException $e, Request $request) {
+            foreach (Route::getRoutes()->getRoutes() as $route) {
+                if ($route->isFallback) {
+                    continue;
+                }
+
+                if ($route->matches($request, includingMethod: false)) {
+                    // A real route owns this path: keep the honest 405.
+                    return null;
+                }
+            }
+
             abort(404);
         });
     })->create();

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Middleware\CanonicalUrlRedirect;
 use App\Models\Platform;
 use App\Models\Service;
 use App\Models\User;
@@ -743,7 +744,13 @@ class M5aUrlMigrationTest extends TestCase
         );
     }
 
-    /** ⛔ 即使 APP_URL 是正式站，staging／hostile host 仍不得被導向 production。 */
+    /**
+     * staging 與 hostile host 絕不被導向正式站。
+     *
+     * R2：原本這裡寫成「如果是 301，就檢查它指向正式站」——那等於**允許**
+     * 它 301 到 production，正是這條測試該禁止的行為。改為直接斷言
+     * 不得發生任何轉址。
+     */
     public function test_staging_and_hostile_hosts_are_never_forced_to_production(): void
     {
         config(['app.url' => 'https://www.iglikefollow.com']);
@@ -751,13 +758,426 @@ class M5aUrlMigrationTest extends TestCase
         foreach (['staging.iglikefollow.com', 'evil.test'] as $host) {
             $response = $this->request('/faq', 'GET', ['HTTP_HOST' => $host]);
 
-            $location = (string) $response->headers->get('Location');
+            $this->assertNotSame(
+                301,
+                $response->getStatusCode(),
+                $host.' 不得被導向正式站。',
+            );
 
-            $this->assertStringNotContainsString($host, $location);
+            $this->assertNull(
+                $response->headers->get('Location'),
+                $host.' 不得產生任何 Location。',
+            );
+        }
+    }
 
-            if ($response->getStatusCode() === 301) {
-                $this->assertStringStartsWith('https://www.iglikefollow.com', $location);
+    // ==================================================== 13. R2：交易路由不進 SEO 正規化
+
+    /** @return array<string, array{string}> */
+    public static function bypassedTransactionPaths(): array
+    {
+        return [
+            '/payments/{ref}/status' => ['/payments/review-REFERENCE/status'],
+            '/payments/linepay confirm' => ['/payments/linepay/review-REFERENCE/confirm'],
+            '/payments/linepay cancel' => ['/payments/linepay/review-REFERENCE/cancel'],
+            '/admin' => ['/admin/login'],
+            '/api' => ['/api/health'],
+            '/up' => ['/up'],
+        ];
+    }
+
+    /**
+     * R2：交易／後台／API 的原始 path 與 query 必須原封不動抵達 next handler。
+     *
+     * GPT 的 probe 重現了真正的風險：
+     * `/payments/review-REFERENCE/status?review_token=keep-me` 被 SEO
+     * 正規化改寫成 `/payments/review-reference/status`——整個 path 轉小寫、
+     * query 消失。`LinePayReturnController::identityMatches()` 需要比對
+     * `orderId` 與 `transactionId`，那種改寫會讓付款確認拿不到必要資料。
+     *
+     * 這裡直接斷言 next handler 收到的 path 與 query，而不是只檢查
+     * 「最終不是 301」——後者在 handler 收到被改寫的值時也會通過。
+     */
+    #[DataProvider('bypassedTransactionPaths')]
+    public function test_transaction_routes_reach_their_handler_untouched(string $path): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        $seen = null;
+
+        $request = Request::create('https://iglikefollow.com'.$path.'?review_token=keep-ME&b=2');
+
+        $response = app(CanonicalUrlRedirect::class)->handle(
+            $request,
+            function (Request $r) use (&$seen) {
+                $seen = ['path' => $r->getPathInfo(), 'query' => $r->query()];
+
+                return response('ok', 200);
+            },
+        );
+
+        $this->assertSame(200, $response->getStatusCode(), $path.' 不得被 SEO 轉址。');
+        $this->assertNotNull($seen, $path.' 必須抵達 next handler。');
+
+        // path 的大小寫逐字保留（`review-REFERENCE` 不得變成小寫）。
+        $this->assertSame($path, $seen['path'], $path.' 的 path 被改寫了。');
+
+        /*
+         * query 逐項比對其**值**，不比對字串順序：
+         * `Request::getQueryString()` 會依鍵名排序後重組，
+         * 所以字串比對會因排序而假性失敗（我第一版就踩到）。
+         * 真正要證明的是「值與大小寫沒有被動過、也沒有被丟掉」。
+         */
+        $this->assertSame(
+            ['review_token' => 'keep-ME', 'b' => '2'],
+            $seen['query'],
+            $path.' 的 query 被改寫或遺失了。',
+        );
+    }
+
+    /** POST 也不得被改寫（付款回呼常是 POST）。 */
+    public function test_transaction_routes_are_untouched_for_post_too(): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        $seen = null;
+
+        $request = Request::create('https://iglikefollow.com/payments/ecpay/callback?Token=KEEP', 'POST');
+
+        $response = app(CanonicalUrlRedirect::class)->handle(
+            $request,
+            function (Request $r) use (&$seen) {
+                $seen = ['path' => $r->getPathInfo(), 'query' => $r->query()];
+
+                return response('ok', 200);
+            },
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('/payments/ecpay/callback', $seen['path']);
+        $this->assertSame(['Token' => 'KEEP'], $seen['query']);
+    }
+
+    /** 只是字首相同的 path 不算交易路由，仍照常 404。 */
+    public function test_a_lookalike_prefix_is_not_treated_as_a_transaction_route(): void
+    {
+        $this->assertSame(404, $this->request('/apixyz')->getStatusCode());
+        $this->assertSame(404, $this->request('/payments-not-real')->getStatusCode());
+    }
+
+    /** `/checkout` 的子路徑不得因前綴被 SEO 轉址。 */
+    public function test_checkout_subpaths_are_not_seo_redirected(): void
+    {
+        $seen = null;
+
+        $response = app(CanonicalUrlRedirect::class)->handle(
+            Request::create('http://localhost:8083/checkout/start', 'GET'),
+            function (Request $r) use (&$seen) {
+                $seen = $r->getPathInfo();
+
+                return response('ok', 200);
+            },
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('/checkout/start', $seen);
+    }
+
+    // ==================================================== 14. R2：405／404 邊界
+
+    /**
+     * R2：真實存在的路由用錯 method 必須保留 405 與 Allow header。
+     *
+     * R1 把所有 405 一律改成 404，那會改變既有路由的 method 語意：
+     * `/faq` 確實存在、只是 GET-only，回 404 等於謊稱這一頁不存在。
+     */
+    public function test_an_existing_route_keeps_a_real_405(): void
+    {
+        foreach (['/faq', '/up'] as $path) {
+            $response = $this->request($path, 'POST');
+
+            $this->assertSame(405, $response->getStatusCode(), $path.' 必須保留 405。');
+            $this->assertNotNull(
+                $response->headers->get('Allow'),
+                $path.' 的 405 必須帶 Allow header。',
+            );
+        }
+    }
+
+    /** 完全不存在的 path 在任何 method 下都是真 404。 */
+    public function test_an_unknown_path_is_404_for_every_method(): void
+    {
+        foreach (['GET', 'POST', 'PUT', 'DELETE'] as $method) {
+            $this->assertSame(
+                404,
+                $this->request('/order-lookup', $method)->getStatusCode(),
+                '/order-lookup '.$method.' 必須是 404。',
+            );
+        }
+    }
+
+    // ==================================================== 15. R2：完整商品 host 矩陣
+
+    /** @return array<string, array{string, bool}> */
+    public static function productionHosts(): array
+    {
+        return [
+            'http + www' => ['www.iglikefollow.com', false],
+            'http + apex' => ['iglikefollow.com', false],
+            'https + apex' => ['iglikefollow.com', true],
+            'https + www' => ['www.iglikefollow.com', true],
+        ];
+    }
+
+    /**
+     * R2：9 個商品 canonical 在四種 host／scheme 下，最多一跳抵達 200。
+     *
+     * R1 的缺口：已帶尾斜線的商品 URL 在 apex 上被 301 到 www 時
+     * 丟掉尾斜線，下一次請求又補回來——兩跳。
+     */
+    #[DataProvider('productionHosts')]
+    public function test_every_product_canonical_converges_in_one_hop(string $host, bool $secure): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        foreach (ProductSlugMap::MAP as $slug) {
+            foreach (['/product/'.$slug.'/', '/product/'.$slug] as $from) {
+                $this->assertConvergesInOneHop($from, '/product/'.$slug.'/', $host, $secure);
             }
         }
+    }
+
+    /** R2：15 條 legacy 在四種 host／scheme 下也必須一跳到最終 200。 */
+    #[DataProvider('productionHosts')]
+    public function test_every_legacy_converges_in_one_hop_on_production(string $host, bool $secure): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        foreach (self::legacyRedirects() as [$from, $to]) {
+            $this->assertConvergesInOneHop($from, $to, $host, $secure);
+        }
+    }
+
+    /** R2：9 條 alias 同樣一跳到商品 canonical。 */
+    #[DataProvider('productionHosts')]
+    public function test_every_alias_converges_in_one_hop_on_production(string $host, bool $secure): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        foreach (self::productAliases() as [$from, $to]) {
+            $this->assertConvergesInOneHop($from, $to, $host, $secure);
+        }
+    }
+
+    /**
+     * 追 Location 直到非 301：最多一跳，且最終必須是 200 canonical。
+     */
+    private function assertConvergesInOneHop(
+        string $from,
+        string $finalPath,
+        string $host,
+        bool $secure,
+    ): void {
+        $server = ['HTTP_HOST' => $host];
+
+        if ($secure) {
+            $server['HTTPS'] = 'on';
+        }
+
+        $response = $this->request($from, 'GET', $server);
+        $hops = 0;
+
+        while ($response->getStatusCode() === 301) {
+            $hops++;
+
+            $this->assertLessThanOrEqual(1, $hops, $from.' 超過一跳（'.$host.'）。');
+
+            $location = (string) $response->headers->get('Location');
+
+            $this->assertStringStartsWith(
+                'https://www.iglikefollow.com',
+                $location,
+                $from.' 必須直達正式 www HTTPS。',
+            );
+
+            // 最終目標必須逐字等於預期 canonical。
+            $this->assertSame(
+                'https://www.iglikefollow.com'.CanonicalUrl::encodePath($finalPath),
+                $location,
+                $from.' 的最終 Location 不正確（'.$host.'）。',
+            );
+
+            $response = $this->request(
+                (string) parse_url($location, PHP_URL_PATH),
+                'GET',
+                ['HTTP_HOST' => 'www.iglikefollow.com', 'HTTPS' => 'on'],
+            );
+        }
+
+        $this->assertSame(200, $response->getStatusCode(), $from.' 的最終狀態必須是 200。');
+    }
+
+    // ==================================================== 16. R2：停用目標 × slash × host
+
+    /**
+     * R2：draft 目標與未知 path 在任何 host／slash 組合下都直接 404。
+     *
+     * 不得先 301 去掉斜線或換 host 再 404——那是一條指向 404 的永久轉址。
+     */
+    #[DataProvider('productionHosts')]
+    public function test_draft_and_unknown_targets_are_direct_404s(string $host, bool $secure): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        Platform::query()->where('slug', 'threads')->update(['status' => 'draft']);
+
+        $server = ['HTTP_HOST' => $host];
+
+        if ($secure) {
+            $server['HTTPS'] = 'on';
+        }
+
+        $paths = [
+            '/services/threads',
+            '/services/threads/',
+            '/services/threads/followers',
+            '/services/threads/followers/',
+            '/services/nonexistent',
+            '/services/nonexistent/',
+            '/unknown-review-only',
+            '/unknown-review-only/',
+            '/product/threads買粉絲/',
+            '/product/threads買粉絲',
+        ];
+
+        foreach ($paths as $path) {
+            $this->assertSame(
+                404,
+                $this->request($path, 'GET', $server)->getStatusCode(),
+                $path.' 在 '.$host.' 必須直接 404。',
+            );
+        }
+    }
+
+    /** 410 在四種 host／slash 組合下仍是 410。 */
+    #[DataProvider('productionHosts')]
+    public function test_gone_pages_stay_410_on_every_host(string $host, bool $secure): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        $server = ['HTTP_HOST' => $host];
+
+        if ($secure) {
+            $server['HTTPS'] = 'on';
+        }
+
+        foreach (['/cart', '/cart/', '/my-account', '/my-account/'] as $path) {
+            $this->assertSame(
+                410,
+                $this->request($path, 'GET', $server)->getStatusCode(),
+                $path.' 在 '.$host.' 必須是 410。',
+            );
+        }
+    }
+
+    // ==================================================== 17. R2：正式 fixture 的可索引驗證
+
+    /**
+     * R2：在 production ＋ 允許索引 ＋ 正確 indexable host 的 fixture 下，
+     * 14 條 canonical 必須逐一是可索引的 200。
+     *
+     * 只改 config（等同 .env 的值），不修改實際 .env 或本機資料。
+     */
+    private function withProductionIndexing(callable $callback): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.url' => 'https://www.iglikefollow.com',
+            'seo.allow_indexing' => true,
+            'seo.indexable_host' => 'www.iglikefollow.com',
+        ]);
+
+        $callback();
+    }
+
+    public function test_every_canonical_is_indexable_under_production_fixture(): void
+    {
+        $this->withProductionIndexing(function (): void {
+            $server = ['HTTP_HOST' => 'www.iglikefollow.com', 'HTTPS' => 'on'];
+
+            foreach (CanonicalUrl::indexablePaths() as $path) {
+                $response = $this->request($path, 'GET', $server);
+
+                $this->assertSame(200, $response->getStatusCode(), $path.' 必須 200。');
+
+                // header 不得有 noindex。
+                $robots = (string) $response->headers->get('X-Robots-Tag');
+                $this->assertStringNotContainsString('noindex', $robots, $path.' header 不得 noindex。');
+
+                $html = (string) $response->getContent();
+
+                // meta 也不得有 noindex。
+                $this->assertDoesNotMatchRegularExpression(
+                    '#<meta[^>]+name="robots"[^>]*noindex#i',
+                    $html,
+                    $path.' meta 不得 noindex。',
+                );
+
+                // 單一 H1／title／description／self-canonical。
+                $this->assertSame(1, substr_count($html, '<h1'), $path.' 必須只有一個 H1。');
+                $this->assertSame(1, substr_count($html, '<title>'), $path.' 必須只有一個 title。');
+
+                preg_match_all('#<meta name="description" content="([^"]*)"#', $html, $desc);
+                $this->assertCount(1, $desc[1], $path.' 必須只有一個 description。');
+                $this->assertNotSame('', trim($desc[1][0]), $path.' description 不得為空。');
+
+                preg_match_all('#<link rel="canonical" href="([^"]+)"#', $html, $canon);
+                $this->assertCount(1, $canon[1], $path.' 必須只有一個 canonical。');
+                $this->assertSame(
+                    CanonicalUrl::to($path),
+                    $canon[1][0],
+                    $path.' 的 canonical 必須是 absolute self-canonical。',
+                );
+            }
+        });
+    }
+
+    /** 相同設定下 staging host 仍必須 noindex。 */
+    public function test_staging_host_stays_noindex_under_the_same_production_fixture(): void
+    {
+        $this->withProductionIndexing(function (): void {
+            $response = $this->request('/faq', 'GET', [
+                'HTTP_HOST' => 'staging.iglikefollow.com',
+                'HTTPS' => 'on',
+            ]);
+
+            $this->assertStringContainsString(
+                'noindex',
+                (string) $response->headers->get('X-Robots-Tag'),
+                'staging host 必須維持 noindex。',
+            );
+        });
+    }
+
+    /** 同一 fixture 下 robots.txt 才會 Allow，且 sitemap 用 trusted origin。 */
+    public function test_robots_allows_only_under_the_production_fixture(): void
+    {
+        $this->withProductionIndexing(function (): void {
+            $body = (string) $this->request('/robots.txt', 'GET', [
+                'HTTP_HOST' => 'www.iglikefollow.com',
+                'HTTPS' => 'on',
+            ])->getContent();
+
+            $this->assertStringContainsString('Allow: /', $body);
+            $this->assertStringContainsString(CanonicalUrl::to('/sitemap.xml'), $body);
+
+            // staging host 在同一設定下仍 Disallow。
+            $staging = (string) $this->request('/robots.txt', 'GET', [
+                'HTTP_HOST' => 'staging.iglikefollow.com',
+                'HTTPS' => 'on',
+            ])->getContent();
+
+            $this->assertStringContainsString('Disallow: /', $staging);
+        });
     }
 }

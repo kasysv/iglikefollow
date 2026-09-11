@@ -2724,4 +2724,42 @@ class CustomerOrderLookupTest extends TestCase
         // ⭐ 底部仍依最新批次判定 → 自動處理文案。
         $this->assertFooterIs($this->lookupHtml($order), self::FOOTER_AUTOMATIC);
     }
+
+    // ==================================================== M5A-1 R2：真 404／405 邊界
+
+    /**
+     * R2：`/order-lookup` 在任何 method 下都是真 404。
+     *
+     * 這個 path 在新站完全不存在，所以 405（「路徑存在，只是 method 不對」）
+     * 會洩漏錯誤資訊。既有的 `test_the_old_lookup_path_is_gone` 已涵蓋
+     * GET／POST，這裡補齊其餘 method。
+     */
+    public function test_the_old_lookup_path_is_404_for_every_method(): void
+    {
+        foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+            $response = $this->call($method, '/order-lookup');
+
+            $this->assertSame(
+                404,
+                $response->getStatusCode(),
+                '/order-lookup '.$method.' 必須是 404。',
+            );
+        }
+    }
+
+    /**
+     * R2：`/order-check` 確實存在且 POST 合法，所以錯誤 method 要保留 405。
+     *
+     * R1 曾把所有 405 一律改成 404，那會謊稱這一頁不存在。
+     */
+    public function test_the_current_lookup_path_keeps_a_real_405_for_a_wrong_method(): void
+    {
+        $response = $this->call('DELETE', '/order-check');
+
+        $this->assertSame(405, $response->getStatusCode(), '/order-check DELETE 必須是 405。');
+        $this->assertNotNull(
+            $response->headers->get('Allow'),
+            '405 必須帶 Allow header。',
+        );
+    }
 }

@@ -16,7 +16,8 @@ use Illuminate\Http\Request;
  *
  * ⭐ 那是本輪最容易出的安全漏洞：攻擊者送一個
  * `Host: evil.test` 的請求，如果我們用它組 Location 或 canonical，
- * 就等於幫對方把我們的 SEO 權重與使用者導去他的網域。
+ * 搜尋引擎與使用者會被導向攻擊者的網域，
+ * 而 canonical 是我們自己宣告「這一頁的正身在哪裡」的訊號。
  * ⛔ 所以 origin 一律讀 trusted 的 `APP_URL`（`config('app.url')`），
  * ⭐ 那是部署時由我們自己設定的值，攻擊者碰不到。
  *
@@ -26,19 +27,6 @@ use Illuminate\Http\Request;
  */
 final class CanonicalUrl
 {
-    /**
-     * ⛔ 首頁以外、固定**無**尾斜線的 canonical path。
-     *
-     * ⭐ 商品頁是唯一固定**有**尾斜線的一組（沿用既有 D-103 決定，
-     * 因為舊站的商品 URL 就是那個形式，外部連結都指向它）。
-     */
-    private const TRAILING_SLASH_EXEMPT_PREFIXES = [
-        '/faq',
-        '/services',
-        '/checkout',
-        '/order-check',
-    ];
-
     /**
      * The trusted origin for canonical URLs, sitemap entries and Locations.
      *
@@ -58,7 +46,8 @@ final class CanonicalUrl
      * `/product/ig%E8%B2%B7%E7%B2%89%E7%B5%B2/`，而我原本讓 sitemap 輸出
      * raw UTF-8 的 `/product/ig買粉絲/`。兩者指的是同一個 URL，
      * ⛔ 但**混用兩種形式**正是造成「同一頁被當成兩個 URL」的典型原因
-     * ——canonical 說一種、sitemap 說另一種，等於自己製造重複內容訊號。
+     * ——canonical 說一種、sitemap 說另一種，兩邊互相矛盾；
+     * 統一成同一種寫法才是一致的訊號。
      *
      * ⭐ 統一成 encoded：它是 wire format，任何 client 都不會誤解；
      * ⛔ 而 raw UTF-8 在部分伺服器與 log 管線上仍可能被改寫。
@@ -171,8 +160,13 @@ final class CanonicalUrl
     /**
      * The trailing-slash correction for a *raw* request path, or null.
      *
-     * ⛔ 這個判斷必須看**原始**請求（是否真的帶尾斜線），
-     * ⛔ 不能看正規化後的字串——正規化已經把尾斜線資訊抹掉了。
+     * 這個判斷必須看原始請求（是否真的帶尾斜線），不能看正規化後的字串
+     * ——正規化已經把尾斜線資訊抹掉了。
+     *
+     * R2：只對「確定有效」的公開頁做尾斜線收斂。
+     * R1 對整個 `/services` 前綴無條件去斜線，於是 draft Threads 的
+     * `/services/threads/followers/` 先 301 去掉斜線、最後才 404
+     * ——那是一條指向 404 的永久轉址。
      */
     public static function trailingSlashRedirect(string $rawPath, string $normalised): ?string
     {
@@ -185,40 +179,79 @@ final class CanonicalUrl
             '/'
         );
 
-        /*
-         * ⛔ 商品頁固定**有**尾斜線。
-         *
-         * ⛔⛔ 但只有**真實存在**的商品才收斂。
-         *
-         * ⭐ 我第一版少了這個條件，於是 `/product/UPPER`、`/product/a b`
-         * 這些本來就該 404 的無效 slug 全都變成 301——⛔ 那等於把「找不到」
-         * 變成「已搬家」，而且製造出無限多條指向 404 的永久轉址。
-         * 既有測試 `test_invalid_slugs_are_rejected` 以
-         * `[404] but received 301` 抓到了這件事。
-         *
-         * ⛔ 查不到就回 null，讓它照常走到 404。
-         */
-        if (str_starts_with($normalised, '/product/')) {
-            if ($hadTrailingSlash) {
-                return null;
-            }
+        $final = self::finalCanonicalPath($normalised);
 
+        if ($final === null) {
+            // 未知 path 或停用目標：讓它走到真正的 404。
+            return null;
+        }
+
+        $current = $hadTrailingSlash && $normalised !== '/'
+            ? $normalised.'/'
+            : $normalised;
+
+        return $current === $final ? null : $final;
+    }
+
+    /**
+     * The valid, final canonical form of a normalised path — or null.
+     *
+     * R2 的核心：把「不需轉址」「有效最終目標」「未知／不可用」三種情況
+     * 分開。回傳 null 代表這個 path 不是我們已核准且目前可用的公開 URL，
+     * 呼叫端因此不得對它做任何 host 或尾斜線收斂。
+     *
+     * 只回答「最終形式是什麼」，不管目前請求長什麼樣子。
+     */
+    public static function finalCanonicalPath(string $normalised): ?string
+    {
+        if ($normalised === '/') {
+            return '/';
+        }
+
+        // 固定的公開單頁。
+        if ($normalised === '/faq') {
+            return '/faq';
+        }
+
+        /*
+         * utility 頁：依原批准保留 exact slashless 規則。
+         * 子路徑（例如 `/checkout/start`）不因前綴而被 SEO 轉址。
+         */
+        if ($normalised === '/checkout' || $normalised === '/order-check') {
+            return $normalised;
+        }
+
+        $catalog = app(CatalogRepository::class);
+
+        // 商品 canonical：固定帶尾斜線，且商品必須仍可公開。
+        if (str_starts_with($normalised, '/product/')) {
             $slug = substr($normalised, strlen('/product/'));
 
-            // ⛔ 只處理單段 slug；⛔ 更深的路徑不是商品頁。
             if ($slug === '' || str_contains($slug, '/')) {
                 return null;
             }
 
-            return app(CatalogRepository::class)->findServiceByProductSlug($slug) === null
+            return $catalog->findServiceByProductSlug($slug) === null
                 ? null
-                : $normalised.'/';
+                : '/product/'.$slug.'/';
         }
 
-        // ⛔ 其餘 canonical 前綴固定**無**尾斜線。
-        foreach (self::TRAILING_SLASH_EXEMPT_PREFIXES as $prefix) {
-            if ($normalised === $prefix || str_starts_with($normalised, $prefix.'/')) {
-                return $hadTrailingSlash ? $normalised : null;
+        if (str_starts_with($normalised, '/services/')) {
+            $segments = array_values(array_filter(
+                explode('/', $normalised),
+                static fn (string $part): bool => $part !== '',
+            ));
+
+            // Hub：/services/{platform}
+            if (count($segments) === 2) {
+                return $catalog->findPlatform($segments[1]) === null
+                    ? null
+                    : '/services/'.$segments[1];
+            }
+
+            // 商品級 alias：最終形式是它對應的商品 canonical。
+            if (count($segments) === 3) {
+                return self::productAliasTarget($normalised);
             }
         }
 
