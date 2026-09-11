@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\CanonicalUrl;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -73,10 +74,28 @@ class Service extends Model
      */
     public function primaryUrl(): string
     {
+        /*
+         * ⛔⛔ M5A-1 R1：改用 trusted origin，⛔ 不再用 request-aware 的
+         * `route()`。
+         *
+         * ⭐ GPT 以真實 HTTP 實測反證：`Host: evil.test` 開商品頁時，
+         * `route()` 會用 request 的 Host 組出
+         * `http://evil.test/product/...`，於是 **HTML canonical 與所有
+         * 商品內鏈都被污染**。初版我只保護了 middleware 與 sitemap，
+         * ⛔ 漏掉了頁面本身——那是最容易被搜尋引擎採信的一處。
+         *
+         * ⭐ `CanonicalUrl::to()` 只讀 `config('app.url')`，
+         * 攻擊者碰不到；同時它與 redirect Location／sitemap 使用
+         * **同一種** percent-encoded 形式，⛔ 不會出現同頁兩種表示法。
+         */
         if (filled($this->product_slug)) {
-            return route('product', ['product' => $this->product_slug]).'/';
+            return CanonicalUrl::to('/product/'.$this->product_slug.'/');
         }
 
-        return route('service', [$this->platform->slug, $this->slug]);
+        /*
+         * ⛔ 無 product slug（draft／comments／auto-likes）只供預覽，
+         * ⛔ 不對 guest 成頁；但仍不得採任意 Host。
+         */
+        return CanonicalUrl::to('/services/'.$this->platform->slug.'/'.$this->slug);
     }
 }

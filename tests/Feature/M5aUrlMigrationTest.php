@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\Platform;
+use App\Models\Service;
 use App\Models\User;
 use App\Support\CanonicalUrl;
 use App\Support\ProductSlugMap;
@@ -55,8 +57,25 @@ class M5aUrlMigrationTest extends TestCase
      */
     private function request(string $path, string $method = 'GET', array $server = []): Response
     {
+        /*
+         * BLOCKER I hit while writing the production matrix: Request::create()
+         * takes the host from the URL argument and IGNORES HTTP_HOST in the
+         * server bag. Prefixing self::ORIGIN unconditionally meant every
+         * "hostile host" case actually ran against localhost, so the matrix
+         * silently proved nothing. Build the URL from the requested host
+         * instead, and derive the scheme from HTTPS so isSecure() is real.
+         */
+        $host = $server['HTTP_HOST'] ?? null;
+
+        if ($host === null) {
+            $url = self::ORIGIN.$path;
+        } else {
+            $scheme = ($server['HTTPS'] ?? null) === 'on' ? 'https' : 'http';
+            $url = $scheme.'://'.$host.$path;
+        }
+
         return app(Kernel::class)->handle(
-            Request::create(self::ORIGIN.$path, $method, [], [], [], $server)
+            Request::create($url, $method, [], [], [], $server)
         );
     }
 
@@ -528,6 +547,216 @@ class M5aUrlMigrationTest extends TestCase
                     $html,
                     "⛔ {$path} 不得連到商品級 alias。",
                 );
+            }
+        }
+    }
+
+    // ==================================================== 9. R1：HTML canonical 不得被 Host 污染
+
+    /**
+     * ⛔⛔ R1：`Host: evil.test` 不得污染**任何頁面的 HTML canonical 或內鏈**。
+     *
+     * ⭐ GPT 以真實 HTTP 反證了初版的漏洞：我只保護了 middleware 的 Location
+     * 與 sitemap，⛔ 但 `StorefrontController` 與 `Service::primaryUrl()`
+     * 仍用 request-aware 的 `route()`／`url()`，於是商品頁的
+     * `<link rel="canonical">` 直接變成 `http://evil.test/product/...`。
+     *
+     * ⛔ canonical 是我們**主動告訴搜尋引擎**「這一頁的正身在哪裡」，
+     * 被污染等於親手把權重指給攻擊者——比 Location 被污染更嚴重。
+     */
+    public function test_a_hostile_host_cannot_poison_any_html_canonical(): void
+    {
+        foreach (CanonicalUrl::indexablePaths() as $path) {
+            $html = (string) $this->request($path, 'GET', ['HTTP_HOST' => 'evil.test'])->getContent();
+
+            $this->assertStringNotContainsString('evil.test', $html, $path);
+
+            preg_match_all('#<link rel="canonical" href="([^"]+)"#', $html, $m);
+
+            $this->assertCount(1, $m[1], $path);
+            $this->assertSame(CanonicalUrl::to($path), $m[1][0], $path);
+        }
+    }
+
+    /** ⛔ Hub 頁列出的商品內鏈也必須是 trusted origin。 */
+    public function test_a_hostile_host_cannot_poison_internal_product_links(): void
+    {
+        foreach (['/services/instagram', '/services/facebook', '/services/threads'] as $hub) {
+            $html = (string) $this->request($hub, 'GET', ['HTTP_HOST' => 'evil.test'])->getContent();
+
+            $this->assertStringNotContainsString('evil.test', $html, $hub);
+        }
+    }
+
+    // ==================================================== 10. R1：fail closed
+
+    /**
+     * ⛔⛔ 商品停用後：canonical 404、alias 404、對應 legacy 不轉、退出 sitemap。
+     *
+     * ⭐ 這是 GPT 指出的 B 類缺口：初版只查固定 mapping，不確認目標仍 live，
+     * ⛔ 於是商品一停用就留下永久 301 → 404。
+     */
+    public function test_unpublishing_a_product_closes_every_route_that_pointed_at_it(): void
+    {
+        $service = Service::query()->where('product_slug', 'ig買粉絲')->firstOrFail();
+
+        // ⭐ 先確認停用前是通的（⛔ 否則後面的斷言可能只是碰巧成立）。
+        $this->assertSame(200, $this->request('/product/ig買粉絲/')->getStatusCode());
+        $this->assertSame(301, $this->request('/services/instagram/followers')->getStatusCode());
+        $this->assertSame(301, $this->request('/product/ig粉絲/')->getStatusCode());
+
+        $service->forceFill(['status' => 'draft'])->save();
+
+        // ⛔ canonical 本身 404。
+        $this->assertSame(404, $this->request('/product/ig買粉絲/')->getStatusCode());
+
+        // ⛔ alias 不得 301 到 404。
+        $this->assertSame(404, $this->request('/services/instagram/followers')->getStatusCode());
+
+        // ⛔ 指向它的 legacy 也不得再轉。
+        foreach (['/product/ig粉絲/', '/product/買粉絲/', '/product/free/'] as $legacy) {
+            $this->assertSame(404, $this->request($legacy)->getStatusCode(), $legacy);
+        }
+
+        // ⛔ sitemap 移除該商品。
+        $body = (string) $this->request('/sitemap.xml')->getContent();
+        $this->assertStringNotContainsString(CanonicalUrl::to('/product/ig買粉絲/'), $body);
+        $this->assertSame(13, substr_count($body, '<loc>'));
+    }
+
+    /**
+     * ⛔⛔ 平台停用後：Hub 404、分類 legacy 不轉、Hub 與旗下商品全部退出 sitemap。
+     */
+    public function test_unpublishing_a_platform_closes_its_hub_and_products(): void
+    {
+        $platform = Platform::query()->where('slug', 'instagram')->firstOrFail();
+
+        $this->assertSame(200, $this->request('/services/instagram')->getStatusCode());
+
+        $platform->forceFill(['status' => 'draft'])->save();
+
+        // ⛔ Hub 404。
+        $this->assertSame(404, $this->request('/services/instagram')->getStatusCode());
+
+        // ⛔ 分類 legacy 不得 301 到 404 的 Hub。
+        $this->assertSame(404, $this->request('/product-category/instagram/')->getStatusCode());
+
+        // ⛔ Hub 與旗下 3 個商品都退出 sitemap。
+        $body = (string) $this->request('/sitemap.xml')->getContent();
+
+        $this->assertStringNotContainsString(CanonicalUrl::to('/services/instagram'), $body);
+
+        foreach (['ig買粉絲', 'ig買like', 'ig影片觀看'] as $slug) {
+            $this->assertStringNotContainsString(CanonicalUrl::to('/product/'.$slug.'/'), $body);
+        }
+
+        $this->assertSame(10, substr_count($body, '<loc>'));
+    }
+
+    /** ⭐ 資料恢復後，預設集合仍 exact 14。 */
+    public function test_the_default_catalog_still_yields_exactly_fourteen(): void
+    {
+        $body = (string) $this->request('/sitemap.xml')->getContent();
+
+        $this->assertSame(14, substr_count($body, '<loc>'));
+    }
+
+    // ==================================================== 11. R1：測試 client 尾斜線
+
+    /**
+     * ⭐ R1：`tests/TestCase.php` 的 `prepareUrlForRequest()` override 生效。
+     *
+     * ⛔ Laravel 原生會 `trim(url($uri), '/')`，讓 47 處既有
+     * `$this->get('/product/x/')` 實際送出 slashless，於是正確的 301
+     * 被誤讀成迴歸。⭐ 修基礎設施，⛔ 不逐檔改呼叫、⛔ 也不把例外放回 production。
+     */
+    public function test_the_test_client_now_preserves_a_trailing_slash(): void
+    {
+        // ⭐ 一般 `$this->get()` 帶尾斜線 → 真的送出尾斜線 → 200。
+        $this->get('/product/ig買粉絲/')->assertOk();
+
+        // ⛔ slashless 仍一跳 301 到尾斜線 canonical。
+        $this->get('/product/ig買粉絲')
+            ->assertStatus(301)
+            ->assertRedirect(CanonicalUrl::to('/product/ig買粉絲/'));
+
+        // ⛔ query string 不得被 override 弄丟。
+        $this->get('/product/ig買粉絲/?utm_source=test')->assertOk();
+    }
+
+    // ==================================================== 12. R1：正式 origin 矩陣
+
+    /** @return array<string, array{string, bool, string, string}> */
+    public static function productionOriginMatrix(): array
+    {
+        $cases = [];
+
+        foreach ([['http', false], ['https', true]] as [$scheme, $secure]) {
+            foreach (['www.iglikefollow.com', 'iglikefollow.com'] as $host) {
+                $label = $scheme.' + '.(str_starts_with($host, 'www.') ? 'www' : 'apex');
+
+                $cases[$label.' + canonical'] = [$host, $secure, '/faq', '/faq'];
+                $cases[$label.' + legacy'] = [$host, $secure, '/shop/', '/'];
+            }
+        }
+
+        return $cases;
+    }
+
+    /**
+     * ⛔⛔ 正式 origin 矩陣：任何組合最多一跳直達 `https://www.iglikefollow.com`。
+     *
+     * ⭐ 只有 `https + www + canonical` 該是 200；其餘三種 canonical 組合
+     * （http/www、http/apex、https/apex）都必須**一次**收斂到正式 origin。
+     */
+    #[DataProvider('productionOriginMatrix')]
+    public function test_the_production_origin_matrix_converges_in_one_hop(
+        string $host,
+        bool $secure,
+        string $from,
+        string $finalPath,
+    ): void {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        $server = ['HTTP_HOST' => $host];
+
+        if ($secure) {
+            $server['HTTPS'] = 'on';
+        }
+
+        $response = $this->request($from, 'GET', $server);
+
+        $isCanonicalRequest = $from === $finalPath;
+        $alreadyOnCanonicalOrigin = $secure && $host === 'www.iglikefollow.com';
+
+        if ($isCanonicalRequest && $alreadyOnCanonicalOrigin) {
+            $this->assertSame(200, $response->getStatusCode());
+
+            return;
+        }
+
+        $this->assertSame(301, $response->getStatusCode(), $host.$from);
+        $this->assertSame(
+            'https://www.iglikefollow.com'.CanonicalUrl::encodePath($finalPath),
+            $response->headers->get('Location'),
+            $host.$from,
+        );
+    }
+
+    /** ⛔ 即使 APP_URL 是正式站，staging／hostile host 仍不得被導向 production。 */
+    public function test_staging_and_hostile_hosts_are_never_forced_to_production(): void
+    {
+        config(['app.url' => 'https://www.iglikefollow.com']);
+
+        foreach (['staging.iglikefollow.com', 'evil.test'] as $host) {
+            $response = $this->request('/faq', 'GET', ['HTTP_HOST' => $host]);
+
+            $location = (string) $response->headers->get('Location');
+
+            $this->assertStringNotContainsString($host, $location);
+
+            if ($response->getStatusCode() === 301) {
+                $this->assertStringStartsWith('https://www.iglikefollow.com', $location);
             }
         }
     }

@@ -146,21 +146,29 @@ class M2cProductRoutesTest extends TestCase
         }
     }
 
-    public function test_service_level_routes_are_a_single_302_and_preview_only(): void
+    /**
+     * ⭐ M5A-1：商品級 `/services/...` guest alias 由開發期 302 轉為**正式 301**。
+     *
+     * ⛔ 原本這條測試的名稱與斷言都寫死 302，並額外斷言「本輪不得出現任何
+     * 正式 301」——那是 M2-C 當時的正確狀態（正式 301 屬於 M5）。
+     * ⭐ M5A 已由 Owner 批准把它們定案為永久轉址，所以此處同步更新；
+     * ⛔ 一跳直達、Owner preview 200／noindex 與 comments 404 全部不變。
+     */
+    public function test_service_level_routes_are_a_single_301_and_preview_only(): void
     {
         $followers = $this->serviceByKey('instagram/followers');
 
-        // guest:單次 302 直達 canonical(target 是最終頁,無二跳)。
+        // guest:單次 301 直達 canonical(target 是最終頁,無二跳)。
         $this->get('/services/instagram/followers')
-            ->assertStatus(302)
+            ->assertStatus(301)
             ->assertRedirect($followers->primaryUrl());
 
-        // ⛔ 本輪不得出現任何正式 301。
-        $this->assertNotSame(301, $this->get('/services/instagram/followers')->getStatusCode());
+        // ⛔ 開發期的臨時 302 不得再出現。
+        $this->assertNotSame(302, $this->get('/services/instagram/followers')->getStatusCode());
 
-        // guest 掛 preview flag 無效:仍是 302(不外洩 preview 內容)。
+        // guest 掛 preview flag 無效:仍是 301(不外洩 preview 內容)。
         $this->get('/services/instagram/followers?preview=1')
-            ->assertStatus(302);
+            ->assertStatus(301);
 
         // 授權 preview:200+noindex;⛔ 不輸出可索引 canonical。
         $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);

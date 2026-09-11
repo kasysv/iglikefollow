@@ -13,12 +13,26 @@
     RewriteCond %{HTTP:x-xsrf-token} .
     RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
 
-    # Redirect Trailing Slashes If Not A Folder...
-    # M2-C(D-103):/product/ 的 canonical 形式「就是」尾斜線,不得被剝除。
-    RewriteCond %{REQUEST_URI} !^/product/
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_URI} (.+)/$
-    RewriteRule ^ %1 [L,R=301]
+    # ⛔⛔ M5A-1 R1：移除 Laravel 之前的「虛擬路徑尾斜線 301」區塊。
+    #
+    # ⭐ 原本這裡有一條 `RewriteRule ^ %1 [L,R=301]`。它有兩個致命問題，
+    # 都是 GPT 以真實 HTTP 實測反證出來的（我初版的 kernel 測試完全看不到
+    # web-server 這一層，所以 95 項全綠仍然漏掉）：
+    #
+    #  1. **Host 污染**：bare `R=301` 沒有帶 scheme/host，Apache 會用
+    #     request 的 `Host` header 重建 Location。實測
+    #     `Host: evil.test` + `/shop/` → `301 http://evil.test/shop`，
+    #     ⛔ 攻擊者能把我們的使用者與 SEO 權重直接導走。
+    #  2. **多跳**：legacy 會先被剝掉尾斜線再進 Laravel，
+    #     `/shop/` 變成兩跳；⛔ 而 `/cart/` 這種要回 410 的路徑
+    #     會先吃到一個毫無意義的 301。
+    #
+    # ⭐ 尾斜線正規化現在**完全**由 Laravel 的 `CanonicalUrlRedirect`
+    # 負責：它用 trusted `APP_URL` 組 Location，且 host 與 path 在同一個
+    # response 內收斂，任何來源最多一跳。
+    #
+    # ⛔ 這裡刻意**不**新增 15 條 mapping 或 host redirect——
+    # mapping 只能有一份（施工單 §3.1）。
 
     # Send Requests To Front Controller...
     RewriteCond %{REQUEST_FILENAME} !-d

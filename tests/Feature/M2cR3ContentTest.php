@@ -400,8 +400,12 @@ class M2cR3ContentTest extends TestCase
 
         $followers = Service::query()->where('product_slug', 'ig買粉絲')->firstOrFail();
 
+        /*
+         * ⭐ M5A-1：商品級 alias 由開發期 302 定案為正式 301。
+         * ⛔ 一跳直達 canonical 的性質不變，只有 status 碼改變。
+         */
         $this->get('/services/instagram/followers')
-            ->assertStatus(302)
+            ->assertStatus(301)
             ->assertRedirect($followers->primaryUrl());
 
         $html = $this->get($followers->primaryUrl())->assertOk()->getContent();
@@ -409,8 +413,8 @@ class M2cR3ContentTest extends TestCase
 
         $this->get('/')->assertHeader('X-Robots-Tag', 'noindex, nofollow');
         $this->get('/robots.txt')->assertOk()->assertSee('Disallow: /');
-        // 正式 301 = 0。
-        $this->assertNotSame(301, $this->get('/services/instagram/followers')->getStatusCode());
+        // ⭐ M5A-1：開發期的臨時 302 不得再出現。
+        $this->assertNotSame(302, $this->get('/services/instagram/followers')->getStatusCode());
     }
 
     protected function tearDown(): void

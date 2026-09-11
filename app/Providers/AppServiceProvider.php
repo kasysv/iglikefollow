@@ -56,6 +56,7 @@ use App\Services\Invoices\FakeInvoiceGateway;
 use App\Services\Invoices\InvoiceSandboxGuard;
 use App\Support\CatalogRepository;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
@@ -270,6 +271,31 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        /*
+         * M5A-1 R1: pin every generated absolute URL to the trusted origin.
+         *
+         * GPT proved over real HTTP that a hostile `Host: evil.test` poisoned
+         * the product canonical. I fixed the canonical call sites, but my own
+         * new test then caught the rest: the shared layout still emitted
+         * `http://evil.test/...` for the logo link, nav, hub links and every
+         * favicon/asset, because `route()` and `asset()` build absolute URLs
+         * from the incoming request.
+         *
+         * Fixing this one place is why it belongs here rather than in the
+         * Blade files: `forceRootUrl()` makes the whole URL generator use the
+         * trusted `APP_URL`, so a future `route()` added anywhere is safe by
+         * default. Patching templates one by one would leave the next one
+         * vulnerable again.
+         *
+         * Only the root is forced, not the scheme: local/testing keep their
+         * own http `APP_URL`, so staging and localhost are never rewritten to
+         * production. Host/scheme convergence for the real site stays in
+         * `CanonicalUrlRedirect`.
+         */
+        if (filled($root = config('app.url'))) {
+            URL::forceRootUrl($root);
+        }
+
         foreach (self::POLICIES as $model => $policy) {
             Gate::policy($model, $policy);
         }

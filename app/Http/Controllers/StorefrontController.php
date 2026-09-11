@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Service;
 use App\Models\ServiceVariant;
 use App\Models\SiteSetting;
+use App\Support\CanonicalUrl;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
 use App\Support\FaqPageContent;
@@ -36,8 +37,12 @@ class StorefrontController extends Controller
             'description' => $content->metaDescription(),
             'h1' => $content->h1(),
             'intro' => $content->intro(),
-            // self-canonical:依 APP_URL 產生乾淨 /faq,⛔ 不帶 query／fragment。
-            'canonical' => route('faq'),
+            /*
+             * ⛔ M5A-1 R1：改用 trusted origin。
+             * ⭐ `route()` 是 request-aware 的，`Host: evil.test` 會讓
+             * canonical 變成攻擊者的網域（GPT 實測反證）。
+             */
+            'canonical' => CanonicalUrl::to('/faq'),
         ]);
     }
 
@@ -51,7 +56,8 @@ class StorefrontController extends Controller
             'faqs' => $this->catalog->featuredGlobalFaqs($content->homeFeaturedKeys()),
             'settings' => $settings,
             // M2-C:首頁 self-canonical(全站仍 noindex,canonical 只是宣告主形式)。
-            'canonical' => url('/').'/',
+            // ⛔ M5A-1 R1：trusted origin,⛔ 不用 request-aware 的 `url()`。
+            'canonical' => CanonicalUrl::to('/'),
             // CTA 目的地由設定的固定目標決定，⛔ 不再取「排序第一個」而隨排序漂移。
             'ctaUrl' => $settings?->ctaUrl() ?? route('home').'#platforms',
         ]);
@@ -72,7 +78,8 @@ class StorefrontController extends Controller
             'faqs' => $this->catalog->platformFaqs($record),
             'isPreview' => $preview,
             // ⛔ preview 不輸出可索引 canonical。
-            'canonical' => $preview ? null : route('platform', $record->slug),
+            // ⛔ M5A-1 R1：trusted origin(preview 仍不輸出 canonical)。
+            'canonical' => $preview ? null : CanonicalUrl::to('/services/'.$record->slug),
         ]);
 
         return $preview ? $this->noindex($view) : $view;

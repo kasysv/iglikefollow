@@ -130,11 +130,20 @@ final class CanonicalUrl
      */
     public static function finalPathFor(string $normalised): ?string
     {
-        // 1. legacy 對照表（15 條）——⛔ 最高優先，它們是外部既有連結。
+        /*
+         * 1. legacy 對照表（15 條）——⛔ 最高優先，它們是外部既有連結。
+         *
+         * ⛔⛔ R1：target 必須**當下仍是 live 200** 才轉。
+         *
+         * ⭐ GPT 指出初版只查固定 mapping，不確認目標還在。商品或平台一旦
+         * 停用，那條 301 就會永久指向 404——⛔ 而 301 是永久的，
+         * 搜尋引擎會把「這裡搬到一個不存在的地方」記住。
+         * ⭐ fail closed：目標不 live 就回 null，讓來源自己 404。
+         */
         $legacy = (array) config('legacy-redirects.legacy', []);
 
         if (isset($legacy[$normalised])) {
-            return $legacy[$normalised];
+            return self::isLiveTarget($legacy[$normalised]) ? $legacy[$normalised] : null;
         }
 
         // 2. 商品級 services alias（9 條）——⛔ 由既有 ProductSlugMap 推導。
@@ -241,7 +250,57 @@ final class CanonicalUrl
 
         $productSlug = ProductSlugMap::for($segments[1], $segments[2]);
 
-        return $productSlug === null ? null : '/product/'.$productSlug.'/';
+        if ($productSlug === null) {
+            return null;
+        }
+
+        /*
+         * ⛔⛔ R1：只有**目前仍 published** 且 `product_slug` 與
+         * `ProductSlugMap` 一致時才 301。
+         *
+         * ⭐ 初版只看固定 mapping，商品停用後 alias 會 301 到 404。
+         * ⛔ 也檢查 slug 一致：若 DB 的 `product_slug` 與 mapping 不同，
+         * 代表兩份資料已經走樣，⛔ 這時候猜任何一邊都是錯的——回 null，
+         * 讓它 404 並被人發現，⛔ 而不是靜默轉到一個可能錯誤的商品。
+         */
+        $service = app(CatalogRepository::class)->findService($segments[1], $segments[2]);
+
+        if ($service === null || $service->product_slug !== $productSlug) {
+            return null;
+        }
+
+        return '/product/'.$productSlug.'/';
+    }
+
+    /**
+     * Is this final target currently a live, indexable 200?
+     *
+     * ⛔⛔ 永久 301 的目標**必須**當下就是 200。
+     *
+     * ⭐ 首頁固定 live（它不依賴 catalog）；Hub 要 platform published；
+     * 商品要 service published 且 slug 對得上。
+     * ⛔ 其餘一律視為不 live——fail closed。
+     */
+    public static function isLiveTarget(string $path): bool
+    {
+        if ($path === '/') {
+            return true;
+        }
+
+        $catalog = app(CatalogRepository::class);
+
+        // Hub：/services/{platform}
+        if (preg_match('#^/services/([^/]+)$#', $path, $m) === 1) {
+            return $catalog->findPlatform($m[1]) !== null;
+        }
+
+        // 商品：/product/{slug}/
+        if (preg_match('#^/product/([^/]+)/$#', $path, $m) === 1) {
+            return $catalog->findServiceByProductSlug($m[1]) !== null;
+        }
+
+        // ⛔ FAQ 等固定頁不在 legacy target 內；⛔ 未知形狀一律 fail closed。
+        return false;
     }
 
     /**
@@ -331,10 +390,18 @@ final class CanonicalUrl
     {
         $paths = ['/', '/faq'];
 
-        $platforms = ['instagram', 'facebook', 'threads'];
+        /*
+         * ⛔⛔ R1：Hub 也要確認 platform **目前 published**。
+         *
+         * ⭐ 初版把三個 Hub 寫死加入，平台停用後 sitemap 仍會列出 404 Hub
+         * ——⛔ 那是主動告訴 Google「請收錄這個不存在的頁」。
+         */
+        $catalog = app(CatalogRepository::class);
 
-        foreach ($platforms as $platform) {
-            $paths[] = '/services/'.$platform;
+        foreach (['instagram', 'facebook', 'threads'] as $platform) {
+            if ($catalog->findPlatform($platform) !== null) {
+                $paths[] = '/services/'.$platform;
+            }
         }
 
         /*
@@ -347,8 +414,6 @@ final class CanonicalUrl
          * ⭐ 它已經同時要求 platform 與 service 都是 `published`，
          * 而那正是「可索引」的定義。自己寫一份等於多一個會走樣的判斷。
          */
-        $catalog = app(CatalogRepository::class);
-
         foreach (array_keys(ProductSlugMap::MAP) as $key) {
             [$platformSlug, $serviceSlug] = explode('/', $key, 2);
 

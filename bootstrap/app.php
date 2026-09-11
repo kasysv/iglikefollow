@@ -6,6 +6,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Support\Facades\Route;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -44,5 +45,27 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        /*
+         | M5A-1 R1: an unknown path must be a real 404 for EVERY method.
+         |
+         | `Route::fallback()` only registers GET/HEAD, so `POST /order-lookup`
+         | came back as `405 Method Not Allowed` -- the existing test
+         | `test_the_old_lookup_path_is_gone` caught it as
+         | `[404] but received 405`. A 405 leaks "this path exists, you just
+         | used the wrong verb", and the truth is the new site has no such
+         | resource at all.
+         |
+         | My first attempt was a catch-all `Route::addRoute([...], '{any}')`.
+         | That was wrong and the suite proved it: `routes/payments.php` is
+         | registered AFTER `routes/web.php` via the `then:` callback, so the
+         | catch-all shadowed every payments POST route and 39 payment tests
+         | started failing with 404. A `.*` route silently depends on
+         | registration order.
+         |
+         | Handling it here is order-independent: routing has already been
+         | fully attempted, so nothing can be shadowed.
+         */
+        $exceptions->render(function (MethodNotAllowedHttpException $e) {
+            abort(404);
+        });
     })->create();
