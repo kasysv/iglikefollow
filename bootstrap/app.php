@@ -20,17 +20,27 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         /*
-         | ⭐ M5A：URL 正規化必須在**路由解析之前**發生。
+         | M5A：URL 正規化掛在 web group，在 controller 之前給出最終答案。
          |
-         | ⛔ 15 條 legacy path（例如 `/shop/`、`/product/ig粉絲/`）在新站
-         | 沒有對應 route。若等到路由解析完才處理，它們會先變成 404，
-         | ⛔ 而 404 之後再想轉址就只能靠 exception handler——那是一條把
-         | 「找不到」與「已搬家」混在一起的路。
+         | 15 條 legacy path（例如 `/shop/`、`/product/ig粉絲/`）在新站沒有
+         | 對應 route，靠 `Route::fallback()` 接住——fallback 本身就是 web
+         | route，所以這個 middleware 一樣會跑到，不需要排在 session 之前。
          |
-         | ⭐ `prependToGroup('web')` 讓它成為 web group 的第一道，
-         | 在 controller 之前就給出最終答案。
+         | R3：改用 `appendToGroup()`，排在 EncryptCookies 與 StartSession
+         | 之後。
+         |
+         | 原本用 `prependToGroup()` 會讓它成為 web group 的第一道，
+         | 而它需要 `$request->user()` 判斷 Owner／Editor 的 preview 豁免。
+         | 在 StartSession 之前 session 還沒載入，`user()` 永遠是 null，
+         | 於是真正登入的 Owner 帶 `?preview=1` 會被 301 走、預覽功能失效。
+         |
+         | 既有測試用 `actingAs()` 預先把 User 放進 guard，所以看不出差異；
+         | GPT 以「只帶 session cookie 的新 request」反證了真實行為。
+         |
+         | 註：舊註解寫「prepend 等於路由解析前」並不正確——group middleware
+         | 本來就在路由比對之後才執行。
          */
-        $middleware->prependToGroup('web', CanonicalUrlRedirect::class);
+        $middleware->appendToGroup('web', CanonicalUrlRedirect::class);
 
         $middleware->append(AddRobotsHeader::class);
 

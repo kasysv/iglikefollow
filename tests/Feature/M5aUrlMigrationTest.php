@@ -9,10 +9,15 @@ use App\Models\User;
 use App\Support\CanonicalUrl;
 use App\Support\ProductSlugMap;
 use Database\Seeders\CatalogSeeder;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Cookie\CookieValuePrefix;
+use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\Response;
@@ -1179,5 +1184,161 @@ class M5aUrlMigrationTest extends TestCase
 
             $this->assertStringContainsString('Disallow: /', $staging);
         });
+    }
+
+    // ==================================================== 18. R3：真實 session 的 preview
+
+    /**
+     * 用「已持久化的 session cookie」發一個新 request，模擬真正的下一次瀏覽。
+     *
+     * R3 的重點：`actingAs()` 會預先把 User 放進 auth guard，因此看不出
+     * middleware 是否排在 StartSession 之前。這個 helper 刻意走完整流程：
+     * 先登入並寫入 file session，再清掉 guard 與 session store，
+     * 然後只帶著 session cookie 發第二個 request。
+     *
+     * 不停用 EncryptCookies：cookie 由框架自己加密／解密，
+     * 才算「經過完整 session 流程」。
+     */
+    private function requestWithPersistedSession(User $user, string $path): Response
+    {
+        $directory = sys_get_temp_dir().'/iglf-r3-session-'.bin2hex(random_bytes(8));
+
+        mkdir($directory, 0700);
+
+        config(['session.driver' => 'file', 'session.files' => $directory]);
+
+        app('session')->forgetDrivers();
+        app()->forgetInstance('session.store');
+        app('auth')->forgetGuards();
+
+        try {
+            $store = app('session')->driver();
+            $store->start();
+            app('auth')->guard('web')->login($user);
+            $store->save();
+
+            $sessionId = $store->getId();
+
+            // 模擬下一個 PHP request：沒有已登入的 guard、也沒有已載入的 store。
+            app('auth')->forgetGuards();
+            app('session')->forgetDrivers();
+            app()->forgetInstance('session.store');
+
+            $cookieName = config('session.cookie');
+
+            // 經過框架的 cookie 加密，與真實瀏覽器一致。
+            $encrypted = app(Encrypter::class)->encrypt(
+                CookieValuePrefix::create($cookieName, app(Encrypter::class)->getKey()).$sessionId,
+                false,
+            );
+
+            $request = Request::create(
+                'http://localhost:8083'.$path,
+                'GET',
+                [],
+                [$cookieName => $encrypted],
+            );
+
+            return app(Kernel::class)->handle($request);
+        } finally {
+            File::deleteDirectory($directory);
+        }
+    }
+
+    /**
+     * R3：Owner 以真實 session cookie 開 preview 必須是 200＋noindex＋無 canonical。
+     *
+     * R2 的缺口：`CanonicalUrlRedirect` 以 `prependToGroup()` 掛在 web group
+     * 最前面，早於 StartSession，所以 `$request->user()` 永遠是 null——
+     * 真正登入的 Owner 會被 301 走，預覽功能在正式環境完全失效。
+     */
+    public function test_an_owner_preview_survives_a_real_cookie_backed_session(): void
+    {
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        $response = $this->requestWithPersistedSession(
+            $owner,
+            '/services/instagram/followers?preview=1',
+        );
+
+        $this->assertSame(
+            200,
+            $response->getStatusCode(),
+            'Owner 的 preview 必須由 session 認出；實際 Location: '
+            .($response->headers->get('Location') ?? '-'),
+        );
+
+        $this->assertStringContainsString(
+            'noindex',
+            (string) $response->headers->get('X-Robots-Tag'),
+        );
+
+        $this->assertStringNotContainsString(
+            'rel="canonical"',
+            (string) $response->getContent(),
+            'preview 不得輸出可索引 canonical。',
+        );
+    }
+
+    /** Editor 同樣可以預覽。 */
+    public function test_an_editor_preview_survives_a_real_cookie_backed_session(): void
+    {
+        $editor = User::factory()->create(['role' => 'editor', 'is_active' => true]);
+
+        $response = $this->requestWithPersistedSession(
+            $editor,
+            '/services/instagram/followers?preview=1',
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertStringContainsString(
+            'noindex',
+            (string) $response->headers->get('X-Robots-Tag'),
+        );
+    }
+
+    /**
+     * guest 自己加 `?preview=1` 仍然被永久收斂，且 query 不得保留。
+     *
+     * 這條與上面兩條共用同一條路徑，確保 R3 的順序調整沒有把 preview
+     * 豁免放寬給未登入者。
+     */
+    public function test_a_guest_preview_is_still_redirected_after_the_reorder(): void
+    {
+        $response = $this->request('/services/instagram/followers?preview=1');
+
+        $this->assertSame(301, $response->getStatusCode());
+        $this->assertSame(
+            CanonicalUrl::to('/product/ig買粉絲/'),
+            $response->headers->get('Location'),
+            'guest 的 preview 參數不得保留在 Location。',
+        );
+    }
+
+    /**
+     * R3：middleware 必須排在 EncryptCookies／StartSession 之後。
+     *
+     * 直接釘住順序本身，而不只是行為：若日後有人改回 prepend，
+     * 上面的 session 測試會紅，但這一條會更直接指出原因。
+     */
+    public function test_the_seo_middleware_runs_after_session_is_started(): void
+    {
+        $group = app('router')->getMiddlewareGroups()['web'];
+
+        $seo = array_search(CanonicalUrlRedirect::class, $group, true);
+        $session = array_search(StartSession::class, $group, true);
+        $cookies = array_search(EncryptCookies::class, $group, true);
+
+        $this->assertNotFalse($seo, 'CanonicalUrlRedirect 必須在 web group 內。');
+        $this->assertNotFalse($session);
+        $this->assertNotFalse($cookies);
+
+        $this->assertGreaterThan(
+            $session,
+            $seo,
+            'CanonicalUrlRedirect 必須在 StartSession 之後，否則讀不到登入狀態。',
+        );
+
+        $this->assertGreaterThan($cookies, $seo);
     }
 }
