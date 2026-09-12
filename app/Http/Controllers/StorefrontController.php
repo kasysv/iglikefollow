@@ -9,6 +9,7 @@ use App\Support\CanonicalUrl;
 use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
 use App\Support\FaqPageContent;
+use App\Support\StorefrontStructuredData;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -19,6 +20,8 @@ class StorefrontController extends Controller
     public function __construct(
         private readonly CatalogRepository $catalog,
         private readonly CheckoutSession $checkout,
+        // M5B：只組裝 JSON-LD，⛔ 不查 DB、⛔ 不外呼。
+        private readonly StorefrontStructuredData $structuredData,
     ) {}
 
     /**
@@ -30,13 +33,28 @@ class StorefrontController extends Controller
      */
     public function faq(FaqPageContent $content): View
     {
+        /*
+         * ⛔ M5B：Schema 與畫面**共用同一個** collection，⛔ 不另查一次。
+         * ⭐ 再查一次就會有兩份可能不同的清單——標記宣告的問答必須恰好是
+         * 這一頁渲染出來的那幾題。
+         */
+        $faqs = $this->catalog->globalFaqs();
+        $h1 = $content->h1();
+        $intro = $content->intro();
+
         return view('storefront.faq', [
-            'faqs' => $this->catalog->globalFaqs(),
+            'faqs' => $faqs,
             'platforms' => $this->catalog->navigablePlatforms(),
             'title' => $content->seoTitle(),
             'description' => $content->metaDescription(),
-            'h1' => $content->h1(),
-            'intro' => $content->intro(),
+            'h1' => $h1,
+            'intro' => $intro,
+            'structuredData' => $this->structuredData->faq(
+                $faqs,
+                $h1,
+                $intro,
+                SiteSetting::current(),
+            ),
             /*
              * ⛔ M5A-1 R1：改用 trusted origin。
              * ⭐ `route()` 是 request-aware 的，`Host: evil.test` 會讓
@@ -60,6 +78,8 @@ class StorefrontController extends Controller
             'canonical' => CanonicalUrl::to('/'),
             // CTA 目的地由設定的固定目標決定，⛔ 不再取「排序第一個」而隨排序漂移。
             'ctaUrl' => $settings?->ctaUrl() ?? route('home').'#platforms',
+            // ⛔ M5B：沿用**同一個** `$settings`，⛔ 不再查一次單例。
+            'structuredData' => $this->structuredData->home($settings),
         ]);
     }
 
@@ -80,6 +100,14 @@ class StorefrontController extends Controller
             // ⛔ preview 不輸出可索引 canonical。
             // ⛔ M5A-1 R1：trusted origin(preview 仍不輸出 canonical)。
             'canonical' => $preview ? null : CanonicalUrl::to('/services/'.$record->slug),
+            /*
+             * ⛔⛔ M5B：preview 一律不輸出圖譜。
+             * ⭐ 草稿平台的名稱與 tagline 還沒對外，而 JSON-LD 是給機器讀的
+             * ——⛔ 即使頁面是 noindex，也不該把未發布內容寫成結構化宣告。
+             */
+            'structuredData' => $preview
+                ? null
+                : $this->structuredData->platform($record, SiteSetting::current()),
         ]);
 
         return $preview ? $this->noindex($view) : $view;
@@ -158,6 +186,16 @@ class StorefrontController extends Controller
             'canonical' => $canonical,
             'resumedVariantId' => $resumed['variant']->id ?? null,
             'resumedQuantity' => $resumed['quantity'] ?? null,
+            /*
+             * ⛔⛔ M5B：preview 一律不輸出圖譜（同 Hub 的理由）。
+             *
+             * ⭐ 圖譜**不**含 resume 狀態：`$resumed` 只影響畫面預選的方案，
+             * ⛔ 不改商品身份。返回修改與直接進站必須得到同一份標記，
+             * 否則同一個 canonical 會出現兩種機器可讀描述。
+             */
+            'structuredData' => $preview
+                ? null
+                : $this->structuredData->product($record, SiteSetting::current()),
         ]);
 
         return $preview ? $this->noindex($view) : $view;

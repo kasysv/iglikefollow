@@ -11,6 +11,35 @@
     @if (! empty($canonical))
         <link rel="canonical" href="{{ $canonical }}">
     @endif
+    {{--
+        M5B:JSON-LD。只有頁面明確傳入有效圖譜才輸出一個 script。
+
+        ⛔ `/order-check`、checkout、付款結果與 admin 共用這個 layout,
+        它們不傳 `structuredData`,因此一個字都不會多出來。
+        ⛔ preview 由 controller 傳 null,⛔ 同樣不輸出。
+
+        ⭐ `{!! !!}` 是刻意的:內容已由 `encode()` 以 `JSON_HEX_TAG` 等旗標
+        編成不含 `<` `>` `&` `'` `"` 的合法 JSON,⛔ 再經 Blade 的 HTML
+        escaping 會把 `<` 的反斜線變成 `&quot;` 之類而**破壞 JSON**。
+        ⛔ 這裡不得直接輸出任何未經 `encode()` 的 DB 文字。
+    --}}
+    {{--
+        ⛔ 這裡必須用 @php ... @endphp 區塊,⛔ 不能用 inline 形式:
+        inline 形式的參數靠括號配對切出來,而這個運算式含有 `::class)`,
+        Blade 會在錯的地方收尾並輸出一個字面的 PHP 開頭標籤——
+        整份模板從此被當成 PHP 原始碼,全站 500。(我實際踩到過。)
+
+        ⛔ 連帶教訓:Blade 編譯 directive **早於**移除註解,所以連註解裡
+        都不能寫出 inline 形式的字面 token,否則同樣會炸。
+    --}}
+    @php
+        $ldJson = ! empty($structuredData)
+            ? app(\App\Support\StorefrontStructuredData::class)->encode($structuredData)
+            : '';
+    @endphp
+    @if ($ldJson !== '')
+        <script type="application/ld+json">{!! $ldJson !!}</script>
+    @endif
     {{-- Favicon:由品牌方形標誌產生的本機資產,無外部來源。 --}}
     <link rel="icon" href="{{ asset('favicon.ico') }}" sizes="32x32">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('images/favicon-32.png') }}">
