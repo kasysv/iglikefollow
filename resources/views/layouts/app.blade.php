@@ -46,7 +46,40 @@
     <link rel="apple-touch-icon" href="{{ asset('images/apple-touch-icon.png') }}">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
-<body>
+{{--
+    M5D：LINE 客服按鈕的顯示範圍。
+
+    ⛔⛔ allowlist，⛔ 不是 denylist：這個 layout 也被 404／錯誤頁共用，
+    而 `routeIs()` 在那些情況下不會命中任何一條，所以預設就是不顯示
+    ——⛔ 用「排除清單」的話，漏掉一個頁面就會誤顯示。
+
+    ⛔ 初版刻意**不含**結帳填資料、付款跳轉／結果與後台：
+    保留封閉式結帳，⛔ 也避免遮住付款欄位。
+    （`layouts/checkout.blade.php` 本輪一個字都沒改。）
+--}}
+@php
+    /*
+     * ⛔⛔ 光看 route name **不夠**。
+     *
+     * ⭐ 我實測踩到：`/product/no-such-product/` 會**先命中** `product`
+     * route（所以 `routeIs('product')` 為 true），controller 才 abort(404)。
+     * 於是 404 頁也長出了客服按鈕——正是施工單 §5 禁止的事。
+     *
+     * ⛔ 所以再加一道：Laravel 渲染 `errors/*` 時會把 `$exception` 傳進
+     * 那個 view，而它會繼承到這個 layout——⭐ 有 `$exception` 就代表
+     * 現在渲染的是錯誤頁，⛔ 這比猜 route 狀態可靠。
+     */
+    $showLineContact = request()->routeIs(
+        'home',
+        'platform',
+        'product',
+        'service',
+        'faq',
+        'order-check',
+        'order-check.lookup',
+    ) && ! isset($exception);
+@endphp
+<body @class(['has-line-contact' => $showLineContact])>
     <header class="border-b border-black/10 bg-paper/95">
         {{--
             R1:mobile header 三元素(品牌／常見問題／選擇服務)必須同時可見。
@@ -160,5 +193,10 @@
             </p>
         </div>
     </footer>
+
+    {{-- ⛔ 只插入一次，⛔ 且在 body 結尾：它是 fixed 定位，不影響文件流。 --}}
+    @if ($showLineContact)
+        <x-line-contact-button />
+    @endif
 </body>
 </html>
