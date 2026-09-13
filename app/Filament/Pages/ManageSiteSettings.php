@@ -6,6 +6,7 @@ use App\Filament\Support\ImageField;
 use App\Models\Platform;
 use App\Models\Service;
 use App\Models\SiteSetting;
+use App\Support\VariantGuide;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -46,13 +47,28 @@ class ManageSiteSettings extends Page
 
     public function mount(): void
     {
-        $this->form->fill(SiteSetting::current()?->toArray() ?? []);
+        $setting = SiteSetting::current();
+        $this->form->fill(array_merge($setting?->toArray() ?? [], [
+            'variant_guide' => $setting?->variantGuide() ?? VariantGuide::defaults(),
+        ]));
     }
 
     public function form(Schema $schema): Schema
     {
         return $schema
             ->components([
+                Section::make('共用款式說明')
+                    ->description('改一次，所有已開啟說明的粉絲、買讚商品頁一起更新。各商品可在編輯頁關閉。')
+                    ->schema([
+                        TextInput::make('variant_guide.heading')->label('說明標題')->required()->maxLength(255),
+                        ...array_map(fn (string $key, string $label) => Textarea::make('variant_guide.'.$key)
+                            ->label($label.'說明')->rows(3)->required()->maxLength(2000),
+                            array_keys(VariantGuide::LABELS), array_values(VariantGuide::LABELS)),
+                        TextInput::make('variant_guide.choice_heading')->label('選購建議標題')->required()->maxLength(255),
+                        TextInput::make('variant_guide.choice_real')->label('選真人的理由')->required()->maxLength(255),
+                        TextInput::make('variant_guide.choice_premium')->label('選頂級的理由')->required()->maxLength(255),
+                        TextInput::make('variant_guide.choice_standard')->label('選普通的理由')->required()->maxLength(255),
+                    ])->collapsed(),
                 Section::make('公司名稱')
                     ->description('這個名稱會出現在網站標題列、頁首 Logo 的替代文字與頁尾。')
                     ->schema([

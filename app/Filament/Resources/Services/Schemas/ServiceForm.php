@@ -155,6 +155,15 @@ class ServiceForm
                     ImageField::alt('hero_image_alt', 'hero_image_path')->label('主視覺說明文字（alt）'),
                 ])->columns(2),
 
+            Section::make('款式說明')
+                ->schema([
+                    Toggle::make('show_variant_guide')
+                        ->label('顯示共用款式說明')
+                        ->helperText('只適用粉絲、買讚。內容請到「首頁設定 → 共用款式說明」集中修改。')
+                        ->afterStateHydrated(fn (Toggle $component, ?Service $record) => $component->state($record?->showsVariantGuide() ?? false))
+                        ->disabled(fn ($get): bool => ! in_array($get('slug'), ['followers', 'post-likes'], true)),
+                ]),
+
             Section::make('搜尋引擎設定')
                 ->description('這些文字會出現在 Google 搜尋結果上。留空會自動產生。')
                 ->schema([

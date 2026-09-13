@@ -10,6 +10,7 @@ use App\Support\CatalogRepository;
 use App\Support\CheckoutSession;
 use App\Support\FaqPageContent;
 use App\Support\StorefrontStructuredData;
+use App\Support\VariantGuide;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -179,6 +180,8 @@ class StorefrontController extends Controller
         $resumed = $this->resumedSelection($request, $record)
             ?? $this->selectionFromOldInput($record);
 
+        $settings = SiteSetting::current();
+
         $view = view('storefront.service', [
             'service' => $record,
             'platform' => $record->platform,
@@ -186,6 +189,9 @@ class StorefrontController extends Controller
             'canonical' => $canonical,
             'resumedVariantId' => $resumed['variant']->id ?? null,
             'resumedQuantity' => $resumed['quantity'] ?? null,
+            'variantGuide' => $record->showsVariantGuide()
+                ? ($settings?->variantGuide() ?? VariantGuide::defaults())
+                : null,
             /*
              * ⛔⛔ M5B：preview 一律不輸出圖譜（同 Hub 的理由）。
              *
@@ -195,7 +201,7 @@ class StorefrontController extends Controller
              */
             'structuredData' => $preview
                 ? null
-                : $this->structuredData->product($record, SiteSetting::current()),
+                : $this->structuredData->product($record, $settings),
         ]);
 
         return $preview ? $this->noindex($view) : $view;

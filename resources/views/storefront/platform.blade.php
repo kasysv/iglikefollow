@@ -246,7 +246,7 @@
                                 <summary class="min-h-11 cursor-pointer list-none">
                                     <h3 class="text-base font-bold">{{ $faq->question }}</h3>
                                 </summary>
-                                <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
+                                <p class="mt-3 whitespace-pre-line text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                             </details>
                         @endforeach
                     </div>

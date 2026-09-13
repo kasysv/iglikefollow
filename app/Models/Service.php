@@ -20,12 +20,23 @@ class Service extends Model
 
     protected $casts = [
         'is_featured' => 'boolean',
+        'show_variant_guide' => 'boolean',
         'first_published_at' => 'datetime',
     ];
 
     public function platform(): BelongsTo
     {
         return $this->belongsTo(Platform::class);
+    }
+
+    public function supportsVariantGuide(): bool
+    {
+        return in_array($this->slug, ['followers', 'post-likes'], true);
+    }
+
+    public function showsVariantGuide(): bool
+    {
+        return $this->supportsVariantGuide() && ($this->show_variant_guide ?? true);
     }
 
     public function variants(): HasMany

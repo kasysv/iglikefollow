@@ -2,8 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
+use App\Models\Order;
 use App\Models\Service;
 use App\Support\CanonicalUrl;
+use App\Support\ContactLookupHash;
 use Database\Seeders\CatalogSeeder;
 use DOMDocument;
 use DOMXPath;
@@ -11,6 +15,7 @@ use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\Concerns\SeedsThreadsCatalog;
@@ -36,6 +41,8 @@ class LineContactButtonTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        Http::preventStrayRequests();
 
         $this->seed(CatalogSeeder::class);
         $this->seedThreadsCatalog();
@@ -109,8 +116,7 @@ class LineContactButtonTest extends TestCase
     /**
      * ⛔ 404／錯誤頁共用同一個 layout，⛔ 但不得誤顯示。
      *
-     * ⭐ 這正是用 allowlist 而不是 denylist 的原因：`routeIs()` 在錯誤頁
-     * 不會命中任何一條，所以預設就是不顯示。
+     * 商品不存在時仍會命中 product route，所以也要檢查錯誤頁 guard。
      */
     public function test_error_pages_do_not_show_the_button(): void
     {
@@ -141,12 +147,7 @@ class LineContactButtonTest extends TestCase
         $this->assertStringNotContainsString('#', $href);
     }
 
-    /**
-     * ⛔⛔ 不得夾帶任何客人資料。
-     *
-     * ⭐ 用一張**假的** fixture 訂單查詢，⛔ 不用真實客戶資料：
-     * 確認訂單頁上的按鈕連結仍然一個字都沒多。
-     */
+    /** 公開入口的客服連結保持固定，不帶參數。 */
     public function test_the_link_never_carries_order_or_customer_data(): void
     {
         $service = Service::query()->whereNotNull('product_slug')->firstOrFail();
@@ -156,6 +157,47 @@ class LineContactButtonTest extends TestCase
 
             $this->assertSame(self::URL, $button->getAttribute('href'), "{$path} 的連結不得被加料");
         }
+    }
+
+    public function test_a_successful_order_lookup_keeps_one_static_contact_link_and_noindex(): void
+    {
+        $email = 'line-button-fixture@example.test';
+        $phone = '0912345678';
+        $order = Order::factory()->create([
+            'order_status' => OrderStatus::Paid,
+            'payment_status' => PaymentStatus::Succeeded,
+            'paid_at' => now(),
+            'customer_email' => $email,
+            'customer_phone' => $phone,
+            'customer_email_lookup_hash' => ContactLookupHash::forEmail($email),
+            'customer_phone_lookup_hash' => ContactLookupHash::forPhone($phone),
+        ]);
+        $order->items()->create([
+            'platform_name' => 'Instagram',
+            'service_name' => 'Instagram 粉絲',
+            'variant_label' => '測試款式',
+            'sku' => 'line-button-fixture',
+            'unit_price_mills' => 5900,
+            'quantity' => 1000,
+            'quantity_unit' => '個',
+            'amount' => 590,
+            'target_kind' => 'account',
+            'target_value' => 'line_button_fake_account',
+        ]);
+
+        $response = $this->post('/order-check', [
+            'reference' => $order->reference,
+            'email' => $email,
+        ]);
+
+        $response->assertOk()->assertSee($order->reference)->assertSee('Instagram 粉絲');
+        $this->assertStringContainsString('noindex', (string) $response->headers->get('X-Robots-Tag'));
+        $buttons = $this->buttons($response->getContent());
+        $this->assertCount(1, $buttons);
+        $this->assertSame(self::URL, $buttons[0]->getAttribute('href'));
+        $this->assertSame('no-referrer', $buttons[0]->getAttribute('referrerpolicy'));
+        $this->assertSame('noopener noreferrer', $buttons[0]->getAttribute('rel'));
+        Http::assertNothingSent();
     }
 
     public function test_the_new_window_cannot_reach_back_into_this_site(): void
@@ -222,13 +264,8 @@ class LineContactButtonTest extends TestCase
 
     // ============================================ 4. 不得影響既有頁面
 
-    /**
-     * ⛔⛔ 移除按鈕後，可見 DOM 必須與原本完全相同。
-     *
-     * ⭐ 這條釘住「只新增、沒改動」：整頁扣掉這個 component 之後，
-     * ⛔ 既有的 H1／canonical／robots／內鏈數量一個都不能變。
-     */
-    public function test_removing_the_button_leaves_the_rest_of_the_page_untouched(): void
+    /** 按鈕不包含 SEO 標記；此計數測試不取代跨版本內容比對。 */
+    public function test_the_button_contains_no_page_seo_markers(): void
     {
         foreach (CanonicalUrl::indexablePaths() as $path) {
             $html = (string) $this->request($path)->getContent();

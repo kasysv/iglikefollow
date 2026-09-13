@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\VariantGuide;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +15,13 @@ class SiteSetting extends Model
     public const CTA_ROUTES = ['home', 'platform', 'service'];
 
     protected $guarded = [];
+
+    protected $casts = ['variant_guide' => 'array'];
+
+    public function variantGuide(): array
+    {
+        return VariantGuide::resolve($this->variant_guide);
+    }
 
     /**
      * The homepage's three selling points, in display order.

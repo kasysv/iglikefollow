@@ -289,6 +289,10 @@
     </div>
     @endif
 
+    @if ($variantGuide !== null && $variants->isNotEmpty())
+        <x-variant-guide :guide="$variantGuide" />
+    @endif
+
     {{-- 內容區塊：固定安全模板輸出 H2／段落；⛔ 後台內容不得注入 HTML 或 script --}}
     @if (filled($service->intro) || $service->contentSections->isNotEmpty())
         <section class="border-t border-black/10 bg-white">
@@ -346,7 +350,7 @@
                             <summary class="min-h-11 cursor-pointer list-none">
                                 <h3 class="text-base font-bold">{{ $faq->question }}</h3>
                             </summary>
-                            <p class="mt-3 text-base leading-7 text-black/70">{{ $faq->answer }}</p>
+                            <p class="mt-3 whitespace-pre-line text-base leading-7 text-black/70">{{ $faq->answer }}</p>
                         </details>
                     @endforeach
                 </div>

@@ -149,8 +149,7 @@
      |
      | ⛔ 自成 `.line-contact` 命名空間，⛔ 不碰任何共用文字／CTA 樣式。
      |
-     | ⭐ 深綠 #007A3D 配白字實測對比 **5.45:1**（AA 正常字級需 4.5:1）。
-     | ⛔ 不用 LINE 品牌綠 #06C755——白字在它上面只有 2.26:1，不合格。
+     | Owner指定LINE亮綠#06C755；可見文字配深色，保留可讀性。
      |---------------------------------------------------------------------
      */
     .line-contact {
@@ -173,10 +172,11 @@
         /* ⛔ 52px 在 44px 觸控下限之上。 */
         min-height: 52px;
         min-width: 52px;
-        padding-inline: 1rem;
+        width: 52px;
+        padding-inline: 0;
         border-radius: 9999px;
-        background-color: #007a3d;
-        color: #fff;
+        background-color: #06c755;
+        color: #10110f;
         font-size: 0.9375rem;
         font-weight: 700;
         line-height: 1;
@@ -186,7 +186,7 @@
     }
 
     .line-contact:hover {
-        background-color: #006532;
+        background-color: #05b34c;
     }
 
     /* ⛔ 鍵盤可達：focus ring 必須看得見。 */
@@ -196,6 +196,7 @@
     }
 
     .line-contact__mark {
+        display: none;
         width: 1.375rem;
         height: 1.375rem;
         flex-shrink: 0;
@@ -211,7 +212,12 @@
             right: calc(24px + env(safe-area-inset-right, 0px));
             bottom: calc(24px + env(safe-area-inset-bottom, 0px));
             min-height: 56px;
+            width: auto;
             padding-inline: 1.25rem;
+        }
+
+        .line-contact__mark {
+            display: block;
         }
 
         .line-contact__text-full {
