@@ -8,7 +8,10 @@ use App\Models\Service;
 use App\Models\SiteSetting;
 use App\Models\User;
 use App\Support\CanonicalUrl;
+use App\Support\CheckoutSession;
 use Database\Seeders\CatalogSeeder;
+use DOMDocument;
+use DOMXPath;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -352,6 +355,102 @@ class StorefrontStructuredDataTest extends TestCase
         $this->assertArrayNotHasKey('item', $items[1]);
     }
 
+    /**
+     * ⛔⛔ R1：麵包屑每一層都必須等於**渲染後 DOM** 的那一格文字。
+     *
+     * ⭐ 初版我只拿 model 欄位組期望值來比對，結果 `/faq` 的末層用了 H1
+     * 「IGLIKEFOLLOW 購買與訂單常見問題」，而可見麵包屑寫的是「常見問題」
+     * ——⛔ 兩邊都由我自己算，錯誤自然對得起來。GPT 以真實 DOM 反證。
+     *
+     * ⭐ 所以這一條改成從 DOM 抽字：`nav[aria-label=麵包屑]` 的每個
+     * `<li>`（排除 `aria-hidden` 的分隔線），⛔ 不再自己重算期望值。
+     */
+    public function test_every_breadcrumb_level_matches_the_rendered_dom(): void
+    {
+        $checked = 0;
+
+        foreach (CanonicalUrl::indexablePaths() as $path) {
+            $html = (string) $this->request($path)->getContent();
+
+            $visible = $this->visibleBreadcrumb($html);
+
+            $graph = json_decode($this->ldJsonBlocks($html)[0], true, 512, JSON_THROW_ON_ERROR);
+
+            $node = $this->nodeOfType($graph, 'BreadcrumbList');
+
+            // 首頁沒有可見麵包屑，⛔ 因此也不該輸出 BreadcrumbList。
+            if ($visible === []) {
+                $this->assertNull($node, "{$path} 沒有可見麵包屑就不得輸出 BreadcrumbList。");
+
+                continue;
+            }
+
+            $this->assertNotNull($node, "{$path} 有可見麵包屑就必須輸出 BreadcrumbList。");
+
+            $names = array_column($node['itemListElement'], 'name');
+
+            $this->assertSame(
+                $visible,
+                $names,
+                "{$path} 的麵包屑必須逐字等於渲染後的 DOM。"
+            );
+
+            // position 必須是 1..n 的連號。
+            $this->assertSame(
+                range(1, count($visible)),
+                array_column($node['itemListElement'], 'position')
+            );
+
+            // ⛔ 末層是目前頁：可見的那一格不是連結,所以不得帶 item。
+            $this->assertArrayNotHasKey('item', $node['itemListElement'][count($visible) - 1]);
+
+            $checked++;
+        }
+
+        // ⛔ 防止這條測試因為抽不到任何麵包屑而空轉通過。
+        $this->assertSame(13, $checked, '除首頁外的 13 頁都必須驗到麵包屑。');
+    }
+
+    /**
+     * 從渲染後的 HTML 抽出可見麵包屑的每一層文字。
+     *
+     * ⛔ 排除 `aria-hidden="true"` 的 `/` 分隔線；⛔ 不做任何正規化以外的
+     * 改寫，這樣抽出來的就是使用者真正看到的字。
+     *
+     * @return list<string>
+     */
+    private function visibleBreadcrumb(string $html): array
+    {
+        $dom = new DOMDocument;
+
+        // 頁面是 UTF-8，⛔ 沒有這個前綴 DOMDocument 會當成 Latin-1。
+        @$dom->loadHTML('<?xml encoding="UTF-8">'.$html);
+
+        $xpath = new DOMXPath($dom);
+
+        $nav = $xpath->query('//nav[@aria-label="麵包屑"]')->item(0);
+
+        if ($nav === null) {
+            return [];
+        }
+
+        $names = [];
+
+        foreach ($xpath->query('.//li', $nav) as $li) {
+            if ($li->getAttribute('aria-hidden') === 'true') {
+                continue;
+            }
+
+            $text = trim(preg_replace('~\s+~u', ' ', $li->textContent));
+
+            if ($text !== '') {
+                $names[] = $text;
+            }
+        }
+
+        return $names;
+    }
+
     // ============================================ 4. published 篩選與空資料
 
     public function test_a_draft_service_is_not_described_anywhere(): void
@@ -592,26 +691,71 @@ class StorefrontStructuredDataTest extends TestCase
 
     // ============================================ 7. 既有 SEO 不變
 
+    /**
+     * ⛔⛔ R1：用**真正的** session key 走完 resume 分支。
+     *
+     * ⭐ 初版我自己編了 `'checkout'` 與 `'checkout_resume'`，而實際常數是
+     * `CheckoutSession::KEY`（`checkout.selection`）與
+     * `RESUME_KEY`（`checkout.resume_once`）——⛔ 於是 resume 分支**根本
+     * 沒跑到**，`resumedVariantId`／`resumedQuantity` 都是 null，
+     * 這條測試等於在比較「兩次一模一樣的普通請求」，⛔ 空轉通過。
+     * GPT 以 `assertViewHas` 反證。
+     *
+     * ⭐ R1 改用真常數，並刻意挑**非預設**的方案與數量：
+     * 如果 resume 沒生效，`assertViewHas` 會先紅，⛔ 不可能再空轉。
+     */
     public function test_resuming_a_selection_does_not_change_the_product_graph(): void
     {
-        $service = Service::query()->whereNotNull('product_slug')->with('variants')->first();
+        $service = Service::query()
+            ->whereNotNull('product_slug')
+            ->with(['variants' => fn ($q) => $q->published()->orderBy('sort_order')])
+            ->first();
 
-        $plain = $this->ldJsonBlocks(
-            (string) $this->request('/product/'.$service->product_slug.'/')->getContent()
-        )[0];
+        $path = '/product/'.$service->product_slug.'/';
 
-        $variant = $service->variants->first();
+        $plain = $this->ldJsonBlocks((string) $this->request($path)->getContent())[0];
+
+        /*
+         * ⛔ 刻意避開頁面預設：預設是 `is_featured` 那一款（沒有就第一款）。
+         * ⭐ 挑一款**不是**預設的，數量也刻意不等於 `default_quantity`，
+         * 這樣「畫面確實被 resume 改變」才是可觀察的事實。
+         */
+        $default = $service->variants->firstWhere('is_featured', true) ?? $service->variants->first();
+        $variant = $service->variants->firstWhere(fn ($v) => ! $v->is($default)) ?? $default;
+
+        $quantity = (int) $variant->min_quantity + 1;
+
+        $this->assertNotSame(
+            (int) $variant->default_quantity,
+            $quantity,
+            '測試數量必須與該方案的預設不同，否則證明不了 resume 生效。'
+        );
+        $this->assertTrue($variant->quantityIsValid($quantity));
 
         $resumed = $this->withSession([
-            'checkout' => ['variant_id' => $variant->id, 'quantity' => $variant->min_quantity],
-            'checkout_resume' => true,
-        ])->get('/product/'.$service->product_slug.'/');
+            CheckoutSession::KEY => [
+                'variant_id' => $variant->id,
+                'quantity' => $quantity,
+                'return_url' => $service->primaryUrl(),
+                'token' => 'r1-fake-resume-token',
+            ],
+            CheckoutSession::RESUME_KEY => true,
+        ])->get($path);
+
+        $resumed->assertOk();
+
+        // ⭐ 先證明 resume 真的生效，⛔ 再談圖譜不變才有意義。
+        $resumed->assertViewHas('resumedVariantId', $variant->id);
+        $resumed->assertViewHas('resumedQuantity', $quantity);
+
+        // ⛔ 一次性 marker 必須被消耗，⛔ 不得留在 session。
+        $resumed->assertSessionMissing(CheckoutSession::RESUME_KEY);
 
         $resumedBlock = $this->ldJsonBlocks($resumed->getContent())[0];
 
         /*
-         * ⭐ resume 只改畫面預選的方案，⛔ 不改商品身份——
-         * 同一個 canonical 不得有兩種機器可讀描述。
+         * ⭐ 畫面換了方案與數量，圖譜卻必須一字不差——
+         * ⛔ 同一個 canonical 不得有兩種機器可讀描述。
          */
         $this->assertSame($plain, $resumedBlock, 'resume 不得改變圖譜。');
     }

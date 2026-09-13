@@ -1099,11 +1099,76 @@ class M2cR5GeoAeoFaqTest extends TestCase
             }
         }
 
-        // ⛔ R5 不新增 QAPage／FAQPage／AI 專用 markup。
         $faqHtml = $this->get('/faq')->assertOk()->getContent();
 
-        foreach (['QAPage', 'FAQPage', 'application/ld+json'] as $markup) {
-            $this->assertStringNotContainsString($markup, $faqHtml);
+        /*
+         | ⛔⛔ M5B-SCHEMA-A R1:這裡原本是「R5 不新增 QAPage／FAQPage／
+         | application/ld+json」的**里程碑範圍宣告**。
+         |
+         | ⭐ Owner 已批准 M5B 在 `/faq` 輸出 FAQPage，因此那兩個 token 的
+         | 整頁禁令已經過時。⛔ 過時的只有這兩個——⛔ 上面所有禁句、
+         | draft／範圍斷言與下面的 QAPage、llms.txt 一律保留，
+         | ⛔ 不得為了讓程式通過而刪測試。
+         |
+         | ⭐ 取代它的是更強的條件:恰好一份可解析 JSON-LD、問答與本頁
+         | 可見的已發布內容一致，並對 **decode 後**的字串再驗一次禁句
+         | ——⛔ JSON 會把中文編成 `\uXXXX`，只 grep 原始 HTML 的話禁句
+         | 會被 Unicode 跳脫掩蓋過去。
+         */
+
+        // ⛔ QAPage 仍然不得出現（本輪未授權，也沒有對應的可見問答形式）。
+        $this->assertStringNotContainsString('QAPage', $faqHtml);
+
+        preg_match_all(
+            '~<script type="application/ld\+json">(.*?)</script>~s',
+            $faqHtml,
+            $ldMatches
+        );
+
+        // ⛔ 恰好一份，⛔ 不得有第二份互相矛盾的圖譜。
+        $this->assertCount(1, $ldMatches[1], '/faq 必須恰好輸出一份 JSON-LD。');
+
+        $graph = json_decode($ldMatches[1][0], true, 512, JSON_THROW_ON_ERROR);
+
+        $faqNode = null;
+
+        foreach ($graph['@graph'] ?? [] as $node) {
+            if (($node['@type'] ?? null) === 'FAQPage') {
+                $faqNode = $node;
+            }
+        }
+
+        $this->assertNotNull($faqNode, '有已發布問答時 /faq 必須是 FAQPage。');
+
+        // 標記的問答必須恰好是本頁已發布、且真的顯示出來的那幾題。
+        $published = Faq::query()
+            ->published()
+            ->where('scope', 'global')
+            ->orderBy('sort_order')
+            ->get();
+
+        $this->assertCount($published->count(), $faqNode['mainEntity']);
+
+        foreach ($faqNode['mainEntity'] as $i => $question) {
+            $this->assertSame($published[$i]->question, $question['name']);
+            $this->assertSame($published[$i]->answer, $question['acceptedAnswer']['text']);
+
+            $this->assertStringContainsString(e($published[$i]->question), $faqHtml);
+            $this->assertStringContainsString(e($published[$i]->answer), $faqHtml);
+        }
+
+        /*
+         * ⛔⛔ 對 decode 後的字串重驗全部禁句。
+         * ⭐ 原始 HTML 裡的中文是 `\uXXXX`，⛔ 直接 grep 會漏掉。
+         */
+        $decoded = json_encode($graph, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        foreach ($banned as $term) {
+            $this->assertStringNotContainsString(
+                $term,
+                $decoded,
+                "/faq 的 JSON-LD（decode 後）不得出現「{$term}」"
+            );
         }
 
         // llms.txt 不存在。

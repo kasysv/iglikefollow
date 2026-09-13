@@ -36,6 +36,15 @@ final class StorefrontStructuredData
     private const HOME_NAME = '首頁';
 
     /**
+     * `/faq` 麵包屑末層，與 `faq.blade.php` 寫死的可見文字一致。
+     *
+     * ⛔ 這不等於該頁的 H1（H1 是「IGLIKEFOLLOW 購買與訂單常見問題」）。
+     * ⭐ 測試會直接從渲染後的 DOM 抽出 `aria-current="page"` 那一格比對，
+     * 所以哪天 Blade 改字，這個常數會被測試抓出來。
+     */
+    private const FAQ_BREADCRUMB_NAME = '常見問題';
+
+    /**
      * 首頁：Organization ＋ WebSite ＋ WebPage。
      *
      * @return array<string, mixed>
@@ -235,7 +244,19 @@ final class StorefrontStructuredData
             $page,
             $this->breadcrumb($canonical, [
                 [self::HOME_NAME, CanonicalUrl::to('/')],
-                [$this->clean($h1) ?? '常見問題', null],
+                /*
+                 * ⛔⛔ R1：末層固定用可見麵包屑的「常見問題」，⛔ 不是 H1。
+                 *
+                 * ⭐ 初版我在這裡放了 `$h1`，而 `/faq` 的 H1 是
+                 * 「IGLIKEFOLLOW 購買與訂單常見問題」——可見麵包屑那一格
+                 * 寫的卻是「常見問題」（`faq.blade.php` 的 `aria-current`
+                 * 那個 `<li>` 是寫死的文字）。GPT 以真實 DOM 反證。
+                 *
+                 * ⭐ 這與 Hub／商品頁的處理一致：麵包屑沿用**可見麵包屑**的
+                 * 字，而頁面節點的 `name` 才沿用 H1——兩者本來就是不同的字，
+                 * ⛔ 標記必須各自對應自己那一處可見內容。
+                 */
+                [self::FAQ_BREADCRUMB_NAME, null],
             ]),
         ]);
     }

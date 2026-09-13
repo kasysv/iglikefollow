@@ -709,11 +709,69 @@ class M2cR6FaqDepthTest extends TestCase
             }
         }
 
-        // ⛔ 仍不新增 FAQPage／QAPage／llms.txt。
         $faqPage = $this->get('/faq')->assertOk()->getContent();
 
-        foreach (['QAPage', 'FAQPage', 'application/ld+json'] as $markup) {
-            $this->assertStringNotContainsString($markup, $faqPage);
+        /*
+         | ⛔⛔ M5B-SCHEMA-A R1:這裡原本是「R6 仍不新增 FAQPage／QAPage／
+         | application/ld+json」的**里程碑範圍宣告**。
+         |
+         | ⭐ Owner 已批准 M5B 在 `/faq` 輸出 FAQPage，因此 FAQPage 與
+         | `application/ld+json` 的整頁禁令已經過時。⛔ 過時的只有這兩個
+         | ——⛔ 上面所有禁句與下面的 QAPage、llms.txt 一律保留。
+         |
+         | ⭐ 取代它的是更強的條件（與 R5 同一套）:恰好一份可解析
+         | JSON-LD、問答與本頁可見的已發布內容一致，並對 **decode 後**的
+         | 字串再驗一次禁句——⛔ 否則中文會被 `\uXXXX` 跳脫掩蓋。
+         */
+
+        // ⛔ QAPage 仍然不得出現。
+        $this->assertStringNotContainsString('QAPage', $faqPage);
+
+        preg_match_all(
+            '~<script type="application/ld\+json">(.*?)</script>~s',
+            $faqPage,
+            $ldMatches
+        );
+
+        $this->assertCount(1, $ldMatches[1], '/faq 必須恰好輸出一份 JSON-LD。');
+
+        $graph = json_decode($ldMatches[1][0], true, 512, JSON_THROW_ON_ERROR);
+
+        $faqNode = null;
+
+        foreach ($graph['@graph'] ?? [] as $node) {
+            if (($node['@type'] ?? null) === 'FAQPage') {
+                $faqNode = $node;
+            }
+        }
+
+        $this->assertNotNull($faqNode, '有已發布問答時 /faq 必須是 FAQPage。');
+
+        $published = Faq::query()
+            ->published()
+            ->where('scope', 'global')
+            ->orderBy('sort_order')
+            ->get();
+
+        $this->assertCount($published->count(), $faqNode['mainEntity']);
+
+        foreach ($faqNode['mainEntity'] as $i => $question) {
+            $this->assertSame($published[$i]->question, $question['name']);
+            $this->assertSame($published[$i]->answer, $question['acceptedAnswer']['text']);
+
+            // ⛔ 標記的問答必須真的顯示在這一頁上。
+            $this->assertStringContainsString(e($published[$i]->question), $faqPage);
+            $this->assertStringContainsString(e($published[$i]->answer), $faqPage);
+        }
+
+        $decoded = json_encode($graph, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        foreach ($banned as $term) {
+            $this->assertStringNotContainsString(
+                $term,
+                $decoded,
+                "/faq 的 JSON-LD（decode 後）不得出現「{$term}」"
+            );
         }
 
         $this->assertFalse(file_exists(public_path('llms.txt')));
