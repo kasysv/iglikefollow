@@ -428,8 +428,8 @@ class M5aUrlMigrationTest extends TestCase
             );
         }
 
-        // ⛔ utility／交易／後台一律不得出現。
-        foreach (['/checkout', '/order-check', '/admin', '/api/health', 'preview'] as $forbidden) {
+        // ⛔ utility／交易／後台一律不得出現（M5C 起後台是 `/ignfdash`）。
+        foreach (['/checkout', '/order-check', '/ignfdash', '/admin', '/api/health', 'preview'] as $forbidden) {
             $this->assertStringNotContainsString($forbidden, $body, "⛔ sitemap 不得含 {$forbidden}");
         }
     }
@@ -785,6 +785,12 @@ class M5aUrlMigrationTest extends TestCase
             '/payments/{ref}/status' => ['/payments/review-REFERENCE/status'],
             '/payments/linepay confirm' => ['/payments/linepay/review-REFERENCE/confirm'],
             '/payments/linepay cancel' => ['/payments/linepay/review-REFERENCE/cancel'],
+            /*
+             * M5C：後台改走 `/ignfdash`，這裡跟著加。
+             * ⛔ 舊 `/admin` 的 bypass 邊界**保留**：它現在是 404，
+             * ⭐ 但 path／query 一樣不得被 SEO 正規化改寫。
+             */
+            '/ignfdash' => ['/ignfdash/login'],
             '/admin' => ['/admin/login'],
             '/api' => ['/api/health'],
             '/up' => ['/up'],

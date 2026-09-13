@@ -26,18 +26,18 @@ class AdminPanelTest extends TestCase
 
     public function test_admin_login_page_is_reachable(): void
     {
-        $this->get('/admin/login')->assertOk();
+        $this->get('/ignfdash/login')->assertOk();
     }
 
     public function test_guest_cannot_reach_the_panel(): void
     {
-        $this->get('/admin')->assertRedirect();
+        $this->get('/ignfdash')->assertRedirect();
     }
 
     public function test_admin_routes_always_send_noindex(): void
     {
-        // /admin 必須無條件 noindex，即使日後正式前台開放索引。
-        $this->get('/admin/login')
+        // 後台必須無條件 noindex——⛔ 正式站已開放索引，這一條更重要。
+        $this->get('/ignfdash/login')
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 

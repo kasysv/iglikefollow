@@ -422,7 +422,7 @@ class OrderAdminCompactOperationsTest extends TestCase
 
         // ⭐ 整列的連結仍指向該訂單的 view route。
         $this->assertStringContainsString(
-            '/admin/orders/'.$order->reference,
+            '/ignfdash/orders/'.$order->reference,
             $html,
             '⛔⛔ 移除按鈕後，客服仍必須能從列表進入訂單。',
         );
@@ -738,7 +738,7 @@ class OrderAdminCompactOperationsTest extends TestCase
         );
 
         // ⭐ 整列的訂單連結仍然存在。
-        $this->assertStringContainsString('/admin/orders/'.$order->reference, $html);
+        $this->assertStringContainsString('/ignfdash/orders/'.$order->reference, $html);
     }
 
     /**

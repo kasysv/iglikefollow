@@ -563,9 +563,9 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $orderReference = $row->orderItem->order->reference;
 
         $pages = [
-            '訂單詳情' => "/admin/orders/{$orderReference}",
-            '履約紀錄列表' => '/admin/fulfillment-orders',
-            '履約紀錄詳情' => "/admin/fulfillment-orders/{$row->id}",
+            '訂單詳情' => "/ignfdash/orders/{$orderReference}",
+            '履約紀錄列表' => '/ignfdash/fulfillment-orders',
+            '履約紀錄詳情' => "/ignfdash/fulfillment-orders/{$row->id}",
         ];
 
         foreach ($pages as $label => $url) {
@@ -599,7 +599,7 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
 
         $html = (string) $this->actingAs($owner)
-            ->get("/admin/fulfillment-orders/{$row->id}")->getContent();
+            ->get("/ignfdash/fulfillment-orders/{$row->id}")->getContent();
 
         foreach ([self::KEY, TheMostPanelDispatchAdapterTest::TARGET] as $forbidden) {
             $this->assertStringNotContainsString($forbidden, $html);
@@ -758,7 +758,7 @@ class SmmRawStatusAndRemainsTest extends TestCase
         $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
         $reference = $row->orderItem->order->reference;
 
-        $full = (string) $this->actingAs($owner)->get("/admin/orders/{$reference}")->getContent();
+        $full = (string) $this->actingAs($owner)->get("/ignfdash/orders/{$reference}")->getContent();
 
         /*
          * ⛔ 只在「SMM 履約進度」區塊內比對位置。

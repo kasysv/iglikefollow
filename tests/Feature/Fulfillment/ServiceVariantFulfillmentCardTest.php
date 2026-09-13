@@ -71,7 +71,7 @@ class ServiceVariantFulfillmentCardTest extends TestCase
 
     private function editUrl(ServiceVariant $variant): string
     {
-        return '/admin/service-variants/'.$variant->id.'/edit';
+        return '/ignfdash/service-variants/'.$variant->id.'/edit';
     }
 
     // ==================================== 1. Owner:compatible disabled 全欄位
@@ -189,7 +189,7 @@ class ServiceVariantFulfillmentCardTest extends TestCase
 
     public function test_the_create_page_has_no_card(): void
     {
-        $response = $this->actingAs($this->owner())->get('/admin/service-variants/create');
+        $response = $this->actingAs($this->owner())->get('/ignfdash/service-variants/create');
 
         $response->assertOk();
         $response->assertDontSee('履約對照');

@@ -78,7 +78,7 @@ class OrderAdminTest extends TestCase
     {
         $order = $this->order();
 
-        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/orders/'.$order->reference);
 
         $response->assertOk();
         $response->assertSee('交易流程');
@@ -96,7 +96,7 @@ class OrderAdminTest extends TestCase
             'status' => PaymentStatus::Succeeded,
         ]);
 
-        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/orders/'.$order->reference);
 
         $response->assertOk();
         $response->assertSee('已成功(1/2 次嘗試)');
@@ -119,7 +119,7 @@ class OrderAdminTest extends TestCase
         $completed->forceFill(['status' => FulfillmentStatus::Completed])->save();
         FulfillmentOrder::factory()->submitted('71002')->create(['order_item_id' => $second->id]);
 
-        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/orders/'.$order->reference);
 
         $response->assertOk();
         $response->assertDontSee('全部完成');
@@ -143,7 +143,7 @@ class OrderAdminTest extends TestCase
             $row->forceFill(['status' => FulfillmentStatus::Completed])->save();
         }
 
-        $response = $this->actingAs($this->owner())->get('/admin/orders/'.$order->reference);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/orders/'.$order->reference);
 
         $response->assertOk();
         $response->assertSee('全部完成(2/2)');

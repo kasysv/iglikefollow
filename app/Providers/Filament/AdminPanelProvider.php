@@ -26,8 +26,24 @@ class AdminPanelProvider extends PanelProvider
     {
         return $panel
             ->default()
+            /*
+             * ⛔⛔ M5C：只改 `path()`，⛔ 不改 `id()`。
+             *
+             * ⭐ panel id 是 `filament.admin.*` route name、
+             * `getUrl(panel: 'admin')` 與授權判斷共用的識別碼；
+             * 改掉它會牽動這些地方，而本輪只要換對外的網址。
+             * ⛔ 所以 id 維持 `admin`，只有 URL 前綴變成 `ignfdash`。
+             *
+             * ⭐ 後台連結（含 LINE 訂單通知的 `ViewOrder::getUrl()`）都由
+             * panel path 產生，⛔ 不必也不得逐處硬改網址。
+             *
+             * ⛔ 換路徑**不是**額外的登入安全保證：認證、授權、CSRF、
+             * session、Livewire 保護與 ForceNoindex 一律照舊。
+             * ⛔ 舊 `/admin` 不保留第二套後台，也⛔ 不加轉址——
+             * 舊書籤與歷史 LINE 連結會失效，這是預期行為。
+             */
             ->id('admin')
-            ->path('admin')
+            ->path('ignfdash')
             ->login()
             ->colors([
                 'primary' => Color::Amber,

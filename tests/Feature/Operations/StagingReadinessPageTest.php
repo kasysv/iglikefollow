@@ -17,7 +17,7 @@ class StagingReadinessPageTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const URL = '/admin/staging-readiness';
+    private const URL = '/ignfdash/staging-readiness';
 
     private const KEY_MARKER = 'FAKE-PAGE-KEY-MARKER-770033';
 

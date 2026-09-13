@@ -37,6 +37,19 @@ class CanonicalUrlRedirect
      */
     private const BYPASS_PREFIXES = [
         '/payments',
+        /*
+         * ⛔⛔ M5C：後台改走 `/ignfdash`，這一條必須跟著加。
+         *
+         * ⭐ 後台的 URL 帶識別碼（`/ignfdash/orders/IGLF-20260913-ABCD`）
+         * 而 SEO 正規化會把整個 path 轉小寫並丟掉 query——那會讓
+         * Filament 找不到 record，也會破壞 Livewire 的往返。
+         *
+         * ⛔ 舊 `/admin` 的保護邊界**保留**：它現在是 404，但萬一
+         * 將來有人再掛東西上去，⛔ 不該因為少了這一行而被改寫。
+         * ⭐ 兩條都在這裡，語意是「這些前綴交回原 handler」，
+         * ⛔ 不是「豁免安全檢查」——原路由自己的 middleware 照常執行。
+         */
+        '/ignfdash',
         '/admin',
         '/api',
         '/up',

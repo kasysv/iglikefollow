@@ -501,7 +501,7 @@ class AdminBeginnerWorkflowTest extends TestCase
         $order = Order::factory()->create();
 
         // ⛔ Order 有自訂 route key(不是 id),用 getRouteKey() 才是真實網址。
-        $html = $this->get('/admin/orders/'.$order->getRouteKey())->assertOk()->getContent();
+        $html = $this->get('/ignfdash/orders/'.$order->getRouteKey())->assertOk()->getContent();
 
         // 沒有發票時每一欄顯示「尚未開立」,不推論成功或失敗。
         $this->assertStringContainsString('電子發票', $html);

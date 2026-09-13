@@ -71,7 +71,7 @@ class InvoiceAdminDetailTest extends TestCase
         $this->assertFalse($editor->can('view', $invoice));
 
         $this->actingAs($editor)
-            ->get('/admin/invoices/'.$invoice->getKey())
+            ->get('/ignfdash/invoices/'.$invoice->getKey())
             ->assertForbidden();
     }
 

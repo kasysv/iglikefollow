@@ -37,9 +37,9 @@ class FulfillmentAdminTest extends TestCase
     public static function fulfillmentRouteProvider(): array
     {
         return [
-            'mapping index' => ['/admin/fulfillment-mappings'],
-            'mapping create' => ['/admin/fulfillment-mappings/create'],
-            'fulfillment index' => ['/admin/fulfillment-orders'],
+            'mapping index' => ['/ignfdash/fulfillment-mappings'],
+            'mapping create' => ['/ignfdash/fulfillment-mappings/create'],
+            'fulfillment index' => ['/ignfdash/fulfillment-orders'],
         ];
     }
 
@@ -60,27 +60,27 @@ class FulfillmentAdminTest extends TestCase
 
     public function test_an_owner_reaches_the_mapping_pages(): void
     {
-        $this->actingAs($this->owner())->get('/admin/fulfillment-mappings')->assertOk();
-        $this->actingAs($this->owner())->get('/admin/fulfillment-mappings/create')->assertOk();
+        $this->actingAs($this->owner())->get('/ignfdash/fulfillment-mappings')->assertOk();
+        $this->actingAs($this->owner())->get('/ignfdash/fulfillment-mappings/create')->assertOk();
     }
 
     public function test_an_editor_is_forbidden_from_mappings(): void
     {
         // ⛔ 後端擋，不是只把選單藏起來。
-        $this->actingAs($this->editor())->get('/admin/fulfillment-mappings')->assertForbidden();
-        $this->actingAs($this->editor())->get('/admin/fulfillment-mappings/create')->assertForbidden();
+        $this->actingAs($this->editor())->get('/ignfdash/fulfillment-mappings')->assertForbidden();
+        $this->actingAs($this->editor())->get('/ignfdash/fulfillment-mappings/create')->assertForbidden();
     }
 
     public function test_an_editor_may_read_fulfillment_records(): void
     {
-        $this->actingAs($this->editor())->get('/admin/fulfillment-orders')->assertOk();
+        $this->actingAs($this->editor())->get('/ignfdash/fulfillment-orders')->assertOk();
     }
 
     public function test_an_editor_never_sees_the_provider_service_id(): void
     {
         $row = FulfillmentOrder::factory()->submitted()->create();
 
-        $response = $this->actingAs($this->editor())->get('/admin/fulfillment-orders/'.$row->id);
+        $response = $this->actingAs($this->editor())->get('/ignfdash/fulfillment-orders/'.$row->id);
 
         $response->assertOk();
         // ⛔ 供應商代碼是商業敏感資訊，客服不需要知道我們從哪裡進貨。
@@ -91,7 +91,7 @@ class FulfillmentAdminTest extends TestCase
     {
         $row = FulfillmentOrder::factory()->submitted()->create();
 
-        $response = $this->actingAs($this->owner())->get('/admin/fulfillment-orders/'.$row->id);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/fulfillment-orders/'.$row->id);
 
         $response->assertOk();
         $response->assertSee('FAKE-SERVICE-0000');
@@ -104,7 +104,7 @@ class FulfillmentAdminTest extends TestCase
             'provider_service_name_snapshot' => '編輯者應該看得到的服務名稱',
         ]);
 
-        $response = $this->actingAs($this->editor())->get('/admin/fulfillment-orders/'.$row->id);
+        $response = $this->actingAs($this->editor())->get('/ignfdash/fulfillment-orders/'.$row->id);
 
         $response->assertOk();
         $response->assertSee('編輯者應該看得到的服務名稱');
@@ -116,7 +116,7 @@ class FulfillmentAdminTest extends TestCase
             'provider_service_name_snapshot' => 'Owner 應該看得到的服務名稱',
         ]);
 
-        $response = $this->actingAs($this->owner())->get('/admin/fulfillment-orders/'.$row->id);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/fulfillment-orders/'.$row->id);
 
         $response->assertOk();
         $response->assertSee('Owner 應該看得到的服務名稱');
@@ -126,7 +126,7 @@ class FulfillmentAdminTest extends TestCase
     {
         $row = FulfillmentOrder::factory()->submitted()->create();
 
-        $response = $this->actingAs($this->owner())->get('/admin/fulfillment-orders/'.$row->id);
+        $response = $this->actingAs($this->owner())->get('/ignfdash/fulfillment-orders/'.$row->id);
 
         $response->assertOk();
         /*
@@ -147,7 +147,7 @@ class FulfillmentAdminTest extends TestCase
         foreach (['owner', 'editor'] as $role) {
             $user = User::factory()->create(['role' => $role, 'is_active' => true]);
 
-            $response = $this->actingAs($user)->get('/admin/fulfillment-orders/'.$row->id);
+            $response = $this->actingAs($user)->get('/ignfdash/fulfillment-orders/'.$row->id);
 
             $response->assertOk();
             // ⛔ 履約頁面不需要顯示客人的帳號。
@@ -160,7 +160,7 @@ class FulfillmentAdminTest extends TestCase
         $mapping = FulfillmentMapping::factory()->create();
 
         $response = $this->actingAs($this->owner())
-            ->get('/admin/fulfillment-mappings/'.$mapping->id.'/edit');
+            ->get('/ignfdash/fulfillment-mappings/'.$mapping->id.'/edit');
 
         $response->assertOk();
         // ⛔ 只能停用：既有履約紀錄需要它才能解釋自己送去了哪裡。

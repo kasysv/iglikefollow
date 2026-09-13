@@ -19,7 +19,7 @@ class ProviderServiceAdminTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const URL = '/admin/provider-services';
+    private const URL = '/ignfdash/provider-services';
 
     protected function setUp(): void
     {
@@ -190,7 +190,7 @@ class ProviderServiceAdminTest extends TestCase
         $response->assertDontSee('刪除');
     }
 
-    /** ⛔ catalog 只有一條 admin route，公開面 0。 */
+    /** ⛔ catalog 只有一條後台 route，公開面 0（M5C：後台改走 ignfdash）。 */
     public function test_every_provider_service_route_lives_under_admin(): void
     {
         $matched = [];
@@ -201,7 +201,7 @@ class ProviderServiceAdminTest extends TestCase
             }
         }
 
-        $this->assertSame(['admin/provider-services'], $matched);
+        $this->assertSame(['ignfdash/provider-services'], $matched);
     }
 
     // ==================================== MAPPING-UI-A:Owner review 搜尋／篩選

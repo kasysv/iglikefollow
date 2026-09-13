@@ -512,7 +512,7 @@ class InvoiceLifecycleTest extends TestCase
         $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
 
         $this->actingAs($owner)
-            ->get('/admin/invoices')
+            ->get('/ignfdash/invoices')
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 

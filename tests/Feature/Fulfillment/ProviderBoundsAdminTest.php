@@ -422,8 +422,8 @@ class ProviderBoundsAdminTest extends TestCase
     {
         $editor = User::factory()->create(['role' => 'editor', 'is_active' => true]);
 
-        $this->actingAs($editor)->get('/admin/fulfillment-mappings/create')->assertForbidden();
-        $this->actingAs($editor)->get('/admin/fulfillment-mappings')->assertForbidden();
+        $this->actingAs($editor)->get('/ignfdash/fulfillment-mappings/create')->assertForbidden();
+        $this->actingAs($editor)->get('/ignfdash/fulfillment-mappings')->assertForbidden();
     }
 
     public function test_the_action_itself_refuses_a_non_owner_actor(): void

@@ -34,12 +34,12 @@ class AdminNavigationGroupingTest extends TestCase
 
     /** 6 個日常入口的 URL;⛔ 改名不得改變網址。 */
     private const EXPECTED_PATHS = [
-        '訂單' => '/admin/orders',
-        '商品' => '/admin/services',
-        '首頁設定' => '/admin/manage-site-settings',
-        '常見問題' => '/admin/faqs',
-        '串接設定' => '/admin/manage-integration-settings',
-        '後台帳號' => '/admin/users',
+        '訂單' => '/ignfdash/orders',
+        '商品' => '/ignfdash/services',
+        '首頁設定' => '/ignfdash/manage-site-settings',
+        '常見問題' => '/ignfdash/faqs',
+        '串接設定' => '/ignfdash/manage-integration-settings',
+        '後台帳號' => '/ignfdash/users',
     ];
 
     /**
@@ -49,15 +49,15 @@ class AdminNavigationGroupingTest extends TestCase
      * 因此隨時可回滾,既有履約與稽核資料也仍看得到。
      */
     private const HIDDEN_BUT_REACHABLE = [
-        '/admin/invoices',
-        '/admin/fulfillment-orders',
-        '/admin/service-variants',
-        '/admin/platforms',
-        '/admin/service-content-sections',
-        '/admin/fulfillment-mappings',
-        '/admin/provider-services',
-        '/admin/admin-audit-logs',
-        '/admin/staging-readiness',
+        '/ignfdash/invoices',
+        '/ignfdash/fulfillment-orders',
+        '/ignfdash/service-variants',
+        '/ignfdash/platforms',
+        '/ignfdash/service-content-sections',
+        '/ignfdash/fulfillment-mappings',
+        '/ignfdash/provider-services',
+        '/ignfdash/admin-audit-logs',
+        '/ignfdash/staging-readiness',
     ];
 
     private function owner(): User
@@ -135,7 +135,7 @@ class AdminNavigationGroupingTest extends TestCase
 
         foreach ($this->namedGroups() as $group) {
             foreach ($group->getItems() as $item) {
-                $this->assertNotContains($item->getUrl(), [url('/admin')], '儀表板不得被放進群組');
+                $this->assertNotContains($item->getUrl(), [url('/ignfdash')], '儀表板不得被放進群組');
             }
         }
     }
@@ -204,16 +204,16 @@ class AdminNavigationGroupingTest extends TestCase
         // ⛔ Owner-only 的技術頁對 Editor 仍然 403,不因為「被隱藏」而放寬。
         $this->actingAs($editor);
 
-        foreach (['/admin/provider-services', '/admin/fulfillment-mappings', '/admin/admin-audit-logs'] as $ownerOnly) {
+        foreach (['/ignfdash/provider-services', '/ignfdash/fulfillment-mappings', '/ignfdash/admin-audit-logs'] as $ownerOnly) {
             $this->get($ownerOnly)->assertForbidden();
         }
     }
 
     public function test_guests_still_cannot_reach_the_panel_and_admin_stays_noindex(): void
     {
-        $this->get('/admin')->assertRedirect();
+        $this->get('/ignfdash')->assertRedirect();
 
-        $this->get('/admin/login')
+        $this->get('/ignfdash/login')
             ->assertOk()
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
     }
