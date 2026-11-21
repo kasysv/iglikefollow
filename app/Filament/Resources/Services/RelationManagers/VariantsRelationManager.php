@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Services\RelationManagers;
 
 use App\Filament\Resources\Services\RelationManagers\Actions\ConfigureSmmMappingAction;
+use App\Filament\Resources\Services\RelationManagers\Actions\VariantSalesBulkActions;
 use App\Filament\Resources\ServiceVariants\Schemas\ServiceVariantForm;
 use App\Models\ServiceVariant;
 use Filament\Actions\BulkActionGroup;
@@ -101,6 +102,12 @@ class VariantsRelationManager extends RelationManager
                 DeleteAction::make(),
             ])
             ->toolbarActions([
+                /*
+                 * 勾選後一鍵停售／開賣（Owner 限定）。
+                 * ⭐ 放在群組外，勾選後直接看得到按鈕，⛔ 不藏在下拉選單裡。
+                 */
+                VariantSalesBulkActions::stop(),
+                VariantSalesBulkActions::resume(),
                 BulkActionGroup::make([DeleteBulkAction::make()]),
             ]);
     }
