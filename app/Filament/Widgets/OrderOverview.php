@@ -23,7 +23,10 @@ use Illuminate\Support\Facades\Auth;
  */
 class OrderOverview extends StatsOverviewWidget
 {
-    protected static ?int $sort = -10;
+    // ⭐ 首頁順序：訂單概況(10)→ 網站內容(20)→ 帳號(30)。
+    protected static ?int $sort = 10;
+
+    protected ?string $heading = '訂單概況';
 
     // ⭐ 一分鐘更新一次即可；⛔ 不用預設的 5 秒輪詢。
     protected ?string $pollingInterval = '60s';

@@ -12,7 +12,6 @@ use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
-use Filament\Widgets\AccountWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -77,12 +76,14 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             /*
-             * M2-E-B:只保留帳號 widget。⛔ 移除 FilamentInfoWidget——那是框架
-             * 版本宣傳,對日常客服作業沒有意義,也不新增花俏的 Dashboard。
+             * M2-E-B:⛔ 不放 FilamentInfoWidget——那是框架版本宣傳,
+             * 對日常客服作業沒有意義。
+             *
+             * ⭐ 2026-11-21:首頁 widget 全部由上方 discoverWidgets 載入,
+             * 順序由各 widget 的 `$sort` 決定:訂單概況(10)→ 網站內容(20)
+             * → 帳號(30)。帳號小卡改用 `AccountOverview`(同一個 Filament
+             * AccountWidget,只調整位置與寬度),⛔ 這裡不再重複註冊。
              */
-            ->widgets([
-                AccountWidget::class,
-            ])
             ->middleware([
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,

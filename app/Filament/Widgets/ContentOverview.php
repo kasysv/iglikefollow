@@ -12,6 +12,11 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 /** ⛔ 只顯示真實的內容計數；不使用虛構營收或成效資料。 */
 class ContentOverview extends StatsOverviewWidget
 {
+    // ⭐ 首頁順序：訂單概況(10)→ 網站內容(20)→ 帳號(30)。
+    protected static ?int $sort = 20;
+
+    protected ?string $heading = '網站內容';
+
     protected function getStats(): array
     {
         return [

@@ -94,6 +94,26 @@ class OrderOverviewWidgetTest extends TestCase
             ->assertSee('wire:name="App\Filament\Widgets\OrderOverview"', false);
     }
 
+    /** ⭐ 首頁順序：訂單概況 → 網站內容 → 帳號，⛔ 帳號小卡只出現一次。 */
+    public function test_the_dashboard_order_is_orders_then_content_then_account(): void
+    {
+        $owner = User::factory()->create(['role' => 'owner', 'is_active' => true]);
+
+        $html = $this->actingAs($owner)->get('/ignfdash')->assertOk()->getContent();
+
+        $orders = strpos($html, 'wire:name="App\Filament\Widgets\OrderOverview"');
+        $content = strpos($html, 'wire:name="App\Filament\Widgets\ContentOverview"');
+        $account = strpos($html, 'wire:name="App\Filament\Widgets\AccountOverview"');
+
+        $this->assertNotFalse($orders);
+        $this->assertNotFalse($content);
+        $this->assertNotFalse($account);
+        $this->assertTrue($orders < $content && $content < $account, '⛔ 首頁順序必須是訂單 → 內容 → 帳號。');
+
+        // ⛔ 原本的 AccountWidget 不得再重複出現。
+        $this->assertStringNotContainsString('wire:name="Filament\Widgets\AccountWidget"', $html);
+    }
+
     public function test_an_editor_who_can_see_orders_also_sees_the_numbers(): void
     {
         $this->actingAs(User::factory()->create(['role' => 'editor', 'is_active' => true]));
