@@ -485,8 +485,10 @@ class OrderAdminCompactOperationsTest extends TestCase
 
     // ==================================================== 5. SMM 勾叉與警示
 
-    /** ⭐ 單一商品已送出 → 勾。 */
-    public function test_a_single_submitted_item_is_a_tick(): void
+    /**
+     * ⭐⭐ 2026-11-21 Owner：「完成才勾」。單一商品已送出但未完成 → O，⛔ 不是勾。
+     */
+    public function test_a_single_submitted_item_is_in_progress_not_a_tick(): void
     {
         $order = $this->order();
 
@@ -495,9 +497,124 @@ class OrderAdminCompactOperationsTest extends TestCase
         ]);
 
         $this->assertSame(
-            ['partial' => false, 'canceled' => false, 'pending' => false, 'allSubmitted' => true],
+            ['partial' => false, 'canceled' => false, 'pending' => false, 'inProgress' => true, 'attention' => false, 'allCompleted' => false],
             OrderOperationsIndicators::smm($order->fresh()),
         );
+    }
+
+    /** ⭐ 單一商品 Completed → 勾。 */
+    public function test_a_single_completed_item_is_a_tick(): void
+    {
+        $order = $this->order();
+
+        FulfillmentOrder::factory()->submitted('SMM-DONE-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Completed,
+        ]);
+
+        $this->assertSame(
+            ['partial' => false, 'canceled' => false, 'pending' => false, 'inProgress' => false, 'attention' => false, 'allCompleted' => true],
+            OrderOperationsIndicators::smm($order->fresh()),
+        );
+    }
+
+    /** ⭐ Submitted／Pending／Processing（含供應商的 In progress）一律是 O。 */
+    #[DataProvider('inProgressStatuses')]
+    public function test_every_in_progress_status_is_an_o(FulfillmentStatus $status): void
+    {
+        $order = $this->order();
+
+        FulfillmentOrder::factory()->submitted('SMM-IP-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => $status,
+        ]);
+
+        $state = OrderOperationsIndicators::smm($order->fresh());
+
+        $this->assertTrue($state['inProgress']);
+        $this->assertFalse($state['allCompleted'], '⛔ 尚未完成不得顯示勾。');
+        $this->assertFalse($state['attention']);
+    }
+
+    public static function inProgressStatuses(): array
+    {
+        return [
+            'submitted' => [FulfillmentStatus::Submitted],
+            'pending' => [FulfillmentStatus::Pending],
+            'processing (In progress)' => [FulfillmentStatus::Processing],
+        ];
+    }
+
+    /** ⛔⛔ 多商品：一個完成、一個處理中 → 只有 O，⛔ 不得因為其中一個完成就勾。 */
+    public function test_one_completed_and_one_in_progress_is_not_a_tick(): void
+    {
+        $order = $this->order();
+        $second = $this->addItem($order, 'ig-second');
+
+        FulfillmentOrder::factory()->submitted('SMM-MX-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => FulfillmentStatus::Completed,
+        ]);
+        FulfillmentOrder::factory()->submitted('SMM-MX-2')->create([
+            'order_item_id' => $second->id,
+            'status' => FulfillmentStatus::Processing,
+        ]);
+
+        $state = OrderOperationsIndicators::smm($order->fresh());
+
+        $this->assertTrue($state['inProgress']);
+        $this->assertFalse($state['allCompleted']);
+    }
+
+    /** ⛔ 有單號卻失敗／結果不明 → 需人工處理，⛔ 不得變成空白或勾。 */
+    #[DataProvider('attentionStatuses')]
+    public function test_failed_or_unknown_with_a_provider_id_needs_attention(FulfillmentStatus $status): void
+    {
+        $order = $this->order();
+
+        FulfillmentOrder::factory()->submitted('SMM-ATT-1')->create([
+            'order_item_id' => $order->items()->first()->id,
+            'status' => $status,
+        ]);
+
+        $state = OrderOperationsIndicators::smm($order->fresh());
+
+        $this->assertTrue($state['attention']);
+        $this->assertFalse($state['inProgress']);
+        $this->assertFalse($state['allCompleted']);
+    }
+
+    public static function attentionStatuses(): array
+    {
+        return [
+            'failed' => [FulfillmentStatus::Failed],
+            'submission_unknown' => [FulfillmentStatus::SubmissionUnknown],
+        ];
+    }
+
+    /** ⭐ 渲染：處理中是 O（info 色），完成才有勾。 */
+    public function test_the_list_renders_o_for_in_progress_and_a_tick_only_when_completed(): void
+    {
+        $inProgress = $this->order('ip@example.com');
+        FulfillmentOrder::factory()->submitted('SMM-R-1')->create([
+            'order_item_id' => $inProgress->items()->first()->id,
+            'status' => FulfillmentStatus::Pending,
+        ]);
+
+        $html = Livewire::actingAs($this->owner())->test(ListOrders::class)->assertOk()->html();
+
+        $this->assertMatchesRegularExpression('/<button\b[^>]*\bfi-color-info\b[^>]*\baria-label="處理中"/su', $html);
+        $this->assertStringContainsString('data-smm-icon="in-progress"', $html);
+        $this->assertStringNotContainsString('aria-label="全部已完成"', $html, '⛔ 未完成不得出現勾。');
+
+        $inProgress->items()->first()->latestFulfillmentOrder->forceFill([
+            'status' => FulfillmentStatus::Completed,
+        ])->save();
+
+        $html = Livewire::actingAs($this->owner())->test(ListOrders::class)->assertOk()->html();
+
+        $this->assertMatchesRegularExpression('/<button\b[^>]*\bfi-color-success\b[^>]*\baria-label="全部已完成"/su', $html);
+        $this->assertStringNotContainsString('aria-label="處理中"', $html);
     }
 
     /** ⛔ 完全沒有履約 → 叉，⛔ 不是勾。 */
@@ -508,7 +625,7 @@ class OrderAdminCompactOperationsTest extends TestCase
         $state = OrderOperationsIndicators::smm($order->fresh());
 
         $this->assertTrue($state['pending']);
-        $this->assertFalse($state['allSubmitted']);
+        $this->assertFalse($state['allCompleted']);
     }
 
     /** ⛔ 多商品只有部分送出 → 叉。 */
@@ -531,7 +648,7 @@ class OrderAdminCompactOperationsTest extends TestCase
         $state = OrderOperationsIndicators::smm($order->fresh());
 
         $this->assertTrue($state['pending'], '⛔ 尚未全部送出必須顯示叉。');
-        $this->assertFalse($state['allSubmitted']);
+        $this->assertFalse($state['allCompleted']);
     }
 
     /**
@@ -563,7 +680,7 @@ class OrderAdminCompactOperationsTest extends TestCase
             $state['pending'],
             '⛔⛔ latest 更換批次尚未送出，⛔ 不得因為舊批次有單號就顯示勾。',
         );
-        $this->assertFalse($state['allSubmitted']);
+        $this->assertFalse($state['allCompleted']);
     }
 
     /** ⭐ latest 為 `Partial` → warning 三角形。 */
@@ -581,7 +698,7 @@ class OrderAdminCompactOperationsTest extends TestCase
 
         $this->assertTrue($state['partial']);
         $this->assertFalse($state['canceled']);
-        $this->assertFalse($state['allSubmitted'], '⛔ Partial 不得同時顯示成勾。');
+        $this->assertFalse($state['allCompleted'], '⛔ Partial 不得同時顯示成勾。');
     }
 
     /** ⭐ latest 為 `Canceled` → danger 三角形。 */
@@ -599,7 +716,7 @@ class OrderAdminCompactOperationsTest extends TestCase
 
         $this->assertTrue($state['canceled']);
         $this->assertFalse($state['partial']);
-        $this->assertFalse($state['allSubmitted']);
+        $this->assertFalse($state['allCompleted']);
     }
 
     /** ⛔⛔ 兩種同時存在時，兩個旗標都要成立，⛔ 不得互相覆蓋。 */
@@ -624,7 +741,7 @@ class OrderAdminCompactOperationsTest extends TestCase
 
         $this->assertTrue($state['partial'], '⛔ Partial 不得被 Canceled 蓋掉。');
         $this->assertTrue($state['canceled'], '⛔ Canceled 不得被 Partial 蓋掉。');
-        $this->assertFalse($state['allSubmitted']);
+        $this->assertFalse($state['allCompleted']);
     }
 
     /** ⛔ 警示與「尚未送出」的叉可以同時出現，⛔ 不得互相隱藏。 */

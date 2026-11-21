@@ -6,6 +6,7 @@ use App\Enums\FulfillmentStatus;
 use App\Enums\InvoiceStatus;
 use App\Models\FulfillmentOrder;
 use App\Models\Order;
+use Illuminate\Support\HtmlString;
 
 /**
  * The two at-a-glance columns on the order list: 發票 and SMM.
@@ -54,19 +55,30 @@ final class OrderOperationsIndicators
      *
      *  - `partial`／`canceled`：分別對應黃色與紅色三角形驚嘆號；
      *  - `pending`：另有商品的 latest 批次尚未取得 `provider_order_id`，顯示叉；
-     *  - `allSubmitted`：三者皆無時才顯示勾。
+     *  - `inProgress`／`attention`／`allCompleted`：見下方 2026-11-21 調整。
      *
      * ⛔⛔ 一律以每個商品的**最新**批次判定。
      * ⭐ 這是最容易錯的一點：舊批次可能有單號，但 Owner 剛建立的更換批次
      * 還沒派出去——那個商品**現在**是沒送出的。讀舊批次會把它誤報成勾。
      *
-     * @return array{partial: bool, canceled: bool, pending: bool, allSubmitted: bool}
+     * ⭐⭐ 2026-11-21 Owner 調整：「完成才勾」。
+     *
+     *  - `inProgress`（O）：已送出、供應商尚未完成（Submitted／Pending／Processing）；
+     *  - `attention`（叉圈）：已有單號但為 Failed／SubmissionUnknown，需人工處理；
+     *  - `allCompleted`（勾）：**每一個**商品的最新批次都是 Completed 才勾。
+     *
+     * ⛔ 「已送出」不再等於勾：送出只代表供應商收到，⛔ 不代表做完。
+     *
+     * @return array{partial: bool, canceled: bool, pending: bool, inProgress: bool, attention: bool, allCompleted: bool}
      */
     public static function smm(Order $order): array
     {
         $partial = false;
         $canceled = false;
         $pending = false;
+        $inProgress = false;
+        $attention = false;
+        $completed = 0;
         $items = 0;
 
         foreach ($order->items as $item) {
@@ -96,21 +108,51 @@ final class OrderOperationsIndicators
              */
             if (! filled($latest->provider_order_id)) {
                 $pending = true;
+
+                continue;
             }
+
+            match ($latest->status) {
+                FulfillmentStatus::Completed => $completed++,
+                FulfillmentStatus::Submitted,
+                FulfillmentStatus::Pending,
+                FulfillmentStatus::Processing => $inProgress = true,
+                FulfillmentStatus::Partial,
+                FulfillmentStatus::Canceled => null, // 已由上方的三角形旗標表示。
+                // ⛔ 有單號卻是失敗／結果不明：需要人，⛔ 不得悄悄變成空白或勾。
+                default => $attention = true,
+            };
         }
 
         /*
-         * ⛔ 一張沒有任何商品的訂單不算「全部送出」——那是資料異常，
+         * ⛔ 一張沒有任何商品的訂單不算「完成」——那是資料異常，
          * ⛔ 不該顯示成一個令人安心的勾。
+         * ⭐ 每個商品的最新批次都是 Completed 才算；其他旗標此時必然全為 false。
          */
-        $allSubmitted = $items > 0 && ! $partial && ! $canceled && ! $pending;
+        $allCompleted = $items > 0 && $completed === $items;
 
         return [
             'partial' => $partial,
             'canceled' => $canceled,
             'pending' => $pending,
-            'allSubmitted' => $allSubmitted,
+            'inProgress' => $inProgress,
+            'attention' => $attention,
+            'allCompleted' => $allCompleted,
         ];
+    }
+
+    /**
+     * The「O」for in-progress orders.
+     *
+     * ⛔ Heroicons 沒有單純的空心圓，所以這裡是一個**寫死**的 SVG 字面值，
+     * ⛔ 沒有任何資料庫或 provider 字串進入它。Filament 的 icon-button
+     * 原生接受 Htmlable icon（`generate_icon_html()`）。
+     */
+    public static function inProgressIcon(): HtmlString
+    {
+        return new HtmlString(
+            '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true" data-smm-icon="in-progress"><circle cx="12" cy="12" r="8" /></svg>'
+        );
     }
 
     /**

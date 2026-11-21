@@ -71,12 +71,35 @@
         />
     @endif
 
-    @if ($indicators['allSubmitted'])
+    @if ($indicators['attention'])
+        {{-- ⛔ 已有供應商單號，但為失敗或結果不明：需要人工處理。 --}}
+        <x-filament::icon-button
+            icon="heroicon-o-x-circle"
+            color="danger"
+            label="失敗或結果不明（需人工處理）"
+            tooltip="失敗或結果不明（需人工處理）"
+            x-on:click.stop.prevent=""
+        />
+    @endif
+
+    @if ($indicators['inProgress'])
+        {{-- ⭐ O：已送出 SMM，供應商尚未完成（Pending／In progress／Processing）。 --}}
+        <x-filament::icon-button
+            :icon="\App\Support\OrderOperationsIndicators::inProgressIcon()"
+            color="info"
+            label="處理中"
+            tooltip="處理中"
+            x-on:click.stop.prevent=""
+        />
+    @endif
+
+    @if ($indicators['allCompleted'])
+        {{-- ⭐⭐ Owner：「完成才勾」——每個商品都是 Completed 才顯示。 --}}
         <x-filament::icon-button
             icon="heroicon-o-check"
             color="success"
-            label="全部已送出"
-            tooltip="全部已送出"
+            label="全部已完成"
+            tooltip="全部已完成"
             x-on:click.stop.prevent=""
         />
     @endif
