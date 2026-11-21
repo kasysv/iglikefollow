@@ -121,10 +121,19 @@ class FulfillmentStatusPollingTest extends TestCase
         Queue::assertPushed(SyncFulfillmentStatus::class, 1);
     }
 
-    /** eligibility 閉集:只有 submitted／processing 且有 provider ID。 */
+    /**
+     * eligibility 閉集:submitted／pending／processing 且有 provider ID。
+     *
+     * ⛔⛔ `Pending` 必須在內。這條測試原本的 fixture 從未建立 Pending 列,
+     * 所以挑選器漏掉 Pending 時測試照樣綠——那正是「很多訂單不更新」的成因。
+     * 停止查詢的只有 terminal:completed、partial、canceled、failed,
+     * 以及需要人工的 submission_unknown。
+     */
     public function test_only_eligible_rows_are_queued(): void
     {
         $submitted = FulfillmentOrder::factory()->submitted('62001')->create();
+        $pending = FulfillmentOrder::factory()->submitted('62009')->create();
+        $pending->forceFill(['status' => FulfillmentStatus::Pending])->save();
         $processing = FulfillmentOrder::factory()->submitted('62002')->create();
         $processing->forceFill(['status' => FulfillmentStatus::Processing])->save();
 
@@ -133,6 +142,8 @@ class FulfillmentStatusPollingTest extends TestCase
         $completed->forceFill(['status' => FulfillmentStatus::Completed])->save();
         $partial = FulfillmentOrder::factory()->submitted('62004')->create();
         $partial->forceFill(['status' => FulfillmentStatus::Partial])->save();
+        $canceled = FulfillmentOrder::factory()->submitted('62005')->create();
+        $canceled->forceFill(['status' => FulfillmentStatus::Canceled])->save();
         $noId = FulfillmentOrder::factory()->create(); // 預設無 provider_order_id
         // submission_unknown 走合法轉移路徑(observer/DB trigger 都在守)。
         $unknown = FulfillmentOrder::factory()->ready()->create();
@@ -141,10 +152,94 @@ class FulfillmentStatusPollingTest extends TestCase
 
         $queued = $this->inStaging(fn () => app(QueueFulfillmentStatusSync::class)->handle());
 
-        $this->assertSame(2, $queued);
-        Queue::assertPushed(SyncFulfillmentStatus::class, 2);
+        $this->assertSame(3, $queued);
+        Queue::assertPushed(SyncFulfillmentStatus::class, 3);
         Queue::assertPushed(fn (SyncFulfillmentStatus $job) => $job->fulfillmentOrderId === $submitted->id);
+        Queue::assertPushed(fn (SyncFulfillmentStatus $job) => $job->fulfillmentOrderId === $pending->id);
         Queue::assertPushed(fn (SyncFulfillmentStatus $job) => $job->fulfillmentOrderId === $processing->id);
+    }
+
+    /** ⛔ 挑選器與執行者必須讀同一份清單,⛔ 不得各寫一份。 */
+    public function test_the_picker_uses_the_same_syncable_list_as_the_sync_action(): void
+    {
+        $ids = [];
+
+        foreach (FulfillmentStatus::syncableSources() as $i => $status) {
+            $row = FulfillmentOrder::factory()->submitted('6410'.$i)->create();
+
+            if ($status !== FulfillmentStatus::Submitted) {
+                $row->forceFill(['status' => $status])->save();
+            }
+
+            $ids[] = $row->id;
+        }
+
+        $queued = $this->inStaging(fn () => app(QueueFulfillmentStatusSync::class)->handle());
+
+        $this->assertSame(count(FulfillmentStatus::syncableSources()), $queued);
+
+        foreach ($ids as $id) {
+            Queue::assertPushed(fn (SyncFulfillmentStatus $job) => $job->fulfillmentOrderId === $id);
+        }
+    }
+
+    /**
+     * ⛔⛔ 活躍單超過上限時,多輪之後每一筆都必須被查到。
+     *
+     * 原本 `orderBy('id')` 每輪都挑同樣 id 最小的那幾筆,第上限＋1 筆以後
+     * 永遠輪不到。現在最久沒查的先查;這裡模擬 sync job 每次都會更新
+     * `last_synced_at`(實際行為見 SyncFulfillmentState)。
+     */
+    public function test_every_active_row_is_eventually_polled_when_over_the_batch_limit(): void
+    {
+        config()->set('fulfillment.status_polling_batch_limit', 3);
+
+        $ids = [];
+        for ($i = 1; $i <= 7; $i++) {
+            $ids[] = FulfillmentOrder::factory()->submitted('65'.$i)->create()->id;
+        }
+
+        $seen = [];
+
+        for ($round = 1; $round <= 3; $round++) {
+            Queue::fake();
+
+            $this->travel(10)->minutes();
+
+            $this->inStaging(fn () => app(QueueFulfillmentStatusSync::class)->handle());
+
+            $picked = [];
+            Queue::assertPushed(SyncFulfillmentStatus::class, function (SyncFulfillmentStatus $job) use (&$picked) {
+                $picked[] = $job->fulfillmentOrderId;
+
+                return true;
+            });
+
+            // 模擬 sync 完成:每一筆被查過的都會更新 last_synced_at。
+            FulfillmentOrder::query()->whereIn('id', $picked)->update(['last_synced_at' => now()]);
+
+            foreach ($picked as $id) {
+                $seen[$id] = true;
+            }
+        }
+
+        $this->assertSame([], array_values(array_diff($ids, array_keys($seen))), '每一筆活躍單都必須在數輪內被查到。');
+    }
+
+    /** 從沒查過的(last_synced_at 為 NULL)排在已查過的前面。 */
+    public function test_never_synced_rows_are_polled_before_recently_synced_ones(): void
+    {
+        config()->set('fulfillment.status_polling_batch_limit', 1);
+
+        $old = FulfillmentOrder::factory()->submitted('66001')->create();
+        $old->forceFill(['last_synced_at' => now()->subMinute()])->save();
+
+        $fresh = FulfillmentOrder::factory()->submitted('66002')->create(); // 從沒查過
+
+        $this->inStaging(fn () => app(QueueFulfillmentStatusSync::class)->handle());
+
+        Queue::assertPushed(SyncFulfillmentStatus::class, 1);
+        Queue::assertPushed(fn (SyncFulfillmentStatus $job) => $job->fulfillmentOrderId === $fresh->id);
     }
 
     /** 穩定排序＋固定上限。 */

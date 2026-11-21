@@ -15,23 +15,18 @@ use App\Services\Fulfillment\FulfillmentDispatchGate;
  * never resend an `add`: nothing here touches submission, and every selected
  * row already has a provider order id.
  *
- * ⛔ Eligibility is a closed list. Only `submitted` and `processing` rows
- * with a provider order id are askable. Terminal states (completed, partial,
- * canceled, failed) are done; `submission_unknown` needs a human, not a
- * poller; configuration_pending / ready / submitting have nothing to ask
- * about. Polling must never quietly "resolve" what a person should decide.
+ * ⛔ Eligibility is a closed list: `FulfillmentStatus::syncableSources()`
+ * (submitted, pending, processing) with a provider order id. Terminal states
+ * (completed, partial, canceled, failed) are done; `submission_unknown` needs
+ * a human, not a poller; configuration_pending / ready / submitting have
+ * nothing to ask about. Polling must never quietly "resolve" what a person
+ * should decide.
  *
  * ⛔ R1:staging／production 皆可,依 Owner 的自動派單總開關啟停——同一個
  * 開關,不再有獨立的 polling env 旗標。local／testing 永遠排入 0。
  */
 class QueueFulfillmentStatusSync
 {
-    /** ⛔ 只有這兩個狀態可查:有 provider ID 且仍在進行。 */
-    private const SYNCABLE_STATUSES = [
-        FulfillmentStatus::Submitted,
-        FulfillmentStatus::Processing,
-    ];
-
     /** @return int 本輪排入的 job 數(gate 關閉時恆為 0) */
     public function handle(): int
     {
@@ -41,8 +36,29 @@ class QueueFulfillmentStatusSync
 
         $ids = FulfillmentOrder::query()
             ->whereNotNull('provider_order_id')
-            ->whereIn('status', self::SYNCABLE_STATUSES)
-            // 穩定排序＋固定上限:每輪可預期,不由後台輸入。
+            /*
+             * ⛔⛔ 用 enum 的唯一來源,⛔ 不在這裡另寫一份清單。
+             *
+             * 這裡原本自己寫死 [Submitted, Processing]。8/26 新增 `Pending`
+             * 時 enum 的 `syncableSources()` 有補,這份副本沒補——於是供應商
+             * 第一次回 exact `Pending` 的單,從此再也不會被查,狀態永久凍結。
+             * Owner 回報「很多訂單都不會更新狀態」的主因就是這個。
+             * `SyncFulfillmentState` 本來就用 `syncableSources()` 判斷,
+             * 挑選器與執行者現在讀同一份清單,不可能再分歧。
+             */
+            ->whereIn('status', FulfillmentStatus::syncableSources())
+            /*
+             * ⛔⛔ 最久沒查的先查,⛔ 不是 id 最小的先查。
+             *
+             * 原本 `orderBy('id')->limit(50)`:進行中的單在完成前一直是候選,
+             * 所以每一輪都是同樣 id 最小的 50 筆,第 51 筆以後永遠輪不到。
+             *
+             * ⭐ `last_synced_at` 在每次同步都會更新(狀態沒變、甚至
+             * unrecognised 也會),所以剛查過的單自然排到後面,
+             * 輪替一定會前進。從沒查過的(NULL)最先——MySQL 與 SQLite
+             * 的 ASC 排序都把 NULL 放最前。id 作為同時間的穩定次序。
+             */
+            ->orderBy('last_synced_at')
             ->orderBy('id')
             ->limit((int) config('fulfillment.status_polling_batch_limit', 50))
             ->pluck('id');
